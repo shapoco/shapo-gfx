@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShapoGFX demo3d</title>
+<style>
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #14161f;
+    color: #cfd3e0;
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  h1 {
+    font-size: 18px;
+    margin: 0;
+  }
+  a { color: #8fb4ff; }
+  #screen {
+    image-rendering: pixelated;
+    background: #000;
+    border: 1px solid #3a3f55;
+    touch-action: none;
+    cursor: grab;
+    max-width: 100%;
+  }
+  #screen:active { cursor: grabbing; }
+  #fps { font-size: 13px; color: #8f96ad; min-height: 1em; }
+  #status { font-size: 13px; color: #e0a0a0; max-width: 720px; }
+  .help { font-size: 13px; color: #8f96ad; }
+</style>
+</head>
+<body>
+<h1>ShapoGFX demo3d (software 3D renderer for embedded systems, running in WebAssembly)</h1>
+<canvas id="screen"></canvas>
+<div id="fps"></div>
+<div class="help">
+  Drag / arrow keys: rotate camera &nbsp;|&nbsp; Wheel / PageUp, PageDown: zoom
+</div>
+<div id="status">Loading...</div>
+<div class="help"><a href="https://github.com/shapoco/shapo-gfx">github.com/shapoco/shapo-gfx</a></div>
+<script src="main.js"></script>
+</body>
+</html>

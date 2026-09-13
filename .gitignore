@@ -1,0 +1,13 @@
+# Build outputs
+build/
+example/demo3d/demo3d
+example/demo3d/demo3d.ppm
+*.ppm
+
+# Editor / tool state
+.vscode/
+.claude/settings.local.json
+tmp.*
+
+# Emscripten
+.emscripten_cache/
