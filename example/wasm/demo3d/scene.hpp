@@ -20,6 +20,7 @@ constexpr float CAM_DIST_MIN = 3.0f, CAM_DIST_MAX = 20.0f;
 void sceneInit();
 
 // Build the scene (projection setup and beginScene() .. endScene()).
+// The background (clear color) is left to the caller.
 // Rendering (beginRender() / render() / endRender()) is left to the caller.
 // t: elapsed seconds, yaw/pitch: camera angles (radians), dist: camera
 // distance, aspect: screen aspect ratio (width / height)

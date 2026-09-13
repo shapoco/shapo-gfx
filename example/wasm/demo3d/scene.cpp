@@ -191,7 +191,6 @@ void sceneInit() {
 void sceneBuild(g3::Renderer &r, float t, float yaw, float pitch, float dist,
                 float aspect) {
   r.setPerspectiveProjection(60.0f * PI / 180.0f, aspect, 0.3f, 100.0f);
-  r.setClearColor({0.04f, 0.05f, 0.11f, 1.0f});
 
   r.beginScene();
 

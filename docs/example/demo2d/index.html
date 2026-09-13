@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShapoGFX demo2d</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<h1>ShapoGFX demo2d (2D drawing API for embedded systems, running in WebAssembly)</h1>
+<canvas id="screen"></canvas>
+<div id="fps"></div>
+<div class="help">
+  Shapes, lines, polygons, alpha and additive blending, images in four pixel formats and bitmap fonts,
+  drawn into an RGB565 frame buffer.
+</div>
+<div id="status">Loading...</div>
+<div class="help">
+  <a href="../demo3d/">demo3d</a> &nbsp;|&nbsp;
+  <a href="https://github.com/shapoco/shapo-gfx">github.com/shapoco/shapo-gfx</a>
+</div>
+<script src="../viewer.js"></script>
+<script>
+  startDemoViewer({ wasm: 'demo2d.wasm', prefix: 'demo2d' });
+</script>
+</body>
+</html>

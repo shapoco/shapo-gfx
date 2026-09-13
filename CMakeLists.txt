@@ -29,5 +29,6 @@ if(NOT SHAPOGFX3D_CORRECT_PERSPECTIVE STREQUAL "")
 endif()
 
 if(SHAPOGFX_BUILD_EXAMPLES AND NOT EMSCRIPTEN)
+    add_subdirectory(example/wasm/demo2d)
     add_subdirectory(example/wasm/demo3d)
 endif()

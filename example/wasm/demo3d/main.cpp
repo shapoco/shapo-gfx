@@ -5,8 +5,11 @@
 // natively it renders a single frame to a PPM file (useful for quick checks
 // without a browser).
 
+#include <cmath>
 #include <cstdint>
 
+#include "shapoco/gfx2d/fonts.hpp"
+#include "shapoco/gfx2d/graphics2d.hpp"
 #include "shapoco/gfx3d/gfx3d.hpp"
 
 #include "scene.hpp"
@@ -42,10 +45,39 @@ DEMO3D_EXPORT int demo3d_get_height() { return SCREEN_H; }
 DEMO3D_EXPORT void demo3d_init() {
   demo3d::sceneInit();
   renderer.init(SCREEN_W, SCREEN_H, arena, sizeof(arena));
+  renderer.disableClear();  // the 2D backdrop provides the background
+}
+
+// 2D backdrop: vertical gradient, twinkling stars and a caption
+static void drawBackdrop(float t) {
+  g2::Graphics2D g(fbSurface);
+  constexpr int BANDS = 20;
+  const g2::Color top = g2::makeColor(4, 6, 24),
+                  horizon = g2::makeColor(40, 30, 70);
+  for (int i = 0; i < BANDS; i++) {
+    int y0 = i * SCREEN_H / BANDS, y1 = (i + 1) * SCREEN_H / BANDS;
+    g.fillRect(0, y0, SCREEN_W, y1 - y0,
+               g2::lerpColor(top, horizon, i * 256 / (BANDS - 1)));
+  }
+  for (int i = 0; i < 60; i++) {
+    uint32_t h = (uint32_t)i * 2654435761u;
+    int x = (int)(h % SCREEN_W), y = (int)((h >> 9) % (SCREEN_H * 2 / 3));
+    int tw = 140 + (int)(100.0f * std::sin(t * 2.0f + i));
+    g.setPixel(x, y, g2::makeColor(255, 255, 230, tw));
+  }
+  g.setFont(&ShapoSansP_s12c09a01w02);
+  g.setTextColor(g2::makeColor(0, 0, 0, 160));
+  g.drawString(9, 9, "ShapoGFX demo3d");
+  g.setTextColor(g2::makeColor(220, 230, 255));
+  g.drawString(8, 8, "ShapoGFX demo3d");
+  g.setFont(&ShapoSansP_s08c07);
+  g.setTextColor(g2::makeColor(160, 170, 200));
+  g.drawString(8, 30, "3D scene rendered over a 2D backdrop (clear disabled)");
 }
 
 // t: elapsed seconds, yaw/pitch: camera angles (radians), dist: camera distance
 DEMO3D_EXPORT void demo3d_frame(float t, float yaw, float pitch, float dist) {
+  drawBackdrop(t);
   demo3d::sceneBuild(renderer, t, yaw, pitch, dist, (float)SCREEN_W / SCREEN_H);
 
   renderer.beginRender();
