@@ -17,6 +17,7 @@ html:
 	rm -rf ../docs/ref
 	mkdir -p ../docs/ref
 	cp -r $(BUILDDIR)/html/. ../docs/ref/
+	touch ../docs/.nojekyll
 
 clean:
 	rm -rf $(BUILDDIR)

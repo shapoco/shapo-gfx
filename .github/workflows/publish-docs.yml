@@ -49,9 +49,10 @@ jobs:
           rm -rf docs/ref
           mkdir -p docs/ref
           rsync -a --delete docsrc/_build/html/ docs/ref/
+          touch docs/.nojekyll  # GitHub Pages must not run Jekyll (it would drop _static/)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/ref
+          git add docs/ref docs/.nojekyll
           if git diff --cached --quiet; then
             echo "No changes in docs/ref/"
             exit 0
