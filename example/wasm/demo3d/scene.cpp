@@ -15,13 +15,15 @@ static constexpr float PI = 3.14159265358979f;
 
 // ---------------------------------------------------------------------------
 // Textures (on a real target these would be const data in flash;
-// here they are generated at startup)
+// here they are generated at startup). RGB565BE: byte-swapped in memory.
 
 static uint16_t checkerPixels[64 * 64];
 static uint16_t envPixels[64 * 64];
 
-static const g3::Texture texChecker = {64, 64, checkerPixels};
-static const g3::Texture texEnv = {64, 64, envPixels};
+static const g3::Texture texChecker = {g3::PixelFormat::RGB565BE, 64, 64, 128,
+                                       checkerPixels};
+static const g3::Texture texEnv = {g3::PixelFormat::RGB565BE, 64, 64, 128,
+                                   envPixels};
 
 // Deterministic 2D hash (0..1)
 static float hash2(int x, int y) {
@@ -49,8 +51,8 @@ static void generateTextures() {
   for (int y = 0; y < 64; y++) {
     for (int x = 0; x < 64; x++) {
       bool c = ((x >> 4) ^ (y >> 4)) & 1;
-      checkerPixels[y * 64 + x] = c ? g2::packRgb565(0.85f, 0.85f, 0.9f)
-                                    : g2::packRgb565(0.35f, 0.4f, 0.5f);
+      checkerPixels[y * 64 + x] = c ? g2::packRgb565BE(0.85f, 0.85f, 0.9f)
+                                    : g2::packRgb565BE(0.35f, 0.4f, 0.5f);
     }
   }
   // Environment map:
@@ -92,7 +94,7 @@ static void generateTextures() {
           b = 0.5f * fade;
         }
       }
-      envPixels[y * 64 + x] = g2::packRgb565(r, g, b);
+      envPixels[y * 64 + x] = g2::packRgb565BE(r, g, b);
     }
   }
 }

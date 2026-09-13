@@ -8,7 +8,8 @@
 
 namespace demo3d {
 
-// Initial camera and its limits (kept in sync with docs/example/demo3d/main.js)
+// Initial camera and its limits (kept in sync with
+// docs/example/demo3d/index.html)
 constexpr float CAM_YAW_INIT = 0.6f;
 constexpr float CAM_PITCH_INIT = 0.35f;
 constexpr float CAM_DIST_INIT = 7.0f;

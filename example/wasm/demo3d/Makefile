@@ -4,11 +4,11 @@
 EMCC ?= emcc
 CXX ?= g++
 
-REPO_ROOT := ../..
+REPO_ROOT := ../../..
 OUT_DIR := $(REPO_ROOT)/docs/example/demo3d
 OUT := $(OUT_DIR)/demo3d.wasm
 
-SRCS := main.cpp scene.cpp $(REPO_ROOT)/src/gfx3d/gfx3d.cpp
+SRCS := main.cpp scene.cpp $(wildcard $(REPO_ROOT)/src/gfx2d/*.cpp) $(wildcard $(REPO_ROOT)/src/gfx3d/*.cpp)
 HDRS := $(wildcard $(REPO_ROOT)/include/shapoco/gfx2d/*.hpp) \
         $(wildcard $(REPO_ROOT)/include/shapoco/gfx3d/*.hpp) \
         scene.hpp
@@ -39,6 +39,7 @@ clean:
 	rm -f $(OUT) demo3d demo3d.ppm
 
 # Serve docs/ over HTTP and open http://localhost:8000/example/demo3d/
+# (or use ./launch_web_server.sh in the repository root)
 # (fetch() does not work from file://)
 serve:
 	python3 -m http.server -d $(REPO_ROOT)/docs 8000

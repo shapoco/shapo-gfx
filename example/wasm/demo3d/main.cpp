@@ -18,12 +18,15 @@
 #define DEMO3D_EXPORT
 #endif
 
+namespace g2 = shapoco::gfx2d;
 namespace g3 = shapoco::gfx3d;
 
 static constexpr int SCREEN_W = 480;
 static constexpr int SCREEN_H = 320;
 
-static uint16_t fb[SCREEN_W * SCREEN_H];
+static uint16_t fb[SCREEN_W * SCREEN_H];  // RGB565BE
+static const g2::Surface fbSurface = {g2::PixelFormat::RGB565BE, SCREEN_W,
+                                      SCREEN_H, SCREEN_W * 2, fb};
 static uint8_t arena[128 * 1024];
 static g3::Renderer renderer;
 
@@ -50,8 +53,7 @@ DEMO3D_EXPORT void demo3d_frame(float t, float yaw, float pitch, float dist) {
   constexpr int BAND_H = SCREEN_H / 4;
   for (int i = 0; i < 4; i++) {
     int y = i * BAND_H;
-    renderer.render(0, (int16_t)y, SCREEN_W, BAND_H, fb + (size_t)y * SCREEN_W,
-                    SCREEN_W);
+    renderer.render(0, (int16_t)y, SCREEN_W, BAND_H, fbSurface, 0, (int16_t)y);
   }
   renderer.endRender();
 }
@@ -81,7 +83,7 @@ int main(int argc, char **argv) {
   }
   std::fprintf(fp, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
   for (int i = 0; i < SCREEN_W * SCREEN_H; i++) {
-    uint16_t p = fb[i];
+    uint16_t p = g2::bswap16(fb[i]);  // RGB565BE -> native
     uint8_t rgb[3] = {
         (uint8_t)(((p >> 11) & 31) * 255 / 31),
         (uint8_t)(((p >> 5) & 63) * 255 / 63),

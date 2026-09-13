@@ -11,6 +11,8 @@ namespace shapoco::gfx3d {
 
 // Shared with shapoco::gfx2d.
 using gfx2d::BlendMode;
+using gfx2d::PixelFormat;
+using gfx2d::Surface;
 using gfx2d::Texture;
 
 // ---------------------------------------------------------------------------
@@ -34,6 +36,9 @@ constexpr uint32_t DOUBLE_SIDED =
     1u << 2;  // draw both sides (disable back-face culling)
 }  // namespace MaterialFlags
 
+// Textures may be in any enabled pixel format; width and height must be powers
+// of two. A texture in ARGB4444 makes the material translucent: its alpha is
+// multiplied into the material opacity per pixel.
 struct Material {
   colorf diffuse;          // diffuse color (a is used as opacity)
   colorf ambient;          // ambient color
@@ -133,7 +138,13 @@ class Renderer {
   void enableEnvironmentLight(const colorf &col);  // set the ambient light
   void disableEnvironmentLight();
 
-  void setClearColor(const colorf &col);  // set the background color
+  // Background: pixels not covered by any span are filled with the clear color.
+  // With the clear disabled they keep the previous content of the target, so a
+  // scene can be rendered on top of a 2D background.
+  void setClearColor(
+      const colorf &col);  // set the background color (and enable clearing)
+  void disableClear();
+  bool isClearEnabled() const { return clearEnabled_; }
 
   void setPerspectiveProjection(float fovY, float aspect, float zNear,
                                 float zFar);
@@ -143,10 +154,11 @@ class Renderer {
   void beginRender();  // start rendering (sorts the triangles)
   void endRender();    // finish rendering
 
-  // Render the region (x, y, w, h). dst points to the top-left pixel of the
-  // region; stride is the row pitch of dst in pixels.
-  void render(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t *dst,
-              uint32_t stride);
+  // Render the screen region (x, y, w, h) into dst at (dstX, dstY). dst must be
+  // in RGB565BE or RGB444; other formats are ignored. The region is clipped to
+  // the screen and to dst.
+  void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst,
+              int16_t dstX = 0, int16_t dstY = 0);
 
   // Get statistics (call after endRender() to get the values of that frame).
   Stats getStats() const;
@@ -194,6 +206,7 @@ class Renderer {
   bool envEnabled_ = false;
   colorf envCol_ = {0, 0, 0, 1};
 
+  bool clearEnabled_ = true;
   colorf clearColor_ = {0, 0, 0, 1};
 
   size_t arenaSize_ = 0;

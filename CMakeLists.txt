@@ -15,9 +15,11 @@ else()
 endif()
 option(SHAPOGFX_BUILD_EXAMPLES "Build the example programs" ${SHAPOGFX_TOP_LEVEL})
 
-add_library(shapogfx STATIC
-    src/gfx3d/gfx3d.cpp
+file(GLOB SHAPOGFX_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx2d/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx3d/*.cpp
 )
+add_library(shapogfx STATIC ${SHAPOGFX_SOURCES})
 add_library(shapoco::gfx ALIAS shapogfx)
 target_include_directories(shapogfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(shapogfx PUBLIC cxx_std_17)
@@ -27,5 +29,5 @@ if(NOT SHAPOGFX3D_CORRECT_PERSPECTIVE STREQUAL "")
 endif()
 
 if(SHAPOGFX_BUILD_EXAMPLES AND NOT EMSCRIPTEN)
-    add_subdirectory(example/demo3d)
+    add_subdirectory(example/wasm/demo3d)
 endif()

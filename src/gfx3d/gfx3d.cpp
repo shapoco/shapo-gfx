@@ -39,6 +39,18 @@ struct ShadedVertex {
                   // blending)
 };
 
+// Texture format of a triangle; selects the rasterizer together with the blend
+// mode and the flat flag: rasterFn = tex * 6 + blend * 2 + flat
+enum class TexFmt : uint8_t {
+  NONE = 0,
+  GRAY1,
+  RGB444,
+  ARGB4444,
+  RGB565BE,
+  COUNT
+};
+static constexpr int RASTER_PER_TEX = 6;  // blend modes (3) x flat (2)
+
 namespace TriFlags {
 constexpr uint8_t FLAT =
     1u << 0;  // all three vertex colors are equal (no color interpolation)
@@ -58,7 +70,7 @@ struct Triangle {
   int16_t yMin, yMax;  // range of scanlines crossed (inclusive)
   uint8_t flags;       // TriFlags
   uint8_t alpha64;     // opacity (0..64)
-  uint8_t rasterFn;    // index of the rasterizer (blend * 4 + tex * 2 + flat)
+  uint8_t rasterFn;    // index of the rasterizer (tex * 6 + blend * 2 + flat)
 };
 
 // A span on a scanline: attribute values at the leftmost pixel and per-pixel
@@ -110,10 +122,33 @@ static inline uintptr_t alignUp8(uintptr_t p) {
   return (p + 7u) & ~(uintptr_t)7u;
 }
 
+// Texture format usable by the rasterizer; NONE for disabled formats
+static inline TexFmt texFmtOf(const Texture *tex) {
+  if (!tex || !tex->pixels) return TexFmt::NONE;
+  switch (tex->format) {
+#if SHAPOGFX_FORMAT_GRAY1
+    case PixelFormat::GRAY1: return TexFmt::GRAY1;
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+    case PixelFormat::RGB444: return TexFmt::RGB444;
+#endif
+#if SHAPOGFX_FORMAT_ARGB4444
+    case PixelFormat::ARGB4444: return TexFmt::ARGB4444;
+#endif
+#if SHAPOGFX_FORMAT_RGB565BE
+    case PixelFormat::RGB565BE: return TexFmt::RGB565BE;
+#endif
+    default: return TexFmt::NONE;
+  }
+}
+
+// The texture actually used by a material (nullptr if unused or unsupported)
 static inline const Texture *materialTexture(const Material *mat) {
-  return (mat->flags & (MaterialFlags::TEXTURE | MaterialFlags::ENV_MAP))
-             ? mat->texture
-             : nullptr;
+  const Texture *tex =
+      (mat->flags & (MaterialFlags::TEXTURE | MaterialFlags::ENV_MAP))
+          ? mat->texture
+          : nullptr;
+  return texFmtOf(tex) != TexFmt::NONE ? tex : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +273,12 @@ void Renderer::enableEnvironmentLight(const colorf &col) {
 
 void Renderer::disableEnvironmentLight() { envEnabled_ = false; }
 
-void Renderer::setClearColor(const colorf &col) { clearColor_ = col; }
+void Renderer::setClearColor(const colorf &col) {
+  clearColor_ = col;
+  clearEnabled_ = true;
+}
+
+void Renderer::disableClear() { clearEnabled_ = false; }
 
 void Renderer::setPerspectiveProjection(float fovY, float aspect, float zNear,
                                         float zFar) {
@@ -362,7 +402,13 @@ void Renderer::emitTriangle(const CachedVertex &a, const CachedVertex &b,
       t.v[0].g == t.v[2].g && t.v[0].b == t.v[1].b && t.v[0].b == t.v[2].b) {
     flags |= TriFlags::FLAT;
   }
-  if (mat->blendMode == BlendMode::NONE) flags |= TriFlags::OPAQUE;
+  // A texture with alpha makes the triangle translucent even in BlendMode::NONE
+  const TexFmt tf = texFmtOf(tex);
+  const bool texAlpha = (tf == TexFmt::ARGB4444);
+  int blend = (int)mat->blendMode;
+  if (texAlpha && mat->blendMode == BlendMode::NONE)
+    blend = (int)BlendMode::ALPHA;
+  if (mat->blendMode == BlendMode::NONE && !texAlpha) flags |= TriFlags::OPAQUE;
 
   if (tex) {
     flags |= TriFlags::TEX;
@@ -392,16 +438,17 @@ void Renderer::emitTriangle(const CachedVertex &a, const CachedVertex &b,
     t.invDy[e] = (dy != 0.0f) ? 1.0f / dy : 0.0f;
   }
 
-  int alpha64 = (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f);
+  int alpha64 = (mat->blendMode == BlendMode::NONE)
+                    ? 64
+                    : (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f);
   t.mat = mat;
   t.depth = (a.viewZ + b.viewZ + c.viewZ) * (1.0f / 3.0f);
   t.yMin = (int16_t)yMin;
   t.yMax = (int16_t)yMax;
   t.flags = flags;
   t.alpha64 = (uint8_t)alpha64;
-  t.rasterFn =
-      (uint8_t)((int)mat->blendMode * 4 + ((flags & TriFlags::TEX) ? 2 : 0) +
-                ((flags & TriFlags::FLAT) ? 1 : 0));
+  t.rasterFn = (uint8_t)((int)tf * RASTER_PER_TEX + blend * 2 +
+                         ((flags & TriFlags::FLAT) ? 1 : 0));
   triCount_++;
 }
 
@@ -814,16 +861,116 @@ static bool makeSpan(const Triangle &t, float yc, int rx0, int rx1, Span &out) {
 // ---------------------------------------------------------------------------
 // Pixel processing (fixed point)
 //
-// The loop is specialized for every combination of blend mode x textured x flat
-// (constant color), so that the inner loop contains no branches and no
-// unnecessary interpolation.
+// The loop is specialized for every combination of blend mode x texture format
+// x flat (constant color) x output format, so that the inner loop contains no
+// branches and no unnecessary interpolation.
 
-template <BlendMode B, bool TEX, bool FLAT>
-static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
+// Texel fetch: returns the texel as native RGB565 and its 4-bit alpha (15 when
+// the format has no alpha). `row` points to the start of the texel row.
+template <TexFmt T>
+struct TexSampler;
+
+template <>
+struct TexSampler<TexFmt::NONE> {  // never called (untextured spans skip the
+                                   // fetch)
+  static inline uint32_t fetch(const uint8_t *, uint32_t, uint32_t &a4) {
+    a4 = 15;
+    return 0;
+  }
+};
+
+#if SHAPOGFX_FORMAT_GRAY1
+template <>
+struct TexSampler<TexFmt::GRAY1> {
+  static inline uint32_t fetch(const uint8_t *row, uint32_t u, uint32_t &a4) {
+    a4 = 15;
+    return ((row[u >> 3] >> (7u - (u & 7u))) & 1u) ? 0xFFFFu : 0u;
+  }
+};
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+template <>
+struct TexSampler<TexFmt::RGB444> {
+  static inline uint32_t fetch(const uint8_t *row, uint32_t u, uint32_t &a4) {
+    a4 = 15;
+    const uint8_t *p = row + (u >> 1) * 3 + (u & 1u);
+    uint32_t v = (u & 1u) ? (((uint32_t)(p[0] & 0x0Fu) << 8) | p[1])
+                          : (((uint32_t)p[0] << 4) | (p[1] >> 4));
+    return gfx2d::rgb444ToRgb565((uint16_t)v);
+  }
+};
+#endif
+#if SHAPOGFX_FORMAT_ARGB4444
+template <>
+struct TexSampler<TexFmt::ARGB4444> {
+  static inline uint32_t fetch(const uint8_t *row, uint32_t u, uint32_t &a4) {
+    uint32_t p = ((const uint16_t *)row)[u];
+    a4 = p >> 12;
+    return gfx2d::rgb444ToRgb565((uint16_t)(p & 0x0FFFu));
+  }
+};
+#endif
+#if SHAPOGFX_FORMAT_RGB565BE
+template <>
+struct TexSampler<TexFmt::RGB565BE> {
+  static inline uint32_t fetch(const uint8_t *row, uint32_t u, uint32_t &a4) {
+    a4 = 15;
+    return gfx2d::bswap16(((const uint16_t *)row)[u]);
+  }
+};
+#endif
+
+// Output format: pixel cursor, packing from 5/6/5 components, blending
+template <PixelFormat OUT>
+struct OutTraits;
+
+#if SHAPOGFX_FORMAT_RGB565BE
+template <>
+struct OutTraits<PixelFormat::RGB565BE> {
+  using Cursor = gfx2d::CursorRgb565BE;
+  static inline uint32_t pack(uint32_t r5, uint32_t g6, uint32_t b5) {
+    return gfx2d::makeRgb565(r5, g6, b5);
+  }
+  static inline uint32_t blend(uint32_t d, uint32_t s, uint32_t a64) {
+    return gfx2d::blendAlphaRgb565((uint16_t)d, (uint16_t)s, a64);
+  }
+  static inline uint32_t add(uint32_t d, uint32_t r5, uint32_t g6,
+                             uint32_t b5) {
+    return gfx2d::addSaturateRgb565((uint16_t)d, r5, g6, b5);
+  }
+};
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+template <>
+struct OutTraits<PixelFormat::RGB444> {
+  using Cursor = gfx2d::CursorRgb444;
+  static inline uint32_t pack(uint32_t r5, uint32_t g6, uint32_t b5) {
+    return gfx2d::makeRgb444(r5 >> 1, g6 >> 2, b5 >> 1);
+  }
+  static inline uint32_t blend(uint32_t d, uint32_t s, uint32_t a64) {
+    return gfx2d::blendAlphaRgb444((uint16_t)d, (uint16_t)s, a64);
+  }
+  static inline uint32_t add(uint32_t d, uint32_t r5, uint32_t g6,
+                             uint32_t b5) {
+    return gfx2d::addSaturateRgb444((uint16_t)d, r5 >> 1, g6 >> 2, b5 >> 1);
+  }
+};
+#endif
+
+// Rasterize n pixels of span sp starting at pixel x of row `line`
+template <BlendMode B, TexFmt T, bool FLAT, PixelFormat OUT>
+static void rasterSpanT(uint8_t *line, int x, int n, const Span &sp) {
+  using O = OutTraits<OUT>;
+  constexpr bool TEX = (T != TexFmt::NONE);
+  constexpr bool TEXA = (T == TexFmt::ARGB4444);
+
+  typename O::Cursor cur;
+  cur.init(line, x);
+
   const Triangle &t = *sp.tri;
   int32_t r = sp.r, g = sp.g, b = sp.b;
   const int32_t dr = sp.dr, dg = sp.dg, db = sp.db;
-  const uint32_t a = t.alpha64;
+  const uint32_t a64 = t.alpha64;
 
   // With equal vertex colors and no texture, the color is constant over the
   // span
@@ -831,20 +978,19 @@ static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
   uint32_t sg = (uint32_t)(g >> 18) & 63u;
   uint32_t sb = (uint32_t)(b >> 19) & 31u;
   if (B == BlendMode::NONE && FLAT && !TEX) {
-    gfx2d::fillRgb565(px, n, gfx2d::makeRgb565(sr, sg, sb));
+    cur.fill(n, O::pack(sr, sg, sb));
     return;
   }
 
   // Texture (width and height must be powers of two)
-  const uint16_t *tp = nullptr;
-  uint32_t uMask = 0, vMask = 0;
-  int wShift = 0;
-  if (TEX) {
+  const uint8_t *tp = nullptr;
+  uint32_t uMask = 0, vMask = 0, tstride = 0;
+  if constexpr (TEX) {
     const Texture &tex = *t.mat->texture;
-    wShift = gfx2d::log2Floor(tex.width);
-    uMask = (1u << wShift) - 1;
+    uMask = (1u << gfx2d::log2Floor(tex.width)) - 1;
     vMask = (1u << gfx2d::log2Floor(tex.height)) - 1;
-    tp = tex.pixels;
+    tp = (const uint8_t *)tex.pixels;
+    tstride = tex.stride;
   }
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
   float uw = sp.uw, vw = sp.vw, iw = sp.iw;
@@ -855,7 +1001,8 @@ static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
 #endif
 
   for (int i = 0; i < n; i++) {
-    if (TEX) {
+    uint32_t a4 = 15;
+    if constexpr (TEX) {
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
       // Perspective correction: interpolate (u/w, v/w) and 1/w, divide per
       // pixel
@@ -866,7 +1013,8 @@ static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
       uint32_t ui = (uint32_t)(u >> FIX_SHIFT);
       uint32_t vi = (uint32_t)(v >> FIX_SHIFT);
 #endif
-      uint32_t texel = tp[((vi & vMask) << wShift) | (ui & uMask)];
+      const uint8_t *row = tp + (size_t)(vi & vMask) * tstride;
+      uint32_t texel = TexSampler<T>::fetch(row, ui & uMask, a4);
       // Modulate the texel (5/6/5 bits) by the vertex color (0..255).
       // (c + 1) * t >> 8 preserves the maximum value.
       uint32_t cr = ((uint32_t)(r >> FIX_SHIFT) & 0xFFu) + 1;
@@ -875,28 +1023,39 @@ static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
       sr = (cr * (texel >> 11)) >> 8;
       sg = (cg * ((texel >> 5) & 63u)) >> 8;
       sb = (cb * (texel & 31u)) >> 8;
-    } else if (!FLAT) {
+    } else if constexpr (!FLAT) {
       sr = (uint32_t)(r >> 19) & 31u;
       sg = (uint32_t)(g >> 18) & 63u;
       sb = (uint32_t)(b >> 19) & 31u;
     }
 
-    if (B == BlendMode::NONE) {
-      px[i] = gfx2d::makeRgb565(sr, sg, sb);
-    } else if (B == BlendMode::ALPHA) {
-      px[i] = gfx2d::blendAlphaRgb565(px[i], gfx2d::makeRgb565(sr, sg, sb), a);
-    } else {
-      // Additive (color is pre-multiplied by opacity): saturating add per
-      // channel
-      px[i] = gfx2d::addSaturateRgb565(px[i], sr, sg, sb);
+    // a4 * 17 + (a4 >> 3) maps 0..15 to 0..256
+    const uint32_t a256 = TEXA ? (a4 * 17u + (a4 >> 3)) : 256u;
+    if (!TEXA || a256 != 0) {
+      if (B == BlendMode::NONE) {
+        cur.write(O::pack(sr, sg, sb));
+      } else if (B == BlendMode::ALPHA) {
+        uint32_t a = TEXA ? ((a64 * a256) >> 8) : a64;
+        cur.write(O::blend(cur.read(), O::pack(sr, sg, sb), a));
+      } else {
+        // Additive (color is pre-multiplied by opacity): saturating add per
+        // channel
+        if (TEXA) {
+          sr = (sr * a256) >> 8;
+          sg = (sg * a256) >> 8;
+          sb = (sb * a256) >> 8;
+        }
+        cur.write(O::add(cur.read(), sr, sg, sb));
+      }
     }
+    cur.next();
 
-    if (!FLAT) {
+    if constexpr (!FLAT) {
       r += dr;
       g += dg;
       b += db;
     }
-    if (TEX) {
+    if constexpr (TEX) {
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
       uw += duw;
       vw += dvw;
@@ -909,27 +1068,69 @@ static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
   }
 }
 
-using RasterFn = void (*)(uint16_t *, int, const Span &);
+using RasterFn = void (*)(uint8_t *, int, int, const Span &);
+using FillFn = void (*)(uint8_t *, int, int, uint32_t);
 
-// Triangle::rasterFn = blend * 4 + tex * 2 + flat
-static const RasterFn RASTER_FNS[12] = {
-    rasterSpanT<BlendMode::NONE, false, false>,
-    rasterSpanT<BlendMode::NONE, false, true>,
-    rasterSpanT<BlendMode::NONE, true, false>,
-    rasterSpanT<BlendMode::NONE, true, true>,
-    rasterSpanT<BlendMode::ALPHA, false, false>,
-    rasterSpanT<BlendMode::ALPHA, false, true>,
-    rasterSpanT<BlendMode::ALPHA, true, false>,
-    rasterSpanT<BlendMode::ALPHA, true, true>,
-    rasterSpanT<BlendMode::ADD, false, false>,
-    rasterSpanT<BlendMode::ADD, false, true>,
-    rasterSpanT<BlendMode::ADD, true, false>,
-    rasterSpanT<BlendMode::ADD, true, true>,
-};
-
-static inline void rasterSpan(uint16_t *line, int rx0, const Span &sp) {
-  RASTER_FNS[sp.tri->rasterFn](line + (sp.x0 - rx0), sp.x1 - sp.x0, sp);
+template <PixelFormat OUT>
+static void fillLineT(uint8_t *line, int x, int n, uint32_t native) {
+  typename OutTraits<OUT>::Cursor cur;
+  cur.init(line, x);
+  cur.fill(n, native);
 }
+
+// Rasterizer table for one output format, indexed by Triangle::rasterFn.
+// Rows of disabled texture formats are null (never selected, see texFmtOf()).
+#define SHAPOGFX3D_RASTER_ROW(OUT, T)               \
+  rasterSpanT<BlendMode::NONE, T, false, OUT>,      \
+      rasterSpanT<BlendMode::NONE, T, true, OUT>,   \
+      rasterSpanT<BlendMode::ALPHA, T, false, OUT>, \
+      rasterSpanT<BlendMode::ALPHA, T, true, OUT>,  \
+      rasterSpanT<BlendMode::ADD, T, false, OUT>,   \
+      rasterSpanT<BlendMode::ADD, T, true, OUT>
+#define SHAPOGFX3D_RASTER_NULL_ROW \
+  nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
+#if SHAPOGFX_FORMAT_GRAY1
+#define SHAPOGFX3D_RASTER_ROW_GRAY1(OUT) \
+  SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::GRAY1)
+#else
+#define SHAPOGFX3D_RASTER_ROW_GRAY1(OUT) SHAPOGFX3D_RASTER_NULL_ROW
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+#define SHAPOGFX3D_RASTER_ROW_RGB444(OUT) \
+  SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::RGB444)
+#else
+#define SHAPOGFX3D_RASTER_ROW_RGB444(OUT) SHAPOGFX3D_RASTER_NULL_ROW
+#endif
+#if SHAPOGFX_FORMAT_ARGB4444
+#define SHAPOGFX3D_RASTER_ROW_ARGB4444(OUT) \
+  SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::ARGB4444)
+#else
+#define SHAPOGFX3D_RASTER_ROW_ARGB4444(OUT) SHAPOGFX3D_RASTER_NULL_ROW
+#endif
+#if SHAPOGFX_FORMAT_RGB565BE
+#define SHAPOGFX3D_RASTER_ROW_RGB565BE(OUT) \
+  SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::RGB565BE)
+#else
+#define SHAPOGFX3D_RASTER_ROW_RGB565BE(OUT) SHAPOGFX3D_RASTER_NULL_ROW
+#endif
+#define SHAPOGFX3D_RASTER_TABLE(OUT)                                         \
+  {                                                                          \
+    SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::NONE),                                \
+        SHAPOGFX3D_RASTER_ROW_GRAY1(OUT), SHAPOGFX3D_RASTER_ROW_RGB444(OUT), \
+        SHAPOGFX3D_RASTER_ROW_ARGB4444(OUT),                                 \
+        SHAPOGFX3D_RASTER_ROW_RGB565BE(OUT),                                 \
+  }
+
+static constexpr int RASTER_TABLE_SIZE = (int)TexFmt::COUNT * RASTER_PER_TEX;
+
+#if SHAPOGFX_FORMAT_RGB565BE
+static const RasterFn RASTER_FNS_RGB565BE[RASTER_TABLE_SIZE] =
+    SHAPOGFX3D_RASTER_TABLE(PixelFormat::RGB565BE);
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+static const RasterFn RASTER_FNS_RGB444[RASTER_TABLE_SIZE] =
+    SHAPOGFX3D_RASTER_TABLE(PixelFormat::RGB444);
+#endif
 
 // Merge two ascending lists (links are stored in link_)
 uint16_t Renderer::mergeLists(uint16_t a, uint16_t b) {
@@ -951,14 +1152,51 @@ uint16_t Renderer::mergeLists(uint16_t a, uint16_t b) {
   return head;
 }
 
-void Renderer::render(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t *dst,
-                      uint32_t stride) {
-  if (!tris_ || !spanPool_) return;
-  const int rx0 = x, rx1 = x + w;
-  const int y0 = std::max((int)y, 0);
-  const int y1 = std::min((int)y + h, (int)screenH_);
+void Renderer::render(int16_t x, int16_t y, int16_t w, int16_t h,
+                      const Surface &dst, int16_t dstX, int16_t dstY) {
+  if (!tris_ || !spanPool_ || !dst.pixels) return;
+
+  // Output format
+  const RasterFn *table = nullptr;
+  FillFn fillFn = nullptr;
+  switch (dst.format) {
+#if SHAPOGFX_FORMAT_RGB565BE
+    case PixelFormat::RGB565BE:
+      table = RASTER_FNS_RGB565BE;
+      fillFn = fillLineT<PixelFormat::RGB565BE>;
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+    case PixelFormat::RGB444:
+      table = RASTER_FNS_RGB444;
+      fillFn = fillLineT<PixelFormat::RGB444>;
+      break;
+#endif
+    default: return;
+  }
+  const uint32_t clearNative =
+      gfx2d::colorToNative(dst.format, gfx2d::makeColorF(clearColor_));
+
+  // Clip the region to the destination
+  int rx = x, ry = y, rw = w, rh = h, dx = dstX, dy = dstY;
+  if (dx < 0) {
+    rx -= dx;
+    rw += dx;
+    dx = 0;
+  }
+  if (dy < 0) {
+    ry -= dy;
+    rh += dy;
+    dy = 0;
+  }
+  if (dx + rw > dst.width) rw = dst.width - dx;
+  if (dy + rh > dst.height) rh = dst.height - dy;
+  if (rw <= 0 || rh <= 0) return;
+
+  const int rx0 = rx, rx1 = rx + rw;
+  const int y0 = std::max(ry, 0);
+  const int y1 = std::min(ry + rh, (int)screenH_);
   if (y0 >= y1 || rx0 >= rx1) return;
-  const uint16_t clear565 = gfx2d::packRgb565(clearColor_);
   uint16_t *const link = link_;
 
   // For each scanline of the region, build the list of triangles that start
@@ -1010,17 +1248,22 @@ void Renderer::render(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t *dst,
 
     // Draw the opaque spans (ascending x) and the background in the gaps,
     // then composite the translucent spans on top
-    uint16_t *line = dst + (size_t)(yi - y) * stride;
+    uint8_t *line = dst.linePtr(dy + (yi - ry));
+    const int xBase = dx - rx0;  // screen x -> dst x
     int cursor = rx0;
     for (const Span *e = opaqueHead_; e; e = e->next) {
-      if (e->x0 > cursor)
-        gfx2d::fillRgb565(line + (cursor - rx0), e->x0 - cursor, clear565);
-      rasterSpan(line, rx0, *e);
+      if (clearEnabled_ && e->x0 > cursor) {
+        fillFn(line, xBase + cursor, e->x0 - cursor, clearNative);
+      }
+      table[e->tri->rasterFn](line, xBase + e->x0, e->x1 - e->x0, *e);
       cursor = e->x1;
     }
-    if (cursor < rx1)
-      gfx2d::fillRgb565(line + (cursor - rx0), rx1 - cursor, clear565);
-    for (const Span *e = transHead_; e; e = e->next) rasterSpan(line, rx0, *e);
+    if (clearEnabled_ && cursor < rx1) {
+      fillFn(line, xBase + cursor, rx1 - cursor, clearNative);
+    }
+    for (const Span *e = transHead_; e; e = e->next) {
+      table[e->tri->rasterFn](line, xBase + e->x0, e->x1 - e->x0, *e);
+    }
   }
 }
 

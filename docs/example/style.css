@@ -1,0 +1,24 @@
+/* Shared styles of the ShapoGFX demo pages */
+body {
+  margin: 0;
+  padding: 24px;
+  background: #14161f;
+  color: #cfd3e0;
+  font-family: sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+h1 { font-size: 18px; margin: 0; }
+a { color: #8fb4ff; }
+#screen {
+  image-rendering: pixelated;
+  background: #000;
+  border: 1px solid #3a3f55;
+  touch-action: none;
+  max-width: 100%;
+}
+#fps { font-size: 13px; color: #8f96ad; min-height: 1em; }
+#status { font-size: 13px; color: #e0a0a0; max-width: 720px; }
+.help { font-size: 13px; color: #8f96ad; }
