@@ -1,7 +1,12 @@
 #include "scene.hpp"
 
+#include <cstring>
+
 #include <cmath>
 #include <cstdint>
+
+// Windmill model generated from model/windmill.glb with bin/gltf2cpp
+#include "model/windmill.hpp"
 
 namespace demo3d {
 
@@ -130,6 +135,20 @@ static const g3::Material matGlow = {
 };
 
 // ---------------------------------------------------------------------------
+// Windmill (static scene from gltf2cpp); the "Blades" node is spun by a visitor
+
+class BladeSpinner : public g3::NodeVisitor {
+ public:
+  float angle = 0.0f;
+  bool onNode(const g3::Node &node, g3::mat4f &local) override {
+    if (node.name && std::strcmp(node.name, "Blades") == 0) {
+      local = local * g3::mat4f::rotation(angle, {0, 0, 1});
+    }
+    return true;
+  }
+};
+
+// ---------------------------------------------------------------------------
 // API
 
 void sceneInit() { generateTextures(); }
@@ -181,6 +200,17 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   r.rotate(t * 1.2f, 1, 0.5f, 0);
   r.setMaterial(matGlass);
   r.putCube({0, 0, 0}, {1.2f, 1.2f, 1.2f});
+  r.popState();
+
+  // Windmill: a glTF model drawn with putScene(); the blades rotate through the
+  // visitor
+  BladeSpinner spinner;
+  spinner.angle = t * 1.5f;
+  r.pushState();
+  r.translate(-2.4f, -1.2f, -2.2f);
+  r.rotate(0.6f, 0, 1, 0);
+  r.scale(0.75f, 0.75f, 0.75f);
+  r.putScene(windmill::scene, &spinner);
   r.popState();
 
   // Additive glowing cube (orbiting the other way)

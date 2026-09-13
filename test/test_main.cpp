@@ -12,6 +12,7 @@ int main() {
       {"pixel", testPixel},
       {"graphics2d", testGraphics2D},
       {"gfx3d", testGfx3D},
+      {"tools", testTools},
   };
   for (auto &t : tests) {
     int before = g_checkFailures;

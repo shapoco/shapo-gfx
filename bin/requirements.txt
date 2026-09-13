@@ -1,0 +1,7 @@
+# Python dependencies of the tools in bin/
+#   python3 -m pip install -r bin/requirements.txt
+# or run a tool directly with uv (dependencies are declared inline):
+#   uv run bin/img2cpp ...
+Pillow>=9.0
+numpy>=1.22
+pygltflib>=1.16

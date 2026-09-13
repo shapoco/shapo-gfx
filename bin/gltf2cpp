@@ -1,0 +1,461 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["Pillow>=9.0", "numpy>=1.22", "pygltflib>=1.16"]
+# ///
+"""Convert a glTF 2.0 model (.gltf / .glb) to a C++ header for shapoco::gfx3d.
+
+The output is a set of `static const` objects (textures, materials, vertex and
+index arrays, meshes, nodes, scenes) that live in flash and are drawn with
+Graphics3D::putScene() / putNode() / putMesh(). Nothing is allocated at run time.
+
+Supported: TRIANGLES / TRIANGLE_STRIP / TRIANGLE_FAN primitives with POSITION,
+NORMAL (generated when missing), TEXCOORD_0 and COLOR_0; pbrMetallicRoughness
+baseColorFactor / baseColorTexture; alphaMode; doubleSided; node TRS or matrix
+transforms; scenes. Indices must fit in 16 bits.
+
+Example:
+  gltf2cpp model.glb model.hpp
+  gltf2cpp --texformat argb4444 --dither diffusion --namespace assets model.gltf model.hpp
+"""
+
+import argparse
+import base64
+import io
+import math
+import os
+import struct
+import sys
+
+import numpy as np
+import pygltflib
+from PIL import Image
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shapogfx_imgconv as conv  # noqa: E402
+
+COMPONENT_FMT = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f"}
+COMPONENT_SIZE = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}
+COMPONENT_MAX = {5120: 127.0, 5121: 255.0, 5122: 32767.0, 5123: 65535.0}
+TYPE_COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT2": 4, "MAT3": 9, "MAT4": 16}
+MODES = {4: "TRIANGLES", 5: "TRIANGLE_STRIP", 6: "TRIANGLE_FAN"}
+
+
+def warn(msg):
+    print(f"warning: {msg}", file=sys.stderr)
+
+
+def fmt_float(f):
+    s = f"{f:.6g}"
+    if "e" in s or "E" in s:
+        s = f"{f:.6f}".rstrip("0").rstrip(".")
+    if "." not in s:
+        s += ".0"
+    return s + "f"
+
+
+# ---------------------------------------------------------------------------
+# glTF reading
+
+def read_accessor(gltf, index):
+    """Accessor data as a float64 array (count, components), normalized when the
+    accessor says so. Also returns the accessor."""
+    acc = gltf.accessors[index]
+    n_comp = TYPE_COMPONENTS[acc.type]
+    if acc.bufferView is None:
+        return np.zeros((acc.count, n_comp)), acc
+    bv = gltf.bufferViews[acc.bufferView]
+    blob = gltf.binary_blob()
+    offset = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+    fmt = COMPONENT_FMT[acc.componentType]
+    elem_size = n_comp * COMPONENT_SIZE[acc.componentType]
+    stride = bv.byteStride or elem_size
+    out = np.empty((acc.count, n_comp), dtype=np.float64)
+    for i in range(acc.count):
+        out[i] = struct.unpack_from(f"<{n_comp}{fmt}", blob, offset + i * stride)
+    if acc.normalized and acc.componentType in COMPONENT_MAX:
+        out = np.clip(out / COMPONENT_MAX[acc.componentType], -1.0, 1.0)
+    return out, acc
+
+
+def load_image(gltf, image_index, gltf_dir):
+    info = gltf.images[image_index]
+    if info.bufferView is not None:
+        bv = gltf.bufferViews[info.bufferView]
+        blob = gltf.binary_blob()
+        off = bv.byteOffset or 0
+        return Image.open(io.BytesIO(blob[off : off + bv.byteLength]))
+    if info.uri:
+        if info.uri.startswith("data:"):
+            return Image.open(io.BytesIO(base64.b64decode(info.uri.split(",", 1)[1])))
+        return Image.open(os.path.join(gltf_dir, info.uri))
+    raise RuntimeError(f"image {image_index} has no data")
+
+
+def node_matrix(node):
+    """Column-major 16 floats of the node's local transform (T * R * S)."""
+    if node.matrix is not None and len(node.matrix) == 16:
+        return [float(v) for v in node.matrix]
+    m = np.identity(4)
+    if node.scale is not None:
+        m = m @ np.diag([node.scale[0], node.scale[1], node.scale[2], 1.0])
+    if node.rotation is not None:
+        x, y, z, w = (float(v) for v in node.rotation)
+        r = np.identity(4)
+        r[0, 0] = 1 - 2 * (y * y + z * z)
+        r[0, 1] = 2 * (x * y - z * w)
+        r[0, 2] = 2 * (x * z + y * w)
+        r[1, 0] = 2 * (x * y + z * w)
+        r[1, 1] = 1 - 2 * (x * x + z * z)
+        r[1, 2] = 2 * (y * z - x * w)
+        r[2, 0] = 2 * (x * z - y * w)
+        r[2, 1] = 2 * (y * z + x * w)
+        r[2, 2] = 1 - 2 * (x * x + y * y)
+        m = r @ m
+    if node.translation is not None:
+        t = np.identity(4)
+        t[0:3, 3] = node.translation
+        m = t @ m
+    # column-major: m[col * 4 + row]
+    return [float(m[row, col]) for col in range(4) for row in range(4)]
+
+
+def compute_normals(positions, indices, mode):
+    """Smooth per-vertex normals accumulated from the triangles."""
+    normals = np.zeros_like(positions)
+    for a, b, c in triangles(indices, mode):
+        n = np.cross(positions[b] - positions[a], positions[c] - positions[a])
+        normals[a] += n
+        normals[b] += n
+        normals[c] += n
+    lengths = np.linalg.norm(normals, axis=1)
+    lengths[lengths == 0] = 1.0
+    return normals / lengths[:, None]
+
+
+def triangles(indices, mode):
+    n = len(indices)
+    if mode == 4:
+        for i in range(0, n - 2, 3):
+            yield indices[i], indices[i + 1], indices[i + 2]
+    elif mode == 5:
+        for i in range(2, n):
+            if i & 1:
+                yield indices[i - 1], indices[i - 2], indices[i]
+            else:
+                yield indices[i - 2], indices[i - 1], indices[i]
+    elif mode == 6:
+        for i in range(2, n):
+            yield indices[0], indices[i - 1], indices[i]
+
+
+# ---------------------------------------------------------------------------
+# Code generation
+
+class Generator:
+    def __init__(self, gltf, gltf_dir, args):
+        self.gltf = gltf
+        self.gltf_dir = gltf_dir
+        self.args = args
+        self.out = []
+        self.textures = {}       # image index -> (var name, has_alpha)
+        self.materials = {}      # (material index or None, vertex_color) -> var name
+        self.mesh_vars = {}      # mesh index -> var name
+        self.node_vars = {}      # node index -> var name
+        self.stats = {"textures": 0, "vertices": 0, "indices": 0, "bytes": 0}
+
+    def w(self, line=""):
+        self.out.append(line)
+
+    # --- textures -----------------------------------------------------------
+
+    def texture(self, texture_index, alpha_hint):
+        tex = self.gltf.textures[texture_index]
+        if tex.source is None:
+            return None
+        if tex.source in self.textures:
+            return self.textures[tex.source]
+        img = load_image(self.gltf, tex.source, self.gltf_dir)
+        has_alpha = img.mode in ("RGBA", "LA", "P") and img.convert("RGBA").getextrema()[3][0] < 255
+        fmt = self.args.texformat
+        if fmt == "auto":
+            fmt = "argb4444" if (has_alpha or alpha_hint) else "rgb565be"
+        w, h = img.size
+        if not (conv.is_power_of_two(w) and conv.is_power_of_two(h)):
+            if self.args.no_resize_pot:
+                warn(f"image {tex.source} is {w}x{h}: not a power of two, unusable as a 3D texture")
+            else:
+                pw, ph = conv.nearest_power_of_two(w), conv.nearest_power_of_two(h)
+                warn(f"image {tex.source} resized from {w}x{h} to {pw}x{ph} (power of two)")
+                img = img.resize((pw, ph), Image.LANCZOS)
+        if self.args.max_texture_size:
+            w, h = img.size
+            m = self.args.max_texture_size
+            if w > m or h > m:
+                img = img.resize((min(w, m), min(h, m)), Image.LANCZOS)
+        w, h, stride, data, elem = conv.convert(img, fmt, self.args.dither, self.args.key_color)
+        name = f"tex{tex.source}"
+        self.w()
+        self.w(f"// texture: image {tex.source} {w}x{h} {fmt}")
+        for line in conv.format_array(f"{name}Data", data, elem):
+            self.w(line)
+        for line in conv.format_texture(name, fmt, w, h, stride, f"{name}Data"):
+            self.w(line)
+        self.stats["textures"] += 1
+        self.stats["bytes"] += stride * h
+        self.textures[tex.source] = (name, fmt == "argb4444")
+        return self.textures[tex.source]
+
+    # --- materials ----------------------------------------------------------
+
+    def material(self, material_index, vertex_color):
+        key = (material_index, vertex_color)
+        if key in self.materials:
+            return self.materials[key]
+        name = f"mat{material_index if material_index is not None else 'Default'}"
+        if vertex_color:
+            name += "Vc"
+        base = [1.0, 1.0, 1.0, 1.0]
+        tex = None
+        double_sided = False
+        blend = "NONE"
+        if material_index is not None:
+            m = self.gltf.materials[material_index]
+            pbr = m.pbrMetallicRoughness
+            if pbr is not None:
+                if pbr.baseColorFactor is not None:
+                    base = [float(v) for v in pbr.baseColorFactor]
+                if pbr.baseColorTexture is not None and pbr.baseColorTexture.index is not None:
+                    try:
+                        tex = self.texture(pbr.baseColorTexture.index, m.alphaMode in ("BLEND", "MASK"))
+                    except Exception as e:  # noqa: BLE001
+                        warn(f"material {material_index}: texture skipped ({e})")
+            double_sided = bool(m.doubleSided)
+            if m.alphaMode == "BLEND":
+                blend = "ALPHA"
+            elif m.alphaMode == "MASK" and not (tex and tex[1]):
+                warn(f"material {material_index}: alphaMode MASK without an ARGB4444 texture is drawn opaque")
+        flags = []
+        if tex:
+            flags.append("g3::MaterialFlags::TEXTURE")
+        if double_sided:
+            flags.append("g3::MaterialFlags::DOUBLE_SIDED")
+        if vertex_color:
+            flags.append("g3::MaterialFlags::VERTEX_COLOR")
+        col = ", ".join(fmt_float(v) for v in base)
+        self.w()
+        self.w(f"static const g3::Material {name} = {{")
+        self.w(f"  {{{col}}}, {{{col}}}, {('&' + tex[0]) if tex else 'nullptr'},")
+        self.w(f"  g3::BlendMode::{blend}, {' | '.join(flags) if flags else '0'},")
+        self.w("};")
+        self.materials[key] = name
+        return name
+
+    # --- meshes ---------------------------------------------------------------
+
+    def mesh(self, mesh_index):
+        mesh = self.gltf.meshes[mesh_index]
+        name = f"mesh{mesh_index}"
+        prim_entries = []
+        for pi, prim in enumerate(mesh.primitives):
+            mode = prim.mode if prim.mode is not None else 4
+            if mode not in MODES:
+                warn(f"mesh {mesh_index} primitive {pi}: mode {mode} not supported, skipped")
+                continue
+            attrs = prim.attributes
+            if attrs.POSITION is None:
+                warn(f"mesh {mesh_index} primitive {pi}: no POSITION, skipped")
+                continue
+            pos, _ = read_accessor(self.gltf, attrs.POSITION)
+            count = len(pos)
+            if count > 65535:
+                warn(f"mesh {mesh_index} primitive {pi}: {count} vertices exceed 65535, skipped")
+                continue
+            if prim.indices is not None:
+                idx_f, _ = read_accessor(self.gltf, prim.indices)
+                indices = [int(v) for v in idx_f[:, 0]]
+            else:
+                indices = list(range(count))
+            if any(i >= count for i in indices):
+                warn(f"mesh {mesh_index} primitive {pi}: index out of range, skipped")
+                continue
+            if attrs.NORMAL is not None:
+                nrm, _ = read_accessor(self.gltf, attrs.NORMAL)
+            else:
+                nrm = compute_normals(pos, indices, mode)
+            uv = None
+            if attrs.TEXCOORD_0 is not None:
+                uv, _ = read_accessor(self.gltf, attrs.TEXCOORD_0)
+            colors = None
+            if attrs.COLOR_0 is not None:
+                colors, acc = read_accessor(self.gltf, attrs.COLOR_0)
+                if acc.componentType != 5126 and not acc.normalized:
+                    colors = colors / COMPONENT_MAX[acc.componentType]
+            pname = f"{name}Prim{pi}"
+            self.w()
+            self.w(f"// mesh {mesh_index} primitive {pi}: {count} vertices, {len(indices)} indices")
+            self.w(f"static const g3::Vertex {pname}Vertices[] = {{")
+            for i in range(count):
+                p = pos[i]
+                n = nrm[i]
+                t = uv[i] if uv is not None else (0.0, 0.0)
+                if colors is not None:
+                    c = colors[i]
+                    a = c[3] if len(c) > 3 else 1.0
+                    rgba = [int(round(max(0.0, min(1.0, v)) * 255)) for v in (a, c[0], c[1], c[2])]
+                    color = f"0x{rgba[0]:02X}{rgba[1]:02X}{rgba[2]:02X}{rgba[3]:02X}u"
+                else:
+                    color = "0xFFFFFFFFu"
+                self.w(
+                    "  {{"
+                    + f"{fmt_float(p[0])}, {fmt_float(p[1])}, {fmt_float(p[2])}}}, "
+                    + f"{{{fmt_float(n[0])}, {fmt_float(n[1])}, {fmt_float(n[2])}}}, "
+                    + f"{{{fmt_float(t[0])}, {fmt_float(t[1])}}}, {color}}},"
+                )
+            self.w("};")
+            self.w(f"static const g3::VertexBuffer {pname}Vb = {{{count}, {pname}Vertices}};")
+            self.w(f"static const uint16_t {pname}Indices[] = {{")
+            for i in range(0, len(indices), 16):
+                self.w("  " + ", ".join(str(v) for v in indices[i : i + 16]) + ",")
+            self.w("};")
+            mat = self.material(prim.material, colors is not None)
+            prim_entries.append(
+                f"  {{g3::PrimitiveType::{MODES[mode]}, &{pname}Vb, {len(indices)}, {pname}Indices, &{mat}}},"
+            )
+            self.stats["vertices"] += count
+            self.stats["indices"] += len(indices)
+            self.stats["bytes"] += count * 36 + len(indices) * 2
+        self.w()
+        if prim_entries:
+            self.w(f"static const g3::Primitive {name}Prims[] = {{")
+            for e in prim_entries:
+                self.w(e)
+            self.w("};")
+            self.w(f"static const g3::Mesh {name} = {{{name}Prims, {len(prim_entries)}}};")
+        else:
+            self.w(f"static const g3::Mesh {name} = {{nullptr, 0}};")
+        self.mesh_vars[mesh_index] = name
+        return name
+
+    # --- nodes --------------------------------------------------------------------
+
+    def node_name(self, index):
+        node = self.gltf.nodes[index]
+        if node.name:
+            cand = "node_" + conv.sanitize_identifier(node.name)
+            if cand not in self.node_vars.values():
+                return cand
+        return f"node{index}"
+
+    def node(self, index, visiting):
+        if index in self.node_vars:
+            return self.node_vars[index]
+        if index in visiting:
+            raise RuntimeError(f"node {index} is part of a cycle")
+        visiting.add(index)
+        node = self.gltf.nodes[index]
+        children = [self.node(c, visiting) for c in (node.children or [])]
+        name = self.node_name(index)
+        self.node_vars[index] = name
+        mesh = self.mesh_vars.get(node.mesh) if node.mesh is not None else None
+        m = node_matrix(node)
+        self.w()
+        if children:
+            self.w(f"static const g3::Node *const {name}Children[] = {{" + ", ".join("&" + c for c in children) + "};")
+        label = f'"{node.name}"' if node.name else "nullptr"
+        self.w(f"static const g3::Node {name} = {{")
+        self.w(f"  {label},")
+        self.w("  {{" + ", ".join(fmt_float(v) for v in m[0:4]) + ",")
+        self.w("    " + ", ".join(fmt_float(v) for v in m[4:8]) + ",")
+        self.w("    " + ", ".join(fmt_float(v) for v in m[8:12]) + ",")
+        self.w("    " + ", ".join(fmt_float(v) for v in m[12:16]) + "}},")
+        self.w(f"  {('&' + mesh) if mesh else 'nullptr'},")
+        self.w(f"  {(name + 'Children') if children else 'nullptr'}, {len(children)},")
+        self.w("};")
+        visiting.discard(index)
+        return name
+
+    # --- whole file -------------------------------------------------------------------
+
+    def generate(self, input_name, namespace, guard):
+        g = self.gltf
+        self.w(f"#ifndef {guard}")
+        self.w(f"#define {guard}")
+        self.w()
+        self.w(f"// Generated by gltf2cpp from {input_name}")
+        self.w("// Draw with Graphics3D::putScene(scene) or putNode(node_...).")
+        self.w()
+        self.w('#include "shapoco/gfx3d/gfx3d.hpp"')
+        self.w()
+        self.w(f"namespace {namespace} {{")
+        self.w()
+        self.w("namespace g2 = shapoco::gfx2d;")
+        self.w("namespace g3 = shapoco::gfx3d;")
+        for mi in range(len(g.meshes or [])):
+            self.mesh(mi)
+        visiting = set()
+        for ni in range(len(g.nodes or [])):
+            self.node(ni, visiting)
+        scene_vars = []
+        for si, scene in enumerate(g.scenes or []):
+            roots = [self.node_vars[r] for r in (scene.nodes or []) if r in self.node_vars]
+            name = f"scene{si}"
+            self.w()
+            if roots:
+                self.w(f"static const g3::Node *const {name}Roots[] = {{" + ", ".join("&" + r for r in roots) + "};")
+                self.w(f"static const g3::Scene {name} = {{{name}Roots, {len(roots)}}};")
+            else:
+                self.w(f"static const g3::Scene {name} = {{nullptr, 0}};")
+            scene_vars.append(name)
+        default = g.scene if g.scene is not None else (0 if scene_vars else None)
+        if default is not None and default < len(scene_vars):
+            self.w()
+            self.w(f"static const g3::Scene &scene = {scene_vars[default]};  // default scene")
+        self.w()
+        st = self.stats
+        self.w(f"// {st['vertices']} vertices, {st['indices']} indices, {st['textures']} textures, about {st['bytes']} bytes")
+        self.w()
+        self.w(f"}}  // namespace {namespace}")
+        self.w()
+        self.w("#endif")
+        self.w()
+        return "\n".join(self.out)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("input", help="input .gltf or .glb")
+    ap.add_argument("output", help="output C++ header (.hpp)")
+    ap.add_argument("--namespace", default=None,
+                    help="namespace of the generated objects (default: from the input file name)")
+    ap.add_argument("--texformat", choices=("auto",) + conv.FORMATS, default="auto",
+                    help="texture format; auto = argb4444 when the image or material uses alpha, else rgb565be")
+    ap.add_argument("--dither", choices=conv.DITHERS, default="none", help="texture dithering")
+    ap.add_argument("--key-color", type=conv.parse_key_color, default=None,
+                    help="color to make transparent in textures")
+    ap.add_argument("--max-texture-size", type=int, default=None, help="shrink textures larger than this")
+    ap.add_argument("--no-resize-pot", action="store_true",
+                    help="do not resize textures to a power-of-two size (only warn)")
+    args = ap.parse_args()
+
+    input_path = os.path.abspath(args.input)
+    gltf = pygltflib.GLTF2().load(input_path)
+    if gltf.binary_blob() is None:
+        gltf.convert_buffers(pygltflib.BufferFormat.BINARYBLOB)
+    stem = os.path.splitext(os.path.basename(input_path))[0]
+    namespace = args.namespace or conv.sanitize_identifier(stem)
+    guard = conv.sanitize_identifier(namespace).upper() + "_" + conv.identifiers_from_path(args.output)[0] + "_HPP"
+
+    gen = Generator(gltf, os.path.dirname(input_path), args)
+    code = gen.generate(os.path.basename(input_path), namespace, guard)
+
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)) or ".", exist_ok=True)
+    with open(args.output, "w") as f:
+        f.write(code)
+    st = gen.stats
+    print(f"Generated {args.output}: {len(gltf.meshes or [])} meshes, {len(gltf.nodes or [])} nodes, "
+          f"{st['vertices']} vertices, {st['textures']} textures, ~{st['bytes']} bytes")
+
+
+if __name__ == "__main__":
+    main()

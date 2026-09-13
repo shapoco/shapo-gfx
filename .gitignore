@@ -11,3 +11,7 @@ tmp.*
 
 # Emscripten
 .emscripten_cache/
+
+# Python
+__pycache__/
+*.pyc

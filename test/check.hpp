@@ -28,5 +28,6 @@ extern int g_checkFailures;
 void testPixel();
 void testGraphics2D();
 void testGfx3D();
+void testTools();
 
 #endif

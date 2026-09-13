@@ -237,13 +237,17 @@ are counter-clockwise in screen space. All angles are in radians.
 using gfx2d::Texture;   // any enabled format; width and height must be powers of two
 using gfx2d::Surface;   // render target: RGB565BE or RGB444
 
-struct Vertex { vec3f position; vec3f normal; vec2f uv; };
+struct Vertex {
+  vec3f position; vec3f normal; vec2f uv;
+  gfx2d::Color color;   // ARGB8888, used with MaterialFlags::VERTEX_COLOR (alpha ignored)
+};
 struct VertexBuffer { uint16_t vertexCount; const Vertex *vertices; };
 
 namespace MaterialFlags {
 constexpr uint32_t TEXTURE = 1u << 0;       // enable texture mapping
 constexpr uint32_t ENV_MAP = 1u << 1;       // use the texture as an environment map
 constexpr uint32_t DOUBLE_SIDED = 1u << 2;  // disable back-face culling
+constexpr uint32_t VERTEX_COLOR = 1u << 3;  // multiply the lit color by Vertex::color
 }
 
 struct Material {
@@ -268,7 +272,16 @@ struct Stats {
   size_t arenaSize, arenaUsed;
   int triCapacity, triCount, triDropped;
   int spanCapacity, spanPeak, spanDropped;
+  int badIndices;    // triangles dropped because an index was >= vertexCount
+  int nodesDropped;  // nodes skipped because the state stack was full
 };
+
+// Static scene description (see "Static scenes")
+struct Mesh  { const Primitive *primitives; uint16_t primitiveCount; };
+struct Node  { const char *name; mat4f transform; const Mesh *mesh;
+               const Node *const *children; uint16_t childCount; };
+struct Scene { const Node *const *roots; uint16_t rootCount; };
+class NodeVisitor { public: virtual bool onNode(const Node &, mat4f &local); };
 ```
 
 Translucency: a triangle is translucent when its material's blend mode is not
@@ -292,11 +305,30 @@ class Graphics3D {
   void translate(const vec3f &); void translate(float x, float y, float z);
   void rotate(float angle, const vec3f &axis); void rotate(float angle, float x, float y, float z);
   void scale(const vec3f &); void scale(float x, float y, float z);
-  void pushState(); void popState();                  // matrix + material, depth 16
+  void transform(const mat4f &);                       // multiply by an arbitrary matrix
+  void lookAt(const vec3f &eye, const vec3f &target, const vec3f &up = {0, 1, 0});
+  bool pushState(); void popState();                  // matrix + material, depth 16; false when full
 
   void setMaterial(const Material &);
   void putPrimitive(const Primitive &);
+
+  // shapes (see below)
   void putCube(const vec3f &center, const vec3f &size, int divs = 1);
+  void putPlane(const vec3f &center, float sizeX, float sizeZ, int divsX = 1, int divsZ = 1);
+  void putDisk(const vec3f &center, float radius, int segments = 16);
+  void putSphereUV(const vec3f &center, float radius, int segmentsU = 16, int segmentsV = 8);
+  void putIcosphere(const vec3f &center, float radius, int level = 2);
+  void putCylinder(const vec3f &center, float radius, float height, int segments = 16,
+                   int heightDivs = 1, bool caps = true);
+  void putCone(const vec3f &center, float radiusBottom, float radiusTop, float height,
+               int segments = 16, int heightDivs = 1, bool caps = true);
+  void putTorus(const vec3f &center, float majorRadius, float minorRadius,
+                int majorSegments = 24, int minorSegments = 12);
+
+  // static scenes (see below)
+  void putMesh(const Mesh &);
+  void putNode(const Node &, NodeVisitor *visitor = nullptr);
+  void putScene(const Scene &, NodeVisitor *visitor = nullptr);
 
   void enableParallelLight(const vec3f &dir, const colorf &col);  // dir transformed by the current matrix
   void disableParallelLight();
@@ -337,8 +369,53 @@ Vertices shared by several triangles of one primitive are transformed once thank
 a direct-mapped vertex cache (64 entries) invalidated at the start of each primitive.
 
 Triangles are discarded at this stage when they cross or lie in front of the near
-plane (no clipping), when back-face culling applies, when they cover no scanline, or
-when the triangle buffer is full (`Stats::triDropped`).
+plane (no clipping), when back-face culling applies, when they cover no scanline, when
+the triangle buffer is full (`Stats::triDropped`), or when one of their indices is
+outside the vertex buffer (`Stats::badIndices`). The index check makes it safe to draw
+data of unverified origin.
+
+### Shapes
+
+The shape functions generate geometry on the fly and feed it to `putPrimitive()`:
+parametric surfaces (plane, sphere, cylinder, cone, torus) are emitted as
+`TRIANGLE_STRIP`s one band at a time in chunks of 16 segments from a stack buffer of
+34 vertices; disks and caps are `TRIANGLE_FAN`s; the icosphere emits one strip per row
+of each subdivided icosahedron face. Sines and cosines are tabulated once per call, so
+regenerating a shape every frame costs little more than drawing a stored mesh (the
+vertices shared between chunks are shaded twice). Segment counts are clamped to
+3..64 (subdivisions to 1..64, icosphere level to 0..4).
+
+Conventions: shapes are centered at `center` with their axis along +Y, normals point
+outward and front faces are counter-clockwise, so single-sided materials show the
+outside. UVs: sphere u = longitude around +Y starting at +X towards +Z, v = 0 at the
+north pole; the icosphere uses the same equirectangular mapping with the seam and the
+poles handled per face; cylinder/cone side u = around the axis, v = 0 at the top; plane
+u along +X, v along +Z; disk u/v = bounding square; torus u = around the ring, v =
+around the tube. All shape vertices are white (`VERTEX_WHITE`).
+
+### Vertex colors
+
+With `MaterialFlags::VERTEX_COLOR` the lit color (ambient + diffuse terms, or the plain
+diffuse color without lights) is multiplied by `Vertex::color` (RGB, 0..255). The alpha
+of the vertex color is ignored; translucency is per material.
+
+### Static scenes
+
+`Mesh`, `Node` and `Scene` describe a model as plain aggregates so that a whole model
+(vertices, indices, textures, materials, nodes) can be `static const` data in flash,
+typically generated by `bin/gltf2cpp`. `putMesh()` draws every primitive with its own
+material. `putNode()` pushes the state, multiplies the current matrix by the node's
+transform, draws its mesh, recurses into the children and pops; `putScene()` does this
+for every root. The optional `NodeVisitor` is called before each node with a copy of
+its local transform: it may modify the transform (animation) or return `false` to skip
+the node and its subtree. When the state stack (16 levels) is full the subtree is
+skipped and counted in `Stats::nodesDropped`, so deep or malformed trees cannot corrupt
+the matrix stack.
+
+Memory safety of scene data rests on three points: all references are to static
+storage (nothing is owned or freed), every array is paired with its count and the
+traversal never reads past it, and the index check in `putPrimitive()` bounds every
+vertex access.
 
 ### Lighting
 
@@ -441,6 +518,31 @@ coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
 
 Currently does nothing; reserved for future use.
 
+## Tools (`bin/`)
+
+Python 3 scripts (dependencies in `bin/requirements.txt`; also runnable with `uv run`
+thanks to inline metadata). `shapogfx_imgconv.py` is the shared image conversion
+module.
+
+- **img2cpp** `[-f FORMAT] [-d DITHER] [-k COLOR] [--name N] [--namespace NS] [--resize WxH] [--pot] input output.hpp`
+  emits an aligned `static const` pixel array and a `static const gfx2d::Texture`.
+  Formats rgb565be (default), argb4444, rgb444, gray1; dithering none / diffusion /
+  pattern; `-k` makes a key color transparent; `--pot` resizes to a power of two.
+  Pixels are quantized with rounding; the memory layout matches `pixel.hpp`
+  (RGB565BE and RGB444 are emitted as bytes, ARGB4444 as `uint16_t`).
+- **gltf2cpp** `[--namespace NS] [--texformat auto|...] [--dither D] [--key-color C] [--max-texture-size N] [--no-resize-pot] input.gltf|glb output.hpp`
+  emits, inside a namespace named after the file, `tex<i>` textures, `mat<i>` (and
+  `mat<i>Vc` for primitives with vertex colors) materials, `mesh<i>Prim<j>Vertices` /
+  `...Indices` / `mesh<i>`, `node_<name>` (or `node<i>`) nodes in child-first order,
+  `scene<i>` and a `scene` alias for the default scene. Vertex attributes are
+  interleaved into `Vertex`; missing normals are generated by accumulating face
+  normals; COLOR_0 becomes `Vertex::color` and sets `VERTEX_COLOR` on a material copy;
+  node TRS is composed into the column-major matrix on the tool side. Textures are
+  resized to a power of two (with a warning) unless `--no-resize-pot`; `auto` picks
+  ARGB4444 when the image or the material's alpha mode needs alpha. Unsupported
+  primitive modes, oversized index ranges and out-of-range indices are reported and
+  skipped, so the generated data always satisfies the renderer's invariants.
+
 ## Sample programs
 
 Both samples are 480x320 and render into an RGB565BE buffer. Each has a WASM entry
@@ -455,11 +557,13 @@ served as a static site.
   background color, an RGB444 off-screen surface drawn with a second `Graphics2D` and
   blitted (whole and partial), rounded rectangles, circles, ellipses, triangles, lines,
   pixels, clipping and text in all four fonts including scaling and measurement.
-- `example/wasm/demo3d/`: a textured floor, an environment-mapped torus built as a
-  `TRIANGLE_STRIP`, and opaque, alpha-blended and additive cubes. The frame is composed
-  in two passes: a 2D backdrop (gradient, stars, caption) drawn with `Graphics2D`, then
-  the 3D scene rendered in four bands with the clear disabled. Mouse and keyboard
-  control the camera in the browser.
+- `example/wasm/demo3d/`: a textured floor, an environment-mapped torus (`putTorus`),
+  opaque, alpha-blended and additive cubes, and a vertex-colored windmill generated
+  from `model/windmill.glb` (`model/make_windmill.py`) with `gltf2cpp` whose "Blades"
+  node is rotated by a `NodeVisitor`. The frame is composed in two passes: a 2D
+  backdrop (gradient, stars, caption) drawn with `Graphics2D`, then the 3D scene
+  rendered in four bands with the clear disabled. Mouse and keyboard control the
+  camera in the browser.
 
 ## Tests
 
@@ -468,6 +572,11 @@ framework. It checks color conversions and cursors for every enabled format, ble
 identities, `Graphics2D` clipping, fills, polygons, lines, ellipses, image blits,
 bitmaps and text metrics, consistency between RGB565BE and RGB444 targets, and for
 the 3D renderer: banded versus whole-frame rendering (byte identical), offset
-rendering, transparent clear, all texture formats on both output formats, and
-texel alpha. The tests are meant to be run with AddressSanitizer and
+rendering, transparent clear, all texture formats on both output formats, texel
+alpha, the winding of every shape (culled and double-sided renders must match),
+vertex colors and the index range check. `test/data` holds a procedural image and a
+small glTF model with the headers generated from them (`test/tools` regenerates
+them); the tests verify the generated textures against the source pixels and the
+generated scene graph (names, hierarchy, transforms, generated normals, traversal,
+visitor skipping and animation, deep-tree cut-off). The tests are meant to be run with AddressSanitizer and
 UndefinedBehaviorSanitizer on the native build.

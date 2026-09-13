@@ -51,7 +51,11 @@ can be disabled at compile time to remove its code (see below).
   per texel; environment mapping
 - Alpha blending and additive blending with correct ordering against opaque
   geometry
-- Triangle lists, strips and fans; a built-in subdivided box
+- Triangle lists, strips and fans; per-vertex colors
+- Built-in shapes generated on the fly: box, plane, disk, UV sphere, icosphere,
+  cylinder, cone, torus
+- Static scene graphs (`Mesh` / `Node` / `Scene` as `const` data in flash) drawn
+  with `putScene()`, with a visitor hook to animate or hide nodes
 - OpenGL-style right-handed coordinate system and matrix stack
 - Perspective-correct texture mapping in three levels (off, vertical only,
   full); vertical-only is the default and costs two divides per span
@@ -60,6 +64,14 @@ can be disabled at compile time to remove its code (see below).
 - Per-pixel work is integer only (16-bit fixed point); vertex work is `float`
 - Multiple independent `Graphics3D` instances, each with its own arena
 
+### Tools (`bin/`)
+
+- `img2cpp`: converts an image to a C++ header holding a `Texture` in any pixel
+  format, with optional dithering, key-color transparency and power-of-two
+  resizing
+- `gltf2cpp`: converts a glTF 2.0 model to a header of `const` meshes,
+  materials, textures, nodes and scenes for `Graphics3D::putScene()`
+
 ## Directory layout
 
 ```
@@ -67,8 +79,9 @@ include/shapoco/gfx2d/   2D API and shared types (pixel formats, Surface, Graphi
 include/shapoco/gfx3d/   3D renderer (gfx3d.hpp, math3d.hpp)
 src/gfx2d/, src/gfx3d/   implementation
 example/wasm/demo2d/     2D sample (WASM and native entry points)
-example/wasm/demo3d/     3D sample over a 2D backdrop
+example/wasm/demo3d/     3D sample over a 2D backdrop (with a glTF model in model/)
 docs/example/            browser pages for the samples (index.html, viewer.js, *.wasm)
+bin/                     img2cpp, gltf2cpp (Python) and their requirements.txt
 test/                    self-checking tests (ctest)
 ```
 
@@ -108,42 +121,89 @@ namespace g3 = shapoco::gfx3d;
 static uint8_t arena[64 * 1024];
 static uint16_t band[320 * 40];  // 40-line transfer buffer, RGB565BE
 static const g2::Surface bandSurface = {g2::PixelFormat::RGB565BE, 320, 40, 320 * 2, band};
-static g3::Graphics3D renderer;
+static g3::Graphics3D g3d;
 
 static const g3::Material matRed = {
     {0.9f, 0.15f, 0.1f, 1.0f}, {0.9f, 0.15f, 0.1f, 1.0f}, nullptr, g3::BlendMode::NONE, 0,
 };
 
 void setup() {
-    renderer.init(320, 240, arena, sizeof(arena));
-    renderer.setPerspectiveProjection(60.0f * 3.14159f / 180.0f, 320.0f / 240.0f, 0.3f, 100.0f);
-    renderer.setClearColor({0.05f, 0.05f, 0.1f, 1.0f});
+    g3d.init(320, 240, arena, sizeof(arena));
+    g3d.setPerspectiveProjection(60.0f * 3.14159f / 180.0f, 320.0f / 240.0f, 0.3f, 100.0f);
+    g3d.setClearColor({0.05f, 0.05f, 0.1f, 1.0f});
 }
 
 void drawFrame(float t) {
-    renderer.beginScene();
-    renderer.translate(0, 0, -5);                       // camera
-    renderer.enableParallelLight({-0.5f, -1, -0.6f}, {1, 1, 1, 1});
-    renderer.enableEnvironmentLight({0.2f, 0.2f, 0.3f, 1});
-    renderer.pushState();
-    renderer.rotate(t, 0.3f, 1, 0);
-    renderer.setMaterial(matRed);
-    renderer.putCube({0, 0, 0}, {1.5f, 1.5f, 1.5f});
-    renderer.popState();
-    renderer.endScene();
+    g3d.beginScene();
+    g3d.translate(0, 0, -5);                       // camera
+    g3d.enableParallelLight({-0.5f, -1, -0.6f}, {1, 1, 1, 1});
+    g3d.enableEnvironmentLight({0.2f, 0.2f, 0.3f, 1});
+    g3d.pushState();
+    g3d.rotate(t, 0.3f, 1, 0);
+    g3d.setMaterial(matRed);
+    g3d.putCube({0, 0, 0}, {1.5f, 1.5f, 1.5f});
+    g3d.popState();
+    g3d.putTorus({0, -1.5f, 0}, 1.5f, 0.3f);  // other shapes: putSphereUV, putCylinder, ...
+    g3d.endScene();
 
-    renderer.beginRender();
+    g3d.beginRender();
     for (int y = 0; y < 240; y += 40) {
-        renderer.render(0, y, 320, 40, bandSurface);  // screen region -> band (0, 0)
+        g3d.render(0, y, 320, 40, bandSurface);  // screen region -> band (0, 0)
         // ... send `band` to the display at (0, y) ...
     }
-    renderer.endRender();
+    g3d.endRender();
 }
 ```
 
 Model data (vertex arrays, index arrays, textures) is only referenced, never
 copied, so it can live in flash as `const` data. Textures are `g2::Texture`
 values: `{format, width, height, stride, pixels}` with power-of-two sizes.
+
+### Models from glTF
+
+```sh
+python3 -m pip install -r bin/requirements.txt   # Pillow, numpy, pygltflib
+bin/gltf2cpp robot.glb robot.hpp                 # namespace `robot`
+```
+
+```c++
+#include "robot.hpp"
+
+class ArmSwing : public g3::NodeVisitor {
+ public:
+  float angle = 0;
+  bool onNode(const g3::Node &node, g3::mat4f &local) override {
+    if (node.name && strcmp(node.name, "Arm") == 0) local = local * g3::mat4f::rotation(angle, {1, 0, 0});
+    return true;  // false would skip the node and its children
+  }
+};
+
+void drawRobot(g3::Graphics3D &g, float t) {
+  ArmSwing swing;
+  swing.angle = sinf(t);
+  g.putScene(robot::scene, &swing);   // or g.putNode(robot::node_Head)
+}
+```
+
+The generated header contains only `static const` objects (vertex and index
+arrays, materials, textures, `Mesh`, `Node`, `Scene`), so a model costs no RAM
+and no allocation. Nodes are named `node_<glTF name>` when the name is a valid
+identifier. Supported: triangle primitives with positions, normals (generated
+when missing), one UV set and vertex colors; base color factor and texture;
+alpha mode; double-sided; node TRS or matrix; up to 65535 vertices per
+primitive.
+
+### Images
+
+```sh
+bin/img2cpp -f argb4444 -k "#FF00FF" -d diffusion sprite.png sprite.hpp
+bin/img2cpp -f rgb565be --pot photo.jpg photo.hpp   # power-of-two size for 3D textures
+```
+
+The header defines a `static const shapoco::gfx2d::Texture` plus its pixel
+array. Formats: `rgb565be` (default), `argb4444`, `rgb444`, `gray1`; dithering:
+`none`, `diffusion` (Floyd-Steinberg), `pattern` (4x4 Bayer). Both tools can
+also be run with `uv run bin/img2cpp ...` thanks to inline dependency metadata.
 
 ## Building
 
@@ -212,8 +272,10 @@ single frame as a PPM file.
   off-screen surface blitted to the screen, rounded rectangles, circles,
   lines, clipping and all four fonts. Uses only `shapoco::gfx2d`.
 - **demo3d** (`example/wasm/demo3d/`): a textured floor, an environment-mapped
-  torus and three cubes (opaque, alpha-blended, additive) rendered over a 2D
-  backdrop drawn with `Graphics2D`, with the 3D clear disabled.
+  torus (`putTorus`), three cubes (opaque, alpha-blended, additive) and a
+  vertex-colored windmill converted from `model/windmill.glb` with `gltf2cpp`,
+  whose blades are spun through a `NodeVisitor`; all rendered over a 2D backdrop
+  drawn with `Graphics2D`, with the 3D clear disabled.
 
 Browser build (requires [Emscripten](https://emscripten.org/)):
 
@@ -274,9 +336,11 @@ texture and environment mapping):
 
 ## Testing
 
-`test/` contains self-checking tests for the pixel helpers, `Graphics2D` and
-the 3D renderer (banded vs. whole-frame rendering, output formats, transparent
-clear, texture formats). Run them with sanitizers for the strictest check:
+`test/` contains self-checking tests for the pixel helpers, `Graphics2D`, the
+3D renderer (banded vs. whole-frame rendering, output formats, transparent
+clear, texture formats, shape winding, vertex colors, index checks) and the
+code generated by the tools (`test/data`, regenerated by `test/tools`). Run
+them with sanitizers for the strictest check:
 
 ```sh
 cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
