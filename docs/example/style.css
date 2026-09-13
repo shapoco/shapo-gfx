@@ -18,6 +18,7 @@ a { color: #8fb4ff; }
   border: 1px solid #3a3f55;
   touch-action: none;
   max-width: 100%;
+  height: auto;   /* keep the aspect ratio when the width is limited by the viewport */
 }
 #fps { font-size: 13px; color: #8f96ad; min-height: 1em; }
 #status { font-size: 13px; color: #e0a0a0; max-width: 720px; }

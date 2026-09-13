@@ -52,8 +52,11 @@ async function startDemoViewer(opts) {
     const canvas = document.getElementById('screen');
     canvas.width = W;
     canvas.height = H;
-    canvas.style.width = `${W * scale}px`;
-    canvas.style.height = `${H * scale}px`;
+    // Display size: W*scale wide, but never wider than the viewport; the height
+    // follows from the canvas aspect ratio (style.css sets height: auto).
+    canvas.style.width = `min(${W * scale}px, 100%)`;
+    canvas.style.height = 'auto';
+    canvas.style.aspectRatio = `${W} / ${H}`;
     const ctx = canvas.getContext('2d');
     const imgData = ctx.createImageData(W, H);
     const rgba = imgData.data;
