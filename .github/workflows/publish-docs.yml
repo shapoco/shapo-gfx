@@ -1,0 +1,60 @@
+name: Publish Docs
+
+# Builds the Sphinx manual from docsrc/ and commits the HTML to docs/ref/ on
+# main, where GitHub Pages serves it (Settings > Pages: branch main, folder /docs).
+# Pushes made with GITHUB_TOKEN do not trigger workflows, so this cannot loop.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docsrc/**
+      - requirements.txt
+      - .github/workflows/publish-docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-docs
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build Sphinx HTML
+        run: |
+          sphinx-build -b html -W --keep-going docsrc docsrc/_build/html
+
+      - name: Commit docs/ref
+        run: |
+          set -euo pipefail
+          rm -rf docs/ref
+          mkdir -p docs/ref
+          rsync -a --delete docsrc/_build/html/ docs/ref/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/ref
+          if git diff --cached --quiet; then
+            echo "No changes in docs/ref/"
+            exit 0
+          fi
+          git commit -m "docs: update ref from ${GITHUB_SHA}"
+          git push origin HEAD:main

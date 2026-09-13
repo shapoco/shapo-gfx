@@ -1,0 +1,176 @@
+Graphics3D API
+################################################################################
+
+ヘッダ: ``shapoco/gfx3d/gfx3d.hpp``
+
+データ構造
+================================================================================
+
+Vertex / VertexBuffer
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   struct Vertex {
+     vec3f position;
+     vec3f normal;
+     vec2f uv;            // 環境マッピング時は未使用
+     gfx2d::Color color;  // ARGB8888。MaterialFlags::VERTEX_COLOR のときに使用 (α は無視)
+   };
+   constexpr gfx2d::Color VERTEX_WHITE = 0xFFFFFFFFu;
+
+   struct VertexBuffer {
+     uint16_t vertexCount;
+     const Vertex *vertices;
+   };
+
+Texture
+--------------------------------------------------------------------------------
+
+``gfx2d::Texture`` をそのまま使います (:doc:`../gfx2d/surface`)。任意の有効フォーマットが使えますが、
+幅と高さは 2 の冪でなければなりません。
+
+Material
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   namespace MaterialFlags {
+   constexpr uint32_t TEXTURE = 1u << 0;       // テクスチャを使う
+   constexpr uint32_t ENV_MAP = 1u << 1;       // テクスチャを環境マップとして使う
+   constexpr uint32_t DOUBLE_SIDED = 1u << 2;  // 両面描画 (バックフェイスカリング無効)
+   constexpr uint32_t VERTEX_COLOR = 1u << 3;  // Vertex::color を乗算する
+   }
+
+   struct Material {
+     colorf diffuse;          // 拡散反射色。a は不透明度
+     colorf ambient;          // 環境反射色
+     const Texture *texture;  // 未使用なら nullptr
+     BlendMode blendMode;     // NONE, ALPHA, ADD
+     uint32_t flags;          // MaterialFlags の組み合わせ
+   };
+
+.. code-block:: cpp
+
+   static const g3::Material matGlass = {
+       {0.4f, 0.7f, 1.0f, 0.45f}, {0.4f, 0.7f, 1.0f, 1.0f},
+       nullptr, g3::BlendMode::ALPHA, g3::MaterialFlags::DOUBLE_SIDED,
+   };
+
+Primitive
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   enum class PrimitiveType : uint8_t { TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN };
+
+   struct Primitive {
+     PrimitiveType type;
+     const VertexBuffer *vertexBuffer;
+     uint16_t indexCount;
+     const uint16_t *indices;
+     const Material *material;  // nullptr なら setMaterial() で設定したマテリアル
+   };
+
+Stats
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   struct Stats {
+     size_t arenaSize;   // init() に渡したアリーナのサイズ
+     size_t arenaUsed;   // 直近フレームで実際に使った量 (固定分 + 三角形 + 線分ピーク)
+     int triCapacity;    // 三角形バッファの容量
+     int triCount;       // 現在のシーンの三角形数 (カリング後)
+     int triDropped;     // バッファあふれで破棄した数 (beginScene() でリセット)
+     int spanCapacity;   // 線分プールの容量
+     int spanPeak;       // 1 ラインで同時に使った線分数の最大 (beginRender() でリセット)
+     int spanDropped;    // プールあふれで破棄した数 (beginRender() でリセット)
+     int badIndices;     // 添字範囲外で破棄した三角形数 (beginScene() でリセット)
+     int nodesDropped;   // スタック満杯で飛ばしたノード数 (beginScene() でリセット)
+   };
+
+初期化
+================================================================================
+
+.. csv-table::
+   :header: "メンバー", "説明"
+
+   "``void init(int16_t w, int16_t h, void *arena, size_t arenaSize)``", "画面サイズと作業メモリを設定する。アリーナが小さすぎる場合は未初期化のまま"
+   "``void deinit()``", "アリーナを手放す。以降の描画呼び出しは何もしない"
+   "``bool isInitialized() const``", "初期化済みか"
+   "``int16_t screenWidth() const`` / ``screenHeight() const``", "画面サイズ"
+
+シーンの構築
+================================================================================
+
+.. csv-table::
+   :header: "メンバー", "説明"
+
+   "``void beginScene()``", "三角形バッファ、スタック、現在の行列をリセットして構築を始める"
+   "``void endScene()``", "構築を終える"
+   "``void loadIdentity()``", "現在の行列を単位行列にする"
+   "``void translate(const vec3f &)`` / ``translate(x, y, z)``", "平行移動を右から乗じる"
+   "``void rotate(float angle, const vec3f &axis)`` / ``rotate(angle, x, y, z)``", "回転 (ラジアン、軸は正規化不要)"
+   "``void scale(const vec3f &)`` / ``scale(x, y, z)``", "スケール"
+   "``void transform(const mat4f &)``", "任意の行列を右から乗じる"
+   "``void lookAt(const vec3f &eye, const vec3f &target, const vec3f &up = {0, 1, 0})``", "視点行列を右から乗じる (gluLookAt 相当)"
+   "``bool pushState()``", "現在の行列とマテリアルをスタックに保存する。満杯なら false を返して何もしない"
+   "``void popState()``", "復元する"
+   "``void setMaterial(const Material &)``", "現在のマテリアルを設定する (ポインタを保持するので endRender() まで有効なオブジェクトを渡す)"
+   "``void putPrimitive(const Primitive &)``", "プリミティブを追加する。頂点処理はこの時点で行われる"
+
+ライトと背景
+--------------------------------------------------------------------------------
+
+.. csv-table::
+   :header: "メンバー", "説明"
+
+   "``void enableParallelLight(const vec3f &dir, const colorf &col)``", "平行光源。``dir`` は呼び出し時の行列で変換される"
+   "``void disableParallelLight()``", ""
+   "``void enableEnvironmentLight(const colorf &col)`` / ``disableEnvironmentLight()``", "環境光"
+   "``void setClearColor(const colorf &)``", "背景色を設定し、背景の塗りを有効にする"
+   "``void disableClear()``", "背景を塗らず、描画先の内容を残す"
+   "``bool isClearEnabled() const``", ""
+
+投影
+--------------------------------------------------------------------------------
+
+.. csv-table::
+   :header: "メンバー", "説明"
+
+   "``void setPerspectiveProjection(float fovY, float aspect, float zNear, float zFar)``", "透視投影 (fovY はラジアン)"
+   "``void setOrthographicProjection(float l, float r, float b, float t, float zNear, float zFar)``", "正射影"
+
+レンダリング
+================================================================================
+
+.. csv-table::
+   :header: "メンバー", "説明"
+
+   "``void beginRender()``", "三角形を奥から順にソートする"
+   "``void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst, int16_t dstX = 0, int16_t dstY = 0)``", "画面領域 (x, y, w, h) を ``dst`` の (dstX, dstY) に描く。画面と ``dst`` の両方でクリップされる。``dst`` は RGB565BE か RGB444"
+   "``void endRender()``", "レンダリングを終える"
+   "``Stats getStats() const``", "統計 (``endRender()`` 後に呼ぶとそのフレームの値)"
+
+形状と静的シーン
+================================================================================
+
+``putCube()`` などの形状関数は :doc:`shapes`、``putMesh()`` / ``putNode()`` / ``putScene()`` は :doc:`scene` を参照してください。
+
+使用例: 帯状レンダリングと統計
+================================================================================
+
+.. code-block:: cpp
+
+   g3d.beginRender();
+   for (int y = 0; y < SCREEN_H; y += BAND_H) {
+     g3d.render(0, y, SCREEN_W, BAND_H, band);
+     lcd.writeAsync(0, y, band);
+   }
+   g3d.endRender();
+
+   g3::Stats st = g3d.getStats();
+   if (st.triDropped || st.spanDropped) {
+     // アリーナが足りない: 大きくするか、シーンを簡略化する
+   }

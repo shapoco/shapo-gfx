@@ -1,0 +1,326 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="ja" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>サンプル &mdash; ShapoGFX Reference Manual</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="_static/custom.css?v=9adbe090" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=4eb6406d"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="_static/translations.js?v=4755f45a"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="genindex.html" />
+    <link rel="search" title="検索" href="search.html" />
+    <link rel="prev" title="gltf2cpp: glTF モデルを C++ コードに変換する" href="tools/gltf2cpp.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            ShapoGFX
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+<div class="project-links">
+  <a href="https://github.com/shapoco/shapo-gfx">GitHub</a> |
+  <a href="./../example/demo2d/">demo2d</a> |
+  <a href="./../example/demo3d/">demo3d</a>
+</div>
+
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">はじめに</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="intro/overview.html">概要</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="intro/overview.html#shapogfx">ShapoGFX とは</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/overview.html#id2">名前空間と構成</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/overview.html#id3">対応ピクセルフォーマット</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/overview.html#id4">主要な制約</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="intro/overview.html#d">3D レンダラ</a></li>
+<li class="toctree-l3"><a class="reference internal" href="intro/overview.html#d-api">2D API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="intro/overview.html#id5">共通</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="intro/overview.html#id6">性能の目安</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/overview.html#id7">ライセンス</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="intro/getting_started.html">導入</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="intro/getting_started.html#id2">必要なもの</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/getting_started.html#cmake">CMake で使う</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/getting_started.html#id3">CMake を使わない</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/getting_started.html#id4">コンパイル時オプション</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/getting_started.html#d">最小のサンプル: 2D</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/getting_started.html#id5">最小のサンプル: 3D</a></li>
+<li class="toctree-l2"><a class="reference internal" href="intro/getting_started.html#id6">ツールとドキュメントの依存パッケージ</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">2D グラフィックス (shapoco::gfx2d)</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="gfx2d/pixel.html">ピクセルフォーマットと色</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/pixel.html#pixelformat">PixelFormat</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="gfx2d/pixel.html#blendmode">BlendMode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gfx2d/pixel.html#id2">補助関数</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/pixel.html#color-argb8888">Color (ARGB8888)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/pixel.html#id3">フォーマット別の変換</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/pixel.html#id4">ピクセルカーソル</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="gfx2d/pixel.html#id5">テンプレート補助</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gfx2d/pixel.html#id6">例: 手書きのループで市松模様を書く</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="gfx2d/surface.html">Surface と Texture</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/surface.html#texture">Texture (読み取り専用画像)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/surface.html#surface">Surface (書き込み可能な画像)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="gfx2d/surface.html#id1">補助関数</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/surface.html#ownedsurface">OwnedSurface (任意)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="gfx2d/graphics2d.html">Graphics2D</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#id1">概要</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#id2">描画先と状態</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#id3">ピクセルと矩形</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#id4">楕円と円</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#id5">線と多角形</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#id6">画像</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#id7">文字</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#graphicsstate2d-textstate">GraphicsState2D / TextState</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/graphics2d.html#id8">実装上の注意</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="gfx2d/fonts.html">フォント</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/fonts.html#gfxfont">GFXfont 形式</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/fonts.html#id2">同梱フォント</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx2d/fonts.html#id3">使い方</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">3D グラフィックス (shapoco::gfx3d)</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="gfx3d/concepts.html">3D レンダラの概念</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id1">描画の流れ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id2">座標系</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id3">ライティングとマテリアル</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id4">半透明</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id5">背景</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id6">透視補正</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id7">メモリ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id8">三角形が破棄される条件</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/concepts.html#id9">複数インスタンス</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="gfx3d/graphics3d.html">Graphics3D API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/graphics3d.html#id1">データ構造</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/graphics3d.html#vertex-vertexbuffer">Vertex / VertexBuffer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/graphics3d.html#texture">Texture</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/graphics3d.html#material">Material</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/graphics3d.html#primitive">Primitive</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/graphics3d.html#stats">Stats</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/graphics3d.html#id2">初期化</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/graphics3d.html#id3">シーンの構築</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/graphics3d.html#id4">ライトと背景</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/graphics3d.html#id5">投影</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/graphics3d.html#id6">レンダリング</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/graphics3d.html#id7">形状と静的シーン</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/graphics3d.html#id8">使用例: 帯状レンダリングと統計</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="gfx3d/shapes.html">基本形状</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/shapes.html#id2">共通の規約</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/shapes.html#id3">関数一覧</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/shapes.html#id4">実装とコスト</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="gfx3d/scene.html">静的シーン (Mesh / Node / Scene)</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/scene.html#id1">概要</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/scene.html#id2">構造体</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/scene.html#id3">描画関数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/scene.html#nodevisitor">NodeVisitor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/scene.html#id4">メモリ安全性について</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="gfx3d/math.html">ベクトルと行列</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/math.html#d-shapoco-gfx2d">2D 型 (<code class="docutils literal notranslate"><span class="pre">shapoco::gfx2d</span></code>)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gfx3d/math.html#d-shapoco-gfx3d">3D 型 (<code class="docutils literal notranslate"><span class="pre">shapoco::gfx3d</span></code>)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/math.html#vec3f">vec3f</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gfx3d/math.html#mat4f">mat4f</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">ツール</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="tools/img2cpp.html">img2cpp: 画像を C++ コードに変換する</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="tools/img2cpp.html#id1">オプション</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tools/img2cpp.html#id2">出力</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tools/img2cpp.html#id3">共通モジュール</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="tools/gltf2cpp.html">gltf2cpp: glTF モデルを C++ コードに変換する</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="tools/gltf2cpp.html#id1">オプション</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tools/gltf2cpp.html#gltf">対応する glTF の機能</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tools/gltf2cpp.html#id2">出力の構成</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tools/gltf2cpp.html#id3">サイズの目安</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tools/gltf2cpp.html#id4">ワークフローの例</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">その他</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">サンプル</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id2">ブラウザで動くデモ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">ソース</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#wasm">WASM のビルド</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id4">新しいデモを作る</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">ShapoGFX</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">サンプル</li>
+      <li class="wy-breadcrumbs-aside">
+              <a href="https://github.com/shapoco/shapo-gfx/blob/main/docsrc/samples.rst" class="fa fa-github"> Edit on GitHub</a>
+      </li>
+  </ul><div class="rst-breadcrumbs-buttons" role="navigation" aria-label="Sequential page navigation">
+        <a href="tools/gltf2cpp.html" class="btn btn-neutral float-left" title="gltf2cpp: glTF モデルを C++ コードに変換する" accesskey="p"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+  </div>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="id1">
+<h1>サンプル<a class="headerlink" href="#id1" title="Link to this heading"></a></h1>
+<section id="id2">
+<h2>ブラウザで動くデモ<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p><a class="reference external" href="../example/demo2d/">demo2d</a>: <code class="docutils literal notranslate"><span class="pre">Graphics2D</span></code> の機能一式 (背景パターン、多角形の星、α と加算合成のスプライト、
+GRAY1 アイコン、RGB444 オフスクリーンの転送、図形、クリップ、4 種のフォント)。<code class="docutils literal notranslate"><span class="pre">shapoco::gfx2d</span></code> だけを使います。</p></li>
+<li><p><a class="reference external" href="../example/demo3d/">demo3d</a>: テクスチャ付きの床、環境マップのトーラス (<code class="docutils literal notranslate"><span class="pre">putTorus</span></code>)、不透明・半透明・加算合成のキューブ、
+glTF から生成した頂点カラーの風車 (<code class="docutils literal notranslate"><span class="pre">putScene</span></code> と <code class="docutils literal notranslate"><span class="pre">NodeVisitor</span></code>)。<code class="docutils literal notranslate"><span class="pre">Graphics2D</span></code> で描いた背景の上に、
+背景クリアを無効にして 3D を重ねています。マウスドラッグ / 矢印キーで回転、ホイール / PageUp・PageDown でズームします。</p></li>
+</ul>
+<p>どちらも 480x320 の RGB565BE バッファに描画し、<code class="docutils literal notranslate"><span class="pre">docs/example/viewer.js</span></code> が RGB565BE をキャンバスに展開しています。</p>
+</section>
+<section id="id3">
+<h2>ソース<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>パス</p></th>
+<th class="head"><p>内容</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">example/wasm/demo2d/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">scene.cpp</span></code> (描画)、<code class="docutils literal notranslate"><span class="pre">main.cpp</span></code> (WASM エクスポートとネイティブ <code class="docutils literal notranslate"><span class="pre">main()</span></code>)、<code class="docutils literal notranslate"><span class="pre">Makefile</span></code>、<code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">example/wasm/demo3d/</span></code></p></td>
+<td><p>同上。<code class="docutils literal notranslate"><span class="pre">model/</span></code> に風車の生成スクリプト、<code class="docutils literal notranslate"><span class="pre">.glb</span></code>、生成ヘッダ</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">docs/example/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">viewer.js</span></code> (共通ビューア)、<code class="docutils literal notranslate"><span class="pre">style.css</span></code>、各デモの <code class="docutils literal notranslate"><span class="pre">index.html</span></code> と <code class="docutils literal notranslate"><span class="pre">.wasm</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p>ネイティブ版は 1 フレームを PPM ファイルに書き出します (ブラウザなしで動作確認するため)。</p>
+<div class="highlight-sh notranslate"><div class="highlight"><pre><span></span>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Release<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>cmake<span class="w"> </span>--build<span class="w"> </span>build
+./build/example/wasm/demo3d/demo3d<span class="w"> </span>frame.ppm<span class="w"> </span><span class="m">1</span>.5<span class="w">    </span><span class="c1"># 第 2 引数は経過秒</span>
+</pre></div>
+</div>
+</section>
+<section id="wasm">
+<h2>WASM のビルド<a class="headerlink" href="#wasm" title="Link to this heading"></a></h2>
+<p><a class="reference external" href="https://emscripten.org/">Emscripten</a> が必要です。</p>
+<div class="highlight-sh notranslate"><div class="highlight"><pre><span></span><span class="o">(</span><span class="nb">cd</span><span class="w"> </span>example/wasm/demo2d<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>make<span class="o">)</span><span class="w">   </span><span class="c1"># docs/example/demo2d/demo2d.wasm</span>
+<span class="o">(</span><span class="nb">cd</span><span class="w"> </span>example/wasm/demo3d<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>make<span class="o">)</span><span class="w">   </span><span class="c1"># docs/example/demo3d/demo3d.wasm</span>
+./launch_web_server.sh<span class="w">             </span><span class="c1"># docs/ を http://localhost:52880/ で配信</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">fetch()</span></code> を使うため <code class="docutils literal notranslate"><span class="pre">file://</span></code> では動きません。WASM バイナリはリポジトリにコミットされており、
+<code class="docutils literal notranslate"><span class="pre">docs/</span></code> を GitHub Pages でそのまま公開できます。</p>
+</section>
+<section id="id4">
+<h2>新しいデモを作る<a class="headerlink" href="#id4" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">example/wasm/</span></code> の既存デモをコピーし、<code class="docutils literal notranslate"><span class="pre">Makefile</span></code> の <code class="docutils literal notranslate"><span class="pre">demo3d</span></code> を新しい名前に置き換えます。
+エクスポート関数は <code class="docutils literal notranslate"><span class="pre">&lt;name&gt;_init</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;name&gt;_frame(t[,</span> <span class="pre">yaw,</span> <span class="pre">pitch,</span> <span class="pre">dist])</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;name&gt;_get_fb</span></code>,
+<code class="docutils literal notranslate"><span class="pre">&lt;name&gt;_get_width</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;name&gt;_get_height</span></code> の 5 つで、<code class="docutils literal notranslate"><span class="pre">docs/example/&lt;name&gt;/index.html</span></code> から
+<code class="docutils literal notranslate"><span class="pre">startDemoViewer({wasm,</span> <span class="pre">prefix,</span> <span class="pre">camera})</span></code> を呼ぶだけです。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="tools/gltf2cpp.html" class="btn btn-neutral float-left" title="gltf2cpp: glTF モデルを C++ コードに変換する" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Shapoco.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

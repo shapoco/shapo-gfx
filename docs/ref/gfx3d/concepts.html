@@ -1,0 +1,427 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="ja" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D レンダラの概念 &mdash; ShapoGFX Reference Manual</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=9adbe090" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=4eb6406d"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="../_static/translations.js?v=4755f45a"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="検索" href="../search.html" />
+    <link rel="next" title="Graphics3D API" href="graphics3d.html" />
+    <link rel="prev" title="フォント" href="../gfx2d/fonts.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            ShapoGFX
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+<div class="project-links">
+  <a href="https://github.com/shapoco/shapo-gfx">GitHub</a> |
+  <a href="../../example/demo2d/">demo2d</a> |
+  <a href="../../example/demo3d/">demo3d</a>
+</div>
+
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">はじめに</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../intro/overview.html">概要</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../intro/overview.html#shapogfx">ShapoGFX とは</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/overview.html#id2">名前空間と構成</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/overview.html#id3">対応ピクセルフォーマット</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/overview.html#id4">主要な制約</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../intro/overview.html#d">3D レンダラ</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../intro/overview.html#d-api">2D API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../intro/overview.html#id5">共通</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/overview.html#id6">性能の目安</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/overview.html#id7">ライセンス</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../intro/getting_started.html">導入</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../intro/getting_started.html#id2">必要なもの</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/getting_started.html#cmake">CMake で使う</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/getting_started.html#id3">CMake を使わない</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/getting_started.html#id4">コンパイル時オプション</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/getting_started.html#d">最小のサンプル: 2D</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/getting_started.html#id5">最小のサンプル: 3D</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../intro/getting_started.html#id6">ツールとドキュメントの依存パッケージ</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">2D グラフィックス (shapoco::gfx2d)</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../gfx2d/pixel.html">ピクセルフォーマットと色</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/pixel.html#pixelformat">PixelFormat</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../gfx2d/pixel.html#blendmode">BlendMode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../gfx2d/pixel.html#id2">補助関数</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/pixel.html#color-argb8888">Color (ARGB8888)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/pixel.html#id3">フォーマット別の変換</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/pixel.html#id4">ピクセルカーソル</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../gfx2d/pixel.html#id5">テンプレート補助</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../gfx2d/pixel.html#id6">例: 手書きのループで市松模様を書く</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../gfx2d/surface.html">Surface と Texture</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/surface.html#texture">Texture (読み取り専用画像)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/surface.html#surface">Surface (書き込み可能な画像)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="../gfx2d/surface.html#id1">補助関数</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/surface.html#ownedsurface">OwnedSurface (任意)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../gfx2d/graphics2d.html">Graphics2D</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#id1">概要</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#id2">描画先と状態</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#id3">ピクセルと矩形</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#id4">楕円と円</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#id5">線と多角形</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#id6">画像</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#id7">文字</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#graphicsstate2d-textstate">GraphicsState2D / TextState</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/graphics2d.html#id8">実装上の注意</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../gfx2d/fonts.html">フォント</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/fonts.html#gfxfont">GFXfont 形式</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/fonts.html#id2">同梱フォント</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gfx2d/fonts.html#id3">使い方</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">3D グラフィックス (shapoco::gfx3d)</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">3D レンダラの概念</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id1">描画の流れ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id2">座標系</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">ライティングとマテリアル</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id4">半透明</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id5">背景</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id6">透視補正</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id7">メモリ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id8">三角形が破棄される条件</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id9">複数インスタンス</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="graphics3d.html">Graphics3D API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="graphics3d.html#id1">データ構造</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="graphics3d.html#vertex-vertexbuffer">Vertex / VertexBuffer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="graphics3d.html#texture">Texture</a></li>
+<li class="toctree-l3"><a class="reference internal" href="graphics3d.html#material">Material</a></li>
+<li class="toctree-l3"><a class="reference internal" href="graphics3d.html#primitive">Primitive</a></li>
+<li class="toctree-l3"><a class="reference internal" href="graphics3d.html#stats">Stats</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="graphics3d.html#id2">初期化</a></li>
+<li class="toctree-l2"><a class="reference internal" href="graphics3d.html#id3">シーンの構築</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="graphics3d.html#id4">ライトと背景</a></li>
+<li class="toctree-l3"><a class="reference internal" href="graphics3d.html#id5">投影</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="graphics3d.html#id6">レンダリング</a></li>
+<li class="toctree-l2"><a class="reference internal" href="graphics3d.html#id7">形状と静的シーン</a></li>
+<li class="toctree-l2"><a class="reference internal" href="graphics3d.html#id8">使用例: 帯状レンダリングと統計</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="shapes.html">基本形状</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="shapes.html#id2">共通の規約</a></li>
+<li class="toctree-l2"><a class="reference internal" href="shapes.html#id3">関数一覧</a></li>
+<li class="toctree-l2"><a class="reference internal" href="shapes.html#id4">実装とコスト</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="scene.html">静的シーン (Mesh / Node / Scene)</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="scene.html#id1">概要</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scene.html#id2">構造体</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scene.html#id3">描画関数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scene.html#nodevisitor">NodeVisitor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scene.html#id4">メモリ安全性について</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="math.html">ベクトルと行列</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="math.html#d-shapoco-gfx2d">2D 型 (<code class="docutils literal notranslate"><span class="pre">shapoco::gfx2d</span></code>)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="math.html#d-shapoco-gfx3d">3D 型 (<code class="docutils literal notranslate"><span class="pre">shapoco::gfx3d</span></code>)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="math.html#vec3f">vec3f</a></li>
+<li class="toctree-l3"><a class="reference internal" href="math.html#mat4f">mat4f</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">ツール</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../tools/img2cpp.html">img2cpp: 画像を C++ コードに変換する</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../tools/img2cpp.html#id1">オプション</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../tools/img2cpp.html#id2">出力</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../tools/img2cpp.html#id3">共通モジュール</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../tools/gltf2cpp.html">gltf2cpp: glTF モデルを C++ コードに変換する</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../tools/gltf2cpp.html#id1">オプション</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../tools/gltf2cpp.html#gltf">対応する glTF の機能</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../tools/gltf2cpp.html#id2">出力の構成</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../tools/gltf2cpp.html#id3">サイズの目安</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../tools/gltf2cpp.html#id4">ワークフローの例</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">その他</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../samples.html">サンプル</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="../samples.html#id2">ブラウザで動くデモ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../samples.html#id3">ソース</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../samples.html#wasm">WASM のビルド</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../samples.html#id4">新しいデモを作る</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">ShapoGFX</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">3D レンダラの概念</li>
+      <li class="wy-breadcrumbs-aside">
+              <a href="https://github.com/shapoco/shapo-gfx/blob/main/docsrc/gfx3d/concepts.rst" class="fa fa-github"> Edit on GitHub</a>
+      </li>
+  </ul><div class="rst-breadcrumbs-buttons" role="navigation" aria-label="Sequential page navigation">
+        <a href="../gfx2d/fonts.html" class="btn btn-neutral float-left" title="フォント" accesskey="p"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="graphics3d.html" class="btn btn-neutral float-right" title="Graphics3D API" accesskey="n">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+  </div>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="d">
+<h1>3D レンダラの概念<a class="headerlink" href="#d" title="Link to this heading"></a></h1>
+<p>ヘッダ: <code class="docutils literal notranslate"><span class="pre">shapoco/gfx3d/gfx3d.hpp</span></code></p>
+<section id="id1">
+<h2>描画の流れ<a class="headerlink" href="#id1" title="Link to this heading"></a></h2>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">init()</span></code> で画面サイズと作業メモリ (アリーナ) を与えます。</p></li>
+<li><p>毎フレーム <code class="docutils literal notranslate"><span class="pre">beginScene()</span></code> 〜 <code class="docutils literal notranslate"><span class="pre">endScene()</span></code> の間にカメラ、ライト、プリミティブを投入します。
+この段階で頂点の変換・ライティング・投影まで行い、結果を内部の三角形バッファに保持します。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">beginRender()</span></code> で三角形を奥から順にソートします。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">render(x,</span> <span class="pre">y,</span> <span class="pre">w,</span> <span class="pre">h,</span> <span class="pre">dst,</span> <span class="pre">dstX,</span> <span class="pre">dstY)</span></code> で画面の矩形領域をラスタライズして <code class="docutils literal notranslate"><span class="pre">Surface</span></code> に書きます。
+領域を分けて何度呼んでも構いません。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">endRender()</span></code> を呼びます。</p></li>
+</ol>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">g3d</span><span class="p">.</span><span class="n">beginScene</span><span class="p">();</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">lookAt</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">});</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">enableParallelLight</span><span class="p">({</span><span class="mf">-0.5f</span><span class="p">,</span><span class="w"> </span><span class="mi">-1</span><span class="p">,</span><span class="w"> </span><span class="mf">-0.6f</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">setMaterial</span><span class="p">(</span><span class="n">mat</span><span class="p">);</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">putSphereUV</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">);</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">endScene</span><span class="p">();</span>
+
+<span class="n">g3d</span><span class="p">.</span><span class="n">beginRender</span><span class="p">();</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">H</span><span class="p">;</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">BAND_H</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">g3d</span><span class="p">.</span><span class="n">render</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="n">W</span><span class="p">,</span><span class="w"> </span><span class="n">BAND_H</span><span class="p">,</span><span class="w"> </span><span class="n">band</span><span class="p">);</span><span class="w">   </span><span class="c1">// 帯ごとに描いて転送</span>
+<span class="w">  </span><span class="n">display</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="n">band</span><span class="p">);</span>
+<span class="p">}</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">endRender</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>フレームバッファも Z バッファも持たないので、RAM は「アリーナ + 転送バッファ」だけで済みます。</p>
+</section>
+<section id="id2">
+<h2>座標系<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>OpenGL 互換の右手系です。ビュー空間ではカメラは -Z を見ます。</p></li>
+<li><p>スクリーン空間は左上原点、y は下向きです。</p></li>
+<li><p>表面はスクリーン空間で反時計回り (CCW) です。既定ではバックフェイスカリングが有効で、
+<code class="docutils literal notranslate"><span class="pre">MaterialFlags::DOUBLE_SIDED</span></code> で無効化できます。</p></li>
+<li><p>角度は全てラジアンです。</p></li>
+<li><p>現在の変換行列は <code class="docutils literal notranslate"><span class="pre">loadIdentity()</span></code> / <code class="docutils literal notranslate"><span class="pre">translate()</span></code> / <code class="docutils literal notranslate"><span class="pre">rotate()</span></code> / <code class="docutils literal notranslate"><span class="pre">scale()</span></code> / <code class="docutils literal notranslate"><span class="pre">transform()</span></code> / <code class="docutils literal notranslate"><span class="pre">lookAt()</span></code> で操作し、
+<code class="docutils literal notranslate"><span class="pre">pushState()</span></code> / <code class="docutils literal notranslate"><span class="pre">popState()</span></code> で保存・復元します (深さ 16)。マテリアルもスタックに含まれます。</p></li>
+<li><p>カメラは専用の API ではなく、<code class="docutils literal notranslate"><span class="pre">lookAt()</span></code> (または平行移動・回転) で現在の行列に組み込みます。
+ライトの向き <code class="docutils literal notranslate"><span class="pre">enableParallelLight(dir,</span> <span class="pre">col)</span></code> は呼び出し時点の行列で変換されるので、
+カメラ設定の後、モデル変換の前に呼べばワールド空間の向きとして扱えます。</p></li>
+</ul>
+</section>
+<section id="id3">
+<h2>ライティングとマテリアル<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<p>グーローシェーディングです。頂点ごとに次の色を求め、線分内で線形補間します。</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>color = ambient * environmentLight                 (環境光が有効なとき)
+      + diffuse * parallelLight * max(0, n . -L)   (平行光源が有効なとき)
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>どちらのライトも無効なら <code class="docutils literal notranslate"><span class="pre">diffuse</span></code> がそのまま頂点色になります。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">MaterialFlags::VERTEX_COLOR</span></code> が立っていると、上の結果に <code class="docutils literal notranslate"><span class="pre">Vertex::color</span></code> (RGB) を乗じます。</p></li>
+<li><p>テクスチャがあれば、頂点色でテクセルを変調します。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">BlendMode::ADD</span></code> では色に不透明度をあらかじめ乗じてから加算します。</p></li>
+<li><p>環境マッピング (<code class="docutils literal notranslate"><span class="pre">MaterialFlags::ENV_MAP</span></code>) はビュー空間の法線 <code class="docutils literal notranslate"><span class="pre">n</span></code> から
+<code class="docutils literal notranslate"><span class="pre">u</span> <span class="pre">=</span> <span class="pre">0.5</span> <span class="pre">+</span> <span class="pre">0.5</span> <span class="pre">n.x</span></code>, <code class="docutils literal notranslate"><span class="pre">v</span> <span class="pre">=</span> <span class="pre">0.5</span> <span class="pre">-</span> <span class="pre">0.5</span> <span class="pre">n.y</span></code> でテクスチャを参照します。</p></li>
+</ul>
+</section>
+<section id="id4">
+<h2>半透明<a class="headerlink" href="#id4" title="Link to this heading"></a></h2>
+<p>マテリアルの <code class="docutils literal notranslate"><span class="pre">blendMode</span></code> が <code class="docutils literal notranslate"><span class="pre">NONE</span></code> 以外、またはテクスチャが <code class="docutils literal notranslate"><span class="pre">ARGB4444</span></code> の三角形は半透明として扱われます。</p>
+<ul class="simple">
+<li><p>不透明な線分は x 順のリストで管理され、重なった部分は深度比較で奥側が削除されます。
+三角形単位のソートに頼らないので、大きなポリゴンと小さなポリゴンの前後関係も正しく出ます。</p></li>
+<li><p>半透明な線分は奥から順のリストで管理され、不透明部分を描いた後にブレンドモードに従って合成されます。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ARGB4444</span></code> テクスチャではテクセルの α がピクセル単位で不透明度に乗算されます。
+α = 0 のテクセルは描かれないので、抜きのあるスプライト的な板ポリが作れます。</p></li>
+</ul>
+</section>
+<section id="id5">
+<h2>背景<a class="headerlink" href="#id5" title="Link to this heading"></a></h2>
+<p>線分で覆われないピクセルは <code class="docutils literal notranslate"><span class="pre">setClearColor()</span></code> の色で塗られます。
+<code class="docutils literal notranslate"><span class="pre">disableClear()</span></code> を呼ぶと塗らずに描画先の内容を残すので、<code class="docutils literal notranslate"><span class="pre">Graphics2D</span></code> で描いた背景の上に 3D を重ねられます
+(demo3d はこの方法で背景を描いています)。</p>
+</section>
+<section id="id6">
+<h2>透視補正<a class="headerlink" href="#id6" title="Link to this heading"></a></h2>
+<p>テクスチャ座標の補間方法はコンパイル時オプション <code class="docutils literal notranslate"><span class="pre">SHAPOGFX3D_CORRECT_PERSPECTIVE</span></code> で選びます。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>レベル</p></th>
+<th class="head"><p>動作</p></th>
+<th class="head"><p>コスト</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>0</p></td>
+<td><p>全てアフィン補間 (大きなポリゴンで PS1 風に歪む)</p></td>
+<td><p>なし</p></td>
+</tr>
+<tr class="row-odd"><td><p>1 (既定)</p></td>
+<td><p>各線分の両端点を透視補正し、線分内部はアフィン補間</p></td>
+<td><p>線分あたり float 除算 2 回、三角形あたり +12 バイト</p></td>
+</tr>
+<tr class="row-even"><td><p>2</p></td>
+<td><p>完全補正。(u/w, v/w, 1/w) を補間してピクセルごとに除算</p></td>
+<td><p>テクスチャ付きピクセルあたり除算 1 回、三角形 +12 バイト、線分 +8 バイト</p></td>
+</tr>
+</tbody>
+</table>
+<p>レベル 1 は、ロールのないカメラから見た水平な面 (床、天井) では歪みが完全になくなります。
+スキャンラインに沿って奥行きが変わる面 (横に伸びる壁) では線分内部に歪みが残るので、
+分割するかレベル 2 を使ってください。</p>
+</section>
+<section id="id7">
+<h2>メモリ<a class="headerlink" href="#id7" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">init()</span></code> に渡したアリーナは次のように分割されます (32bit ターゲットの目安)。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>領域</p></th>
+<th class="head"><p>サイズ</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>ラインバケット</p></td>
+<td><p>画面高さ x 4 バイト</p></td>
+</tr>
+<tr class="row-odd"><td><p>行列スタック (16 段)</p></td>
+<td><p>約 1.1 KB</p></td>
+</tr>
+<tr class="row-even"><td><p>頂点キャッシュ (64 エントリ)</p></td>
+<td><p>約 2.8 KB</p></td>
+</tr>
+<tr class="row-odd"><td><p>線分プール</p></td>
+<td><p>残りの 1/4 (32〜512 個、1 個 64 バイト。レベル 2 では 72 バイト)</p></td>
+</tr>
+<tr class="row-even"><td><p>三角形バッファ</p></td>
+<td><p>残り全部 (1 個 136 バイト + 添字 4 バイト。レベル 0 では 124 + 4 バイト)</p></td>
+</tr>
+</tbody>
+</table>
+<p>例えば 480x320 で 128 KB のアリーナなら、既定設定で約 670 三角形と約 490 線分を保持できます。
+あふれた三角形や線分はそのフレームでは破棄され、<code class="docutils literal notranslate"><span class="pre">getStats()</span></code> で容量・ピーク・破棄数を確認できます。
+2D API は描画先バッファ以外のメモリを必要としません。</p>
+</section>
+<section id="id8">
+<h2>三角形が破棄される条件<a class="headerlink" href="#id8" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">putPrimitive()</span></code> の段階で次の三角形は破棄されます。</p>
+<ul class="simple">
+<li><p>ニア平面をまたぐ、または手前にある (クリップは行いません)</p></li>
+<li><p>バックフェイスカリングが有効で裏を向いている</p></li>
+<li><p>スキャンラインを 1 本も覆わない</p></li>
+<li><p>三角形バッファが満杯 (<code class="docutils literal notranslate"><span class="pre">Stats::triDropped</span></code>)</p></li>
+<li><p>添字が頂点バッファの範囲外 (<code class="docutils literal notranslate"><span class="pre">Stats::badIndices</span></code>)。この検査により、出自の不確かなメッシュデータでも安全に描けます。</p></li>
+</ul>
+</section>
+<section id="id9">
+<h2>複数インスタンス<a class="headerlink" href="#id9" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">Graphics3D</span></code> は状態を全てオブジェクト内に持つので、アリーナを分ければ複数を同時に使えます
+(例: 画面用と、小さなオフスクリーン用)。ムーブ可能、コピー不可です。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../gfx2d/fonts.html" class="btn btn-neutral float-left" title="フォント" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="graphics3d.html" class="btn btn-neutral float-right" title="Graphics3D API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Shapoco.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

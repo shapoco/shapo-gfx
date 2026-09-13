@@ -1,0 +1,6 @@
+# Python dependencies for the repository tooling:
+#   python3 -m pip install -r requirements.txt
+-r bin/requirements.txt
+# Documentation (docsrc/ -> docs/ref/)
+sphinx>=7.0
+sphinx-rtd-theme>=2.0

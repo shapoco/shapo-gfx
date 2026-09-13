@@ -1,0 +1,11 @@
+/* Small adjustments on top of sphinx_rtd_theme */
+.wy-side-nav-search .project-links {
+  margin: 0.4em 0 0.2em;
+  font-size: 0.85em;
+}
+.wy-side-nav-search .project-links a {
+  color: #fcfcfc;
+  opacity: 0.85;
+  margin: 0 0.35em;
+}
+.wy-side-nav-search .project-links a:hover { opacity: 1; text-decoration: underline; }

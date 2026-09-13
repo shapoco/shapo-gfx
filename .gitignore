@@ -15,3 +15,6 @@ tmp.*
 # Python
 __pycache__/
 *.pyc
+
+# Sphinx build
+docsrc/_build/

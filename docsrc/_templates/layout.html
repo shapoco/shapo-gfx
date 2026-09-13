@@ -1,0 +1,12 @@
+{% extends "!layout.html" %}
+{# Quick links to the repository and the live demos under the search box.
+   pathto('', 1) is the relative path to the document root, so the demo links
+   resolve to docs/example/ from every page. #}
+{% block sidebartitle %}
+{{ super() }}
+<div class="project-links">
+  <a href="https://github.com/shapoco/shapo-gfx">GitHub</a> |
+  <a href="{{ pathto('', 1) }}../example/demo2d/">demo2d</a> |
+  <a href="{{ pathto('', 1) }}../example/demo3d/">demo3d</a>
+</div>
+{% endblock %}
