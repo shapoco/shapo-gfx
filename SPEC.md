@@ -5,243 +5,364 @@
 ShapoGFX is a set of 2D/3D graphics libraries for embedded systems, written in
 portable C++17 with no platform dependencies.
 
-- Namespaces: `shapoco::gfx2d` (2D and shared code), `shapoco::gfx3d` (3D renderer)
-- Output format: RGB565
+- Namespaces: `shapoco::gfx2d` (2D API and shared types), `shapoco::gfx3d` (3D renderer)
+- Pixel formats: GRAY1, RGB444, ARGB4444, RGB565BE (see below)
 - Low memory: no frame buffer, no Z buffer; the 3D renderer works scanline by scanline
-- No dynamic allocation inside the library; working memory comes from a user-supplied arena
-- Model data (vertex arrays, textures) is referenced, not copied, so it may live in flash
+- No dynamic allocation inside the library; the 3D renderer's working memory comes from
+  a user-supplied arena, the 2D API needs none
+- Image data (vertex arrays, textures, fonts) is referenced, not copied, so it may live in flash
 
 ## Source layout
 
 ```
-include/shapoco/gfx2d/   public headers shared by 2D and 3D
-include/shapoco/gfx3d/   public headers of the 3D renderer
-src/gfx3d/               3D renderer implementation
-example/demo3d/          sample program
-docs/example/demo3d/     browser viewer for the sample
+include/shapoco/gfx2d/   2D API and shared types
+include/shapoco/gfx3d/   3D renderer
+src/gfx2d/, src/gfx3d/   implementation
+example/wasm/            sample programs (WASM and native)
+docs/example/            browser pages for the samples
+test/                    self-checking tests
 ```
 
-Users include `shapoco/gfx3d/gfx3d.hpp` (which pulls in the gfx2d headers) and
-compile `src/gfx3d/gfx3d.cpp`.
+Users include `shapoco/gfx2d/gfx2d.hpp` and/or `shapoco/gfx3d/gfx3d.hpp` and compile
+`src/gfx2d/*.cpp` and `src/gfx3d/*.cpp`. Header guards and compile-time options use
+the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 
-Header guards use the prefixes `SHAPOGFX2D_` and `SHAPOGFX3D_`. Compile-time
-options use the same prefixes.
+## Compile-time configuration (`config.hpp`)
+
+| Macro | Default | Effect |
+|---|---|---|
+| `SHAPOGFX_FORMAT_GRAY1` | 1 | Enable the GRAY1 format |
+| `SHAPOGFX_FORMAT_RGB444` | 1 | Enable the RGB444 format |
+| `SHAPOGFX_FORMAT_ARGB4444` | 1 | Enable the ARGB4444 format |
+| `SHAPOGFX_FORMAT_RGB565BE` | 1 | Enable the RGB565BE format |
+| `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
+
+Disabling a format removes its code from both renderers: the pixel cursors, the 2D
+per-format row operations, the 3D texture samplers and (for output formats) the 3D
+rasterizer table. Surfaces or textures in a disabled format are ignored at run time.
+The format macros must have the same values in every translation unit.
 
 ## `shapoco::gfx2d`
 
-Header-only for now. Contains what the 3D renderer shares with a future 2D API.
-
-### `math2d.hpp`
-
-- `vec2f`: 2D vector (x, y) with `+`, `-`, `*` (scalar), `dot`, `lerp`
-- `colorf`: color (r, g, b, a) in nominal 0..1 with `+`, `*` (color and scalar), `lerp`
-- `clamp01(float)`
-
-### `pixel.hpp` (RGB565 helpers, all `inline`)
+### Pixel formats (`pixel.hpp`)
 
 ```c++
-enum class BlendMode : uint8_t {
-    NONE,  // no blending (overwrite)
-    ALPHA, // alpha blending
-    ADD,   // additive blending
-};
-
-uint16_t makeRgb565(uint32_t r5, uint32_t g6, uint32_t b5);
-uint16_t packRgb565(float r, float g, float b);   // clamped, rounded
-uint16_t packRgb565(const colorf &c);
-void     fillRgb565(uint16_t *dst, int n, uint16_t color);  // 32-bit writes where possible
-uint16_t blendAlphaRgb565(uint16_t dst, uint16_t src, uint32_t alpha64); // alpha in 0..64
-uint16_t addSaturateRgb565(uint16_t dst, uint32_t r5, uint32_t g6, uint32_t b5);
-uint16_t addSaturateRgb565(uint16_t dst, uint16_t src);
-int      log2Floor(int v);
+enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565BE };
 ```
 
-### `texture.hpp`
+| Format | Bits/pixel | Memory layout | Native pixel (in registers) |
+|---|---|---|---|
+| `GRAY1` | 1 | MSB first within a byte; 1 = white | 0 or 1 |
+| `RGB444` | 12 | 2 pixels in 3 bytes: `R1G1`, `B1R2`, `G2B2` (display order) | `0x0RGB` |
+| `ARGB4444` | 16 | native `uint16_t` | `0xARGB`; A = 15 opaque |
+| `RGB565BE` | 16 | `uint16_t` stored byte-swapped: byte 0 = `RRRRRGGG`, byte 1 = `GGGBBBBB` | `RRRRRGGGGGGBBBBB` (5/6/5) |
+
+Every row of an image starts on a byte boundary; rows are `stride` bytes apart
+(`minStride(format, width)` gives the smallest legal stride).
+
+RGB565BE and RGB444 are the byte streams expected by common display controllers, so
+a Surface in either format can be transferred without conversion. ARGB4444 is a
+composition format (sprites with alpha), GRAY1 a mask/monochrome format.
+
+### Colors
+
+`Color` is `uint32_t` ARGB8888. It is the only color type of the 2D API and is
+converted to the target format once per drawing call. Helpers: `makeColor(r, g, b,
+a = 255)`, `makeColorF(...)`, `makeColorHsv(h, s, v, a)`, `colorWithAlpha`,
+`lerpColor`, component accessors, the `Colors::` constants, and `colorToNative` /
+`nativeToColor` for any format.
+
+Per-format helpers (all `inline`): pack/unpack (`makeRgb565`, `packRgb565`,
+`packRgb565BE`, `colorToRgb565`, `rgb565ToColor`, the same for RGB444 and ARGB4444,
+`colorToGray1`), alpha blending with a 0..64 opacity (`blendAlphaRgb565`,
+`blendAlphaRgb444`, `blendAlphaArgb4444`), saturating addition (`addSaturate...`),
+`fill16`, `bswap16`, `log2Floor`.
+
+### Pixel cursors
+
+`CursorGray1`, `CursorRgb444`, `CursorArgb4444`, `CursorRgb565BE` give sequential
+access to one row: `init(line, x)`, `read()`, `write(native)`, `next()`,
+`fill(n, native)`. `FormatTraits<F>` maps a format to its cursor and its Color
+conversions; `blendNative<F>` and `addNative<F>` blend native pixels. These are the
+building blocks of both renderers and are available to applications.
+
+### Surfaces (`surface.hpp`)
 
 ```c++
-struct Texture {
-    int16_t width;
-    int16_t height;
-    const uint16_t *pixels; // RGB565, row-major
+struct Texture {            // read-only image
+  PixelFormat format;
+  int16_t width, height;
+  uint32_t stride;          // bytes per row
+  const void *pixels;
+};
+struct Surface {            // writable image; converts implicitly to Texture
+  PixelFormat format;
+  int16_t width, height;
+  uint32_t stride;
+  void *pixels;
+};
+Texture makeTexture(PixelFormat, int w, int h, const void *pixels, uint32_t stride = 0);
+Surface makeSurface(PixelFormat, int w, int h, void *pixels, uint32_t stride = 0);
+size_t surfaceBytes(PixelFormat, int w, int h);
+```
+
+Both are aggregates and can be `constexpr`/`const` data in flash.
+
+### `OwnedSurface` (`surface_alloc.hpp`, optional)
+
+A movable, non-copyable object holding a zero-initialized heap buffer in a
+`std::unique_ptr<uint8_t[]>` together with the matching `Surface`.
+`createSurface(format, w, h)` constructs one. This is the only place in the library
+that allocates; the core headers do not include `<memory>`.
+
+### `Graphics2D` (`graphics2d.hpp`)
+
+A drawing context bound to a `Surface` (a copy of the struct; the pixel buffer must
+outlive the calls). All drawing is clipped to the clip rectangle. Colors are
+`Color`; alpha 0 draws nothing, 255 overwrites, anything else blends.
+
+```c++
+class Graphics2D {
+ public:
+  Graphics2D();  explicit Graphics2D(const Surface &target);
+  void setTarget(const Surface &); const Surface &target() const; bool hasTarget() const;
+  PixelFormat format() const; Rect bounds() const;
+
+  // state
+  void setClipRect(const Rect &); void setClipRect(int x, int y, int w, int h);
+  void resetClipRect(); const Rect &clipRect() const;
+  const GraphicsState2D &state() const; void setState(const GraphicsState2D &);
+
+  // pixels and rectangles
+  void clear(Color);                          // fills the clip rectangle
+  void setPixel(int x, int y, Color); Color getPixel(int x, int y) const;
+  void fillRect(const Rect &, Color);         void fillRect(int x, int y, int w, int h, Color);
+  void drawRect(const Rect &, Color, int thickness = 1);
+  void fillRoundRect(const Rect &, int radius, Color); void drawRoundRect(const Rect &, int radius, Color);
+  void drawHLine(int x, int y, int w, Color); void drawVLine(int x, int y, int h, Color);
+
+  // ellipses (inscribed in the rectangle)
+  void fillEllipse(const Rect &, Color); void drawEllipse(const Rect &, Color);
+  void fillCircle(int cx, int cy, int r, Color); void drawCircle(int cx, int cy, int r, Color);
+
+  // lines and polygons
+  void drawLine(int x0, int y0, int x1, int y1, Color);
+  void drawPolyline(const vec2i *, int n, Color); void drawPolygon(const vec2i *, int n, Color);
+  void fillPolygon(const vec2i *, int n, Color);   // even-odd rule, <= 16 crossings per row
+  void fillTriangle(...); void drawTriangle(...);
+
+  // images
+  void drawImage(const Texture &, int dx, int dy, BlendMode = ALPHA, int opacity = 255);
+  void drawImage(const Texture &, int dx, int dy, const Rect &src, BlendMode = ALPHA, int opacity = 255);
+  void drawBitmap(const Texture &gray1, int dx, int dy, Color fg, Color bg = TRANSPARENT);
+  void drawBitmap(const Texture &gray1, int dx, int dy, const Rect &src, Color fg, Color bg = TRANSPARENT);
+
+  // text
+  void setFont(const GFXfont *, int scale = 1); void setTextScale(int);
+  void setTextColor(Color fg, Color bg = TRANSPARENT);
+  void setCursor(int x, int y); vec2i cursor() const;
+  int drawChar(int x, int y, int code);        // returns the scaled x advance
+  void drawString(const char *); void drawString(int x, int y, const char *);
+  int measureText(const char *) const; int charAdvance(int code) const;
+  int textHeight() const; int lineAdvance() const;
 };
 ```
 
-The 3D renderer additionally requires `width` and `height` to be powers of two.
+Semantics:
+
+- **Rectangles** are half-open (`[x, x + w)`); negative sizes are normalized.
+  `drawRect` draws inside the rectangle.
+- **Ellipses and rounded rectangles** are described by the horizontal extent of each
+  row (computed with one square root per row). Outlines are the pixels of a row not
+  covered by both neighboring rows, plus the row's end pixels, which yields a closed
+  one-pixel outline consistent with the fill.
+- **Lines** walk the major axis with a 16.16 fixed-point minor coordinate and are
+  clipped along the major axis before stepping; runs of pixels on the same row are
+  filled as spans. Both end points are drawn.
+- **Polygons** are filled per scanline with the even-odd rule using the same
+  half-open convention as Xiamocon-style rasterizers (an edge covers `y` when
+  `y0 <= y < y1`).
+- **drawImage** converts between formats. `BlendMode::NONE` copies (ARGB4444 alpha is
+  copied into an ARGB4444 target and ignored otherwise); `ALPHA` blends with the
+  source alpha (only ARGB4444 has one; other formats are copied unless `opacity` is
+  below 255); `ADD` adds the color scaled by alpha x opacity with saturation. Same
+  format 16-bit copies use `memcpy`; other combinations go through `Color` in chunks of
+  64 pixels on the stack.
+- **drawBitmap** renders a GRAY1 image as a two-color mask; runs of equal bits become
+  spans. A transparent background leaves clear bits untouched.
+- **Text** uses Adafruit `GFXfont` data. `setFont` computes the ascent (largest height
+  above the baseline) and the line box height over all glyphs; the cursor is the
+  top-left corner of the line box and glyphs are placed relative to the baseline
+  `ascent x scale` pixels below it. `background` (if not transparent) fills the box
+  `xAdvance x lineHeight` of each glyph before drawing it. `'\n'` returns to the x of
+  the last `setCursor()` and advances by `yAdvance x scale`. Glyphs are drawn as runs
+  of set bits, each becoming a `scale x scale` block, so all formats and alpha work.
+
+Every drawing function switches on the target format once per call (or per row),
+never per pixel; the per-pixel loops are instantiated per format from the cursor
+templates.
+
+### Fonts (`fonts.hpp`, `gfxfont.h`, `font/*.h`)
+
+`gfxfont.h` is the Adafruit GFXfont structure (BSD license, see LICENSE). The bundled
+ShapoSans fonts (generated with ShapoFont) are `const GFXfont` objects in the global
+namespace: `ShapoSansMono_s08c07`, `ShapoSansP_s08c07`, `ShapoSansP_s12c09a01w02`,
+`ShapoSansP_s21c16a01w03`. Any GFXfont from the Adafruit ecosystem can be used.
+
+### Geometry (`math2d.hpp`)
+
+`vec2f`, `colorf` (float RGBA used by the 3D API), `vec2i`, `Rect` (with `right()`,
+`bottom()`, `contains`, `normalized`, `intersect`, `offset`), `clamp01`, `clampInt`,
+`lerp`.
 
 ## `shapoco::gfx3d`
 
 ### Coordinate system
 
-OpenGL-compatible right-handed coordinate system. The camera looks down -Z in
-view space. Screen space has its origin at the top-left with y pointing down.
-Front faces are counter-clockwise in screen space.
-
-All angles are in radians.
+OpenGL-compatible right-handed coordinate system. The camera looks down -Z in view
+space. Screen space has its origin at the top-left with y pointing down. Front faces
+are counter-clockwise in screen space. All angles are in radians.
 
 ### `math3d.hpp`
 
 - Re-exports `vec2f`, `colorf`, `clamp01` and `lerp` from `gfx2d`
-- `vec3f`: 3D vector with `+`, `-`, unary `-`, `*` (scalar), `dot`, `cross`, `length`, `normalize`, `lerp`
-- `mat4f`: 4x4 column-major matrix (`m[col * 4 + row]`) with `identity`, `translation`,
-  `rotation(angle, axis)`, `scaling`, `perspective(fovY, aspect, zNear, zFar)`,
-  `orthographic(l, r, b, t, zNear, zFar)`, `operator*`, `transformPoint`,
-  `transformPoint4` (also returns w), `transformDir`
+- `vec3f` with `+`, `-`, unary `-`, `*` (scalar), `dot`, `cross`, `length`, `normalize`, `lerp`
+- `mat4f`: 4x4 column-major matrix with `identity`, `translation`, `rotation(angle, axis)`,
+  `scaling`, `perspective(fovY, aspect, zNear, zFar)`, `orthographic(l, r, b, t, zNear, zFar)`,
+  `operator*`, `transformPoint`, `transformPoint4` (also returns w), `transformDir`
 
 ### Data structures
 
 ```c++
-struct Vertex {
-    vec3f position;
-    vec3f normal;
-    vec2f uv;              // unused when environment mapping is enabled
-};
+using gfx2d::Texture;   // any enabled format; width and height must be powers of two
+using gfx2d::Surface;   // render target: RGB565BE or RGB444
 
-struct VertexBuffer {
-    uint16_t vertexCount;
-    const Vertex *vertices;
-};
+struct Vertex { vec3f position; vec3f normal; vec2f uv; };
+struct VertexBuffer { uint16_t vertexCount; const Vertex *vertices; };
 
 namespace MaterialFlags {
-constexpr uint32_t TEXTURE = 1u << 0;      // enable texture mapping
-constexpr uint32_t ENV_MAP = 1u << 1;      // use the texture as an environment map
-constexpr uint32_t DOUBLE_SIDED = 1u << 2; // disable back-face culling
+constexpr uint32_t TEXTURE = 1u << 0;       // enable texture mapping
+constexpr uint32_t ENV_MAP = 1u << 1;       // use the texture as an environment map
+constexpr uint32_t DOUBLE_SIDED = 1u << 2;  // disable back-face culling
 }
 
 struct Material {
-    colorf diffuse;         // diffuse color; a is the opacity
-    colorf ambient;         // ambient color
-    const Texture *texture; // may be nullptr when unused
-    BlendMode blendMode;
-    uint32_t flags;         // MaterialFlags
+  colorf diffuse;          // diffuse color; a is the opacity
+  colorf ambient;          // ambient color
+  const Texture *texture;  // may be nullptr when unused
+  BlendMode blendMode;     // NONE, ALPHA, ADD
+  uint32_t flags;          // MaterialFlags
 };
 
 enum class PrimitiveType : uint8_t { TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN };
 
 struct Primitive {
-    PrimitiveType type;
-    const VertexBuffer *vertexBuffer;
-    uint16_t indexCount;      // number of indices; the triangle count follows from the type
-    const uint16_t *indices;
-    const Material *material; // nullptr: use the material set by setMaterial()
+  PrimitiveType type;
+  const VertexBuffer *vertexBuffer;
+  uint16_t indexCount;
+  const uint16_t *indices;
+  const Material *material;  // nullptr: use the material set by setMaterial()
 };
 
 struct Stats {
-    size_t arenaSize;  // size of the arena passed to init()
-    size_t arenaUsed;  // bytes used in the last frame (fixed part + triangles + span peak)
-    int triCapacity;   // triangle buffer capacity
-    int triCount;      // triangles in the current scene (after culling)
-    int triDropped;    // dropped due to overflow (reset by beginScene())
-    int spanCapacity;  // span pool capacity
-    int spanPeak;      // maximum spans used on one scanline (reset by beginRender())
-    int spanDropped;   // dropped due to overflow (reset by beginRender())
+  size_t arenaSize, arenaUsed;
+  int triCapacity, triCount, triDropped;
+  int spanCapacity, spanPeak, spanDropped;
 };
 ```
 
-Materials whose blend mode is not `NONE` are treated as translucent: their spans
-do not remove spans behind them and are composited in list order.
+Translucency: a triangle is translucent when its material's blend mode is not
+`NONE` or when its texture is ARGB4444. Translucent spans do not remove spans behind
+them and are composited in list order.
 
 ### `Renderer`
 
-All state lives in a `Renderer` object. Several instances may coexist, each with
-its own arena. A `Renderer` is movable but not copyable. Calling any drawing
-method before `init()` (or after `deinit()`) is a no-op.
+All state lives in a `Renderer` object; several may coexist, each with its own arena.
+A `Renderer` is movable but not copyable. Drawing methods called before `init()` (or
+after `deinit()`) are no-ops.
 
 ```c++
 class Renderer {
-public:
-    // Initialize with the screen size and the working memory.
-    void init(int16_t w, int16_t h, void *arena, size_t arenaSize);
-    void deinit();
+ public:
+  void init(int16_t w, int16_t h, void *arena, size_t arenaSize);
+  void deinit();
 
-    void beginScene();
-    void endScene();
+  void beginScene(); void endScene();
+  void loadIdentity();
+  void translate(const vec3f &); void translate(float x, float y, float z);
+  void rotate(float angle, const vec3f &axis); void rotate(float angle, float x, float y, float z);
+  void scale(const vec3f &); void scale(float x, float y, float z);
+  void pushState(); void popState();                  // matrix + material, depth 16
 
-    void loadIdentity();
-    void translate(const vec3f &v);
-    void translate(float x, float y, float z);
-    void rotate(float angle, const vec3f &axis);
-    void rotate(float angle, float x, float y, float z);
-    void scale(const vec3f &v);
-    void scale(float x, float y, float z);
+  void setMaterial(const Material &);
+  void putPrimitive(const Primitive &);
+  void putCube(const vec3f &center, const vec3f &size, int divs = 1);
 
-    void pushState(); // push the current matrix and material (depth 16)
-    void popState();
+  void enableParallelLight(const vec3f &dir, const colorf &col);  // dir transformed by the current matrix
+  void disableParallelLight();
+  void enableEnvironmentLight(const colorf &col); void disableEnvironmentLight();
 
-    void setMaterial(const Material &mat);
-    void putPrimitive(const Primitive &prim);
-    // Box given by center and size; each face is split into divs x divs quads
-    // and the UVs of intermediate points are interpolated.
-    void putCube(const vec3f &center, const vec3f &size, int divs = 1);
+  void setClearColor(const colorf &);   // background for uncovered pixels (enables clearing)
+  void disableClear();                  // uncovered pixels keep the target content
+  bool isClearEnabled() const;
 
-    // dir is transformed by the current matrix at call time.
-    void enableParallelLight(const vec3f &dir, const colorf &col);
-    void disableParallelLight();
-    void enableEnvironmentLight(const colorf &col);
-    void disableEnvironmentLight();
+  void setPerspectiveProjection(float fovY, float aspect, float zNear, float zFar);
+  void setOrthographicProjection(float l, float r, float b, float t, float zNear, float zFar);
 
-    void setClearColor(const colorf &col); // pixels not covered by any span
+  void beginRender(); void endRender();
+  // Render the screen region (x, y, w, h) into dst at (dstX, dstY); clipped to both
+  void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst,
+              int16_t dstX = 0, int16_t dstY = 0);
 
-    void setPerspectiveProjection(float fovY, float aspect, float zNear, float zFar);
-    void setOrthographicProjection(float left, float right, float bottom, float top,
-                                   float zNear, float zFar);
-
-    void beginRender();
-    void endRender();
-    // Render the region (x, y, w, h). dst points to the region's top-left pixel,
-    // stride is the row pitch of dst in pixels.
-    void render(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t *dst, uint32_t stride);
-
-    Stats getStats() const;
-    int16_t screenWidth() const;
-    int16_t screenHeight() const;
-    bool isInitialized() const;
+  Stats getStats() const;
+  int16_t screenWidth() const; int16_t screenHeight() const; bool isInitialized() const;
 };
 ```
 
-`setMaterial()` stores a pointer; the `Material` (and any `Texture`, vertex and
-index arrays) must stay valid until `endRender()`.
+`setMaterial()` stores a pointer; materials, textures, vertex and index arrays must
+stay valid until `endRender()`.
 
 ## Scene construction
 
-1. Call `beginScene()`. This resets the triangle buffer, the matrix stack and the current matrix.
+1. `beginScene()` resets the triangle buffer, the matrix stack and the current matrix.
 2. Set up the camera and lights with the matrix functions, then add primitives.
-3. Call `endScene()`.
+3. `endScene()`.
 
 `putPrimitive()` decomposes the primitive into triangles and performs per-vertex
-lighting (Gouraud shading), transformation and projection immediately. The
-results are stored in the triangle buffer and rasterized later by `render()`,
-which may be called several times for different regions of the screen.
+lighting (Gouraud shading), transformation and projection immediately. The results
+are stored in the triangle buffer and rasterized later by `render()`, which may be
+called several times for different regions and targets.
 
-Vertices shared by several triangles of one primitive (strips, fans, indexed
-meshes) are transformed once thanks to a small direct-mapped vertex cache (64
-entries), which is invalidated at the start of each primitive.
+Vertices shared by several triangles of one primitive are transformed once thanks to
+a direct-mapped vertex cache (64 entries) invalidated at the start of each primitive.
 
-Triangles are discarded at this stage when:
-
-- they cross or lie in front of the near plane (no clipping is performed);
-- back-face culling is enabled for the material and they face away from the camera;
-- they do not cover any scanline;
-- the triangle buffer is full (counted in `Stats::triDropped`).
+Triangles are discarded at this stage when they cross or lie in front of the near
+plane (no clipping), when back-face culling applies, when they cover no scanline, or
+when the triangle buffer is full (`Stats::triDropped`).
 
 ### Lighting
-
-Per vertex:
 
 ```
 color = ambient * environmentLight                 (if the environment light is enabled)
       + diffuse * parallelLight * max(0, n . -L)   (if the parallel light is enabled)
 ```
 
-If neither light is enabled the vertex color is `diffuse`. For `BlendMode::ADD`
-the color is pre-multiplied by the opacity (`diffuse.a`). Vertex colors are
-interpolated linearly across each span and, when a texture is present, modulate
-the texel.
+Without lights the vertex color is `diffuse`. For `BlendMode::ADD` the color is
+pre-multiplied by the opacity. Vertex colors are interpolated linearly across each
+span and modulate the texel when a texture is present.
 
 ### Environment mapping
 
-With `ENV_MAP`, the texture coordinate is derived from the view-space normal `n`:
-`u = 0.5 + 0.5 n.x`, `v = 0.5 - 0.5 n.y`. The top half of the texture therefore
-appears on surfaces facing up.
+With `ENV_MAP`, `u = 0.5 + 0.5 n.x`, `v = 0.5 - 0.5 n.y` from the view-space normal.
+
+### Textures
+
+Any enabled format. Texels are fetched through a format-specific sampler and
+converted to 5/6/5 before modulation: GRAY1 becomes white or black, RGB444 and
+ARGB4444 are expanded, RGB565BE is byte-swapped. An ARGB4444 texture supplies a
+per-texel alpha `a4` (0..15); the triangle becomes translucent, and a material with
+`BlendMode::NONE` is rasterized as `ALPHA` with `opacity = a4 / 15`, while `ALPHA`
+and `ADD` multiply their opacity by `a4 / 15`. Texel alpha 0 skips the pixel.
 
 ## Memory management
 
@@ -250,8 +371,8 @@ appears on surfaces facing up.
 1. **Fixed part**: line buckets (2 x screen height x `uint16_t`), matrix stack
    (16 entries), vertex cache (64 entries).
 2. **Span pool**: a quarter of the remaining space, clamped to 32..512 spans.
-3. **Triangle buffer**: everything that remains, including 4 bytes per triangle
-   for the sort order and link arrays.
+3. **Triangle buffer**: everything that remains, including 4 bytes per triangle for
+   the sort order and link arrays.
 
 If the arena is too small for the fixed part, `init()` leaves the renderer
 uninitialized. Overflowing buffers drop the excess for the current frame.
@@ -261,80 +382,92 @@ uninitialized. Overflowing buffers drop the excess for the current frame.
 ### `beginRender()`
 
 Sorts the triangle indices (not the triangles) farthest first by their average
-view-space z. Ordering between opaque spans is resolved by depth comparison in
-`render()`, so this sort primarily determines the compositing order of
-translucent triangles.
+view-space z. Depth order between opaque spans is resolved by depth comparison in
+`render()`, so this sort primarily determines the compositing order of translucent
+triangles.
 
 ### `render()`
 
-At the start of the call, for every scanline of the region, a list of the
-triangles that start intersecting on that line is built (in depth order). For
-each scanline this list is merged into the active list (triangles crossing the
-current line, in depth order), triangles that have been passed are removed, and
-then:
+The target format selects a rasterizer table and a fill function once per call;
+RGB565BE and RGB444 are supported (others return without drawing). The region is
+clipped to the screen and to the destination surface.
+
+For every scanline of the region, a list of the triangles that start intersecting on
+that line is built (in depth order). For each scanline this list is merged into the
+active list, triangles that have been passed are removed, and then:
 
 1. The span lists are cleared.
 2. For each active triangle, farthest first:
     1. The two intersections of the triangle with the scanline give a span,
        represented as "attribute values at the leftmost pixel + per-pixel
-       increments" (depth as `float`; color and texture coordinates as 16.16
-       fixed point).
-    2. The span is inserted. Opaque spans are kept in a list sorted by x that
-       never overlaps; translucent spans are kept in a separate list in insertion
-       order (farthest first). On overlap, the depth (NDC depth, linear in screen
-       space) is compared at the center of the overlapping interval. If the new
-       span is nearer and opaque, the overlapping part of the farther span is
-       removed whether it is opaque or translucent. If a translucent span is
-       nearer, both are kept. Because this does not rely on the per-triangle sort
-       order alone, large and small polygons are ordered correctly.
-3. The opaque spans are rasterized in x order with the gaps filled in the clear
-   color; then the translucent spans are composited in list order according to
-   their material's `BlendMode`.
+       increments" (depth as `float`; color and texture coordinates as 16.16 fixed
+       point).
+    2. The span is inserted. Opaque spans are kept in a list sorted by x that never
+       overlaps; translucent spans in a separate list in insertion order. On overlap,
+       the NDC depth is compared at the center of the overlapping interval. If the new
+       span is nearer and opaque, the overlapping part of the farther span is removed
+       whether it is opaque or translucent; if a translucent span is nearer, both are
+       kept. This does not rely on the per-triangle sort order alone, so large and
+       small polygons are ordered correctly.
+3. The opaque spans are rasterized in x order. The gaps are filled with the clear
+   color when clearing is enabled and left untouched otherwise. Then the translucent
+   spans are composited in list order according to their blend mode.
 
 Per-pixel processing is integer only. The inner loop is specialized for each
-combination of blend mode x textured x flat (all three vertex colors equal); a
-flat, opaque, untextured span degenerates to a plain fill. Texture coordinates
-wrap with a bit mask, hence the power-of-two requirement. Additive blending
-uses colors pre-multiplied by the opacity at the vertex stage.
+combination of blend mode (3) x texture format (none + 4) x flat (all three vertex
+colors equal) x output format (2), selected through a table indexed by the
+triangle's precomputed rasterizer index; a flat, opaque, untextured span degenerates
+to a plain fill. Texture coordinates wrap with a bit mask, hence the power-of-two
+requirement. Output pixels are written through the format's cursor, so RGB444
+targets may start at odd x positions.
 
 Vertex colors are always interpolated affinely. The interpolation of texture
-coordinates is selected at compile time of `gfx3d.cpp` with
-`SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
+coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
 
-- **0**: affine everywhere. Texture coordinates are interpolated linearly along
-  the edges and across the span.
-- **1** (default): vertical correction. `(u/w, v/w, 1/w)`, which are linear in
-  screen space, are interpolated along the edges; at the two end points of each
-  span they are divided to obtain exact `(u, v)`, and the span interior is
-  interpolated affinely in fixed point. Costs two `float` divides per span and 12
-  bytes per triangle. Along a scanline, a horizontal surface seen by a camera
-  without roll has constant depth, so this level renders such surfaces without
-  distortion; surfaces whose depth varies along the scanline keep affine
-  distortion inside each span, while span end points (and therefore edges shared
-  between triangles) are exact.
-- **2**: full correction. `(u/w, v/w, 1/w)` are interpolated across the span in
-  `float` and divided per pixel. Costs one divide per textured pixel, 12 bytes per
-  triangle and 8 bytes per span.
+- **0**: affine everywhere.
+- **1** (default): vertical correction. `(u/w, v/w, 1/w)`, which are linear in screen
+  space, are interpolated along the edges; at the two end points of each span they are
+  divided to obtain exact `(u, v)`, and the span interior is interpolated affinely in
+  fixed point. Costs two `float` divides per span and 12 bytes per triangle. Along a
+  scanline, a horizontal surface seen by a camera without roll has constant depth, so
+  this level renders such surfaces without distortion; surfaces whose depth varies
+  along the scanline keep affine distortion inside each span, while span end points
+  (and therefore edges shared between triangles) are exact.
+- **2**: full correction. `(u/w, v/w, 1/w)` are interpolated across the span in `float`
+  and divided per pixel. Costs one divide per textured pixel, 12 bytes per triangle
+  and 8 bytes per span.
 
 ### `endRender()`
 
 Currently does nothing; reserved for future use.
 
-## Sample program
+## Sample programs
 
-`example/demo3d/` is a browser and native sample at a fixed resolution of 480x320.
+Both samples are 480x320 and render into an RGB565BE buffer. Each has a WASM entry
+point (`<name>_init`, `<name>_frame`, `<name>_get_fb`, `<name>_get_width`,
+`<name>_get_height`) driven by `docs/example/viewer.js`, and a native `main()` that
+writes one frame as a PPM file. The WASM binaries are committed so that `docs/` can be
+served as a static site.
 
-- `scene.hpp` / `scene.cpp`: builds a scene using the library (a textured floor,
-  an environment-mapped torus built as a `TRIANGLE_STRIP`, and opaque,
-  alpha-blended and additive cubes).
-- `main.cpp`: holds the frame buffer and the arena. Compiled with Emscripten it
-  exports `demo3d_init`, `demo3d_frame`, `demo3d_get_fb`, `demo3d_get_width` and
-  `demo3d_get_height`; compiled natively it writes one frame to a PPM file.
-- `Makefile`: Emscripten build into `docs/example/demo3d/demo3d.wasm`. The
-  sample is built with the library's default `SHAPOGFX3D_CORRECT_PERSPECTIVE`;
-  the floor is deliberately left unsubdivided to show the effect.
-- `docs/example/demo3d/index.html`, `main.js`: loads the WASM module, converts the
-  RGB565 frame buffer to RGBA and draws it on a canvas. Mouse and keyboard control
-  the camera.
+- `example/wasm/demo2d/`: exercises the `Graphics2D` API only (no reference to
+  `gfx3d`): a scrolling ellipse pattern, filled and outlined polygon stars, ARGB4444
+  sprites with alpha and additive blending, GRAY1 bitmaps with and without a
+  background color, an RGB444 off-screen surface drawn with a second `Graphics2D` and
+  blitted (whole and partial), rounded rectangles, circles, ellipses, triangles, lines,
+  pixels, clipping and text in all four fonts including scaling and measurement.
+- `example/wasm/demo3d/`: a textured floor, an environment-mapped torus built as a
+  `TRIANGLE_STRIP`, and opaque, alpha-blended and additive cubes. The frame is composed
+  in two passes: a 2D backdrop (gradient, stars, caption) drawn with `Graphics2D`, then
+  the 3D scene rendered in four bands with the clear disabled. Mouse and keyboard
+  control the camera in the browser.
 
-The WASM binary is committed so that `docs/` can be served as a static site.
+## Tests
+
+`test/` builds `shapogfx_tests` (registered with CTest) without any external
+framework. It checks color conversions and cursors for every enabled format, blending
+identities, `Graphics2D` clipping, fills, polygons, lines, ellipses, image blits,
+bitmaps and text metrics, consistency between RGB565BE and RGB444 targets, and for
+the 3D renderer: banded versus whole-frame rendering (byte identical), offset
+rendering, transparent clear, all texture formats on both output formats, and
+texel alpha. The tests are meant to be run with AddressSanitizer and
+UndefinedBehaviorSanitizer on the native build.

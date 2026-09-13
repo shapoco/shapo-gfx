@@ -1,7 +1,7 @@
 # Build outputs
 build/
-example/demo3d/demo3d
-example/demo3d/demo3d.ppm
+example/wasm/*/demo2d
+example/wasm/*/demo3d
 *.ppm
 
 # Editor / tool state

@@ -14,6 +14,7 @@ else()
     set(SHAPOGFX_TOP_LEVEL OFF)
 endif()
 option(SHAPOGFX_BUILD_EXAMPLES "Build the example programs" ${SHAPOGFX_TOP_LEVEL})
+option(SHAPOGFX_BUILD_TESTS "Build the tests (run with ctest)" ${SHAPOGFX_TOP_LEVEL})
 
 file(GLOB SHAPOGFX_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx2d/*.cpp
@@ -31,4 +32,9 @@ endif()
 if(SHAPOGFX_BUILD_EXAMPLES AND NOT EMSCRIPTEN)
     add_subdirectory(example/wasm/demo2d)
     add_subdirectory(example/wasm/demo3d)
+endif()
+
+if(SHAPOGFX_BUILD_TESTS AND NOT EMSCRIPTEN)
+    enable_testing()
+    add_subdirectory(test)
 endif()

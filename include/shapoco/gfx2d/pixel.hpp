@@ -103,10 +103,10 @@ static inline Color makeColorHsv(int h, int s, int v, int a = 255) {
     r = g = b = v;
   } else {
     int coarse = h / 60;
-    int fine = (h % 60) * 256 / 60;
+    int fine = (h % 60) * 255 / 60;  // 0..255 within the sector
     int p = (v * (255 - s)) / 255;
-    int q = (v * (255 - (s * fine) / 256)) / 255;
-    int t = (v * (255 - (s * (255 - fine)) / 256)) / 255;
+    int q = (v * (255 - (s * fine) / 255)) / 255;
+    int t = (v * (255 - (s * (255 - fine)) / 255)) / 255;
     switch (coarse) {
       case 0: r = v, g = t, b = p; break;
       case 1: r = q, g = v, b = p; break;
