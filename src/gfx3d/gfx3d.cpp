@@ -3,11 +3,16 @@
 #include <algorithm>
 #include <cmath>
 
-// Perspective-correct texture mapping: interpolate (u/w, v/w, 1/w) across the
-// span and divide per pixel. Disabled by default (affine interpolation). Define
-// as 1 to enable.
+// Perspective correction of texture coordinates:
+//   0: none (affine interpolation everywhere)
+//   1: vertical only (default). (u/w, v/w, 1/w) are interpolated along the
+//      triangle edges and divided at the two end points of each span, so the
+//      end points are exact and the span interior is affine. Costs two divides
+//      per span. Exact for horizontal surfaces seen by a camera without roll.
+//   2: full. (u/w, v/w, 1/w) are interpolated across the span and divided per
+//      pixel.
 #ifndef SHAPOGFX3D_CORRECT_PERSPECTIVE
-#define SHAPOGFX3D_CORRECT_PERSPECTIVE 0
+#define SHAPOGFX3D_CORRECT_PERSPECTIVE 1
 #endif
 
 namespace shapoco::gfx3d {
@@ -43,7 +48,7 @@ constexpr uint8_t OPAQUE = 1u << 2;  // opaque (BlendMode::NONE)
 
 struct Triangle {
   ShadedVertex v[3];
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
   float invW[3];  // 1/w
 #endif
   float invDy[3];  // 1/(delta sy) of edge i (v[i] -> v[i+1]); 0 for horizontal
@@ -63,7 +68,7 @@ struct Span {
   float z0, dz;     // NDC depth (used only to resolve overlaps)
   int32_t r, g, b;  // 8.16 fixed point (0..255)
   int32_t dr, dg, db;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
   float uw, vw, iw;  // (u/w, v/w, 1/w)
   float duw, dvw, diw;
 #else
@@ -373,7 +378,7 @@ void Renderer::emitTriangle(const CachedVertex &a, const CachedVertex &b,
       t.v[i].v -= vOff;
     }
   }
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
   const CachedVertex *cv[3] = {&a, &b, &c};
   for (int i = 0; i < 3; i++) {
     t.invW[i] = cv[i]->invW;
@@ -546,7 +551,7 @@ static inline void spanAdvance(Span &sp, int n) {
   sp.r += sp.dr * n;
   sp.g += sp.dg * n;
   sp.b += sp.db * n;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
   sp.uw += sp.duw * n;
   sp.vw += sp.dvw * n;
   sp.iw += sp.diw * n;
@@ -714,7 +719,7 @@ void Renderer::clipTranslucent(const Span &frag) {
 static bool makeSpan(const Triangle &t, float yc, int rx0, int rx1, Span &out) {
   struct EndPt {
     float x, z, u, v, r, g, b;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
     float iw;
 #endif
   };
@@ -736,12 +741,21 @@ static bool makeSpan(const Triangle &t, float yc, int rx0, int rx1, Span &out) {
       p.r = a.r + (b.r - a.r) * tt;
       p.g = a.g + (b.g - a.g) * tt;
       p.b = a.b + (b.b - a.b) * tt;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
       p.iw = t.invW[e] + (t.invW[e == 2 ? 0 : e + 1] - t.invW[e]) * tt;
 #endif
     }
   }
   if (n < 2) return false;
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 1
+  // Vertical-only correction: divide at the end points so they are exact;
+  // the span interior is then interpolated affinely
+  for (int i = 0; i < 2; i++) {
+    float inv = 1.0f / pts[i].iw;
+    pts[i].u *= inv;
+    pts[i].v *= inv;
+  }
+#endif
 
   const EndPt *l = &pts[0], *r = &pts[1];
   if (l->x > r->x) std::swap(l, r);
@@ -779,7 +793,7 @@ static bool makeSpan(const Triangle &t, float yc, int rx0, int rx1, Span &out) {
   linColor(l->r, r->r, out.r, out.dr);
   linColor(l->g, r->g, out.g, out.dg);
   linColor(l->b, r->b, out.b, out.db);
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
   lin(l->u, r->u, out.uw, out.duw);
   lin(l->v, r->v, out.vw, out.dvw);
   lin(l->iw, r->iw, out.iw, out.diw);
@@ -832,7 +846,7 @@ static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
     vMask = (1u << gfx2d::log2Floor(tex.height)) - 1;
     tp = tex.pixels;
   }
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
   float uw = sp.uw, vw = sp.vw, iw = sp.iw;
   const float duw = sp.duw, dvw = sp.dvw, diw = sp.diw;
 #else
@@ -842,7 +856,7 @@ static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
 
   for (int i = 0; i < n; i++) {
     if (TEX) {
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
       // Perspective correction: interpolate (u/w, v/w) and 1/w, divide per
       // pixel
       float inv = 1.0f / iw;
@@ -883,7 +897,7 @@ static void rasterSpanT(uint16_t *px, int n, const Span &sp) {
       b += db;
     }
     if (TEX) {
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
       uw += duw;
       vw += dvw;
       iw += diw;

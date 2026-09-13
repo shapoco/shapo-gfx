@@ -297,11 +297,24 @@ flat, opaque, untextured span degenerates to a plain fill. Texture coordinates
 wrap with a bit mask, hence the power-of-two requirement. Additive blending
 uses colors pre-multiplied by the opacity at the vertex stage.
 
-Texture coordinates and vertex colors are interpolated affinely by default. If
-the perspective distortion of textures is a problem, compile `gfx3d.cpp` with
-`SHAPOGFX3D_CORRECT_PERSPECTIVE=1` to interpolate `(u/w, v/w, 1/w)` in `float`
-(linear in screen space) and divide per pixel. This adds a division per textured
-pixel and 8 bytes per span and 12 bytes per triangle.
+Vertex colors are always interpolated affinely. The interpolation of texture
+coordinates is selected at compile time of `gfx3d.cpp` with
+`SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
+
+- **0**: affine everywhere. Texture coordinates are interpolated linearly along
+  the edges and across the span.
+- **1** (default): vertical correction. `(u/w, v/w, 1/w)`, which are linear in
+  screen space, are interpolated along the edges; at the two end points of each
+  span they are divided to obtain exact `(u, v)`, and the span interior is
+  interpolated affinely in fixed point. Costs two `float` divides per span and 12
+  bytes per triangle. Along a scanline, a horizontal surface seen by a camera
+  without roll has constant depth, so this level renders such surfaces without
+  distortion; surfaces whose depth varies along the scanline keep affine
+  distortion inside each span, while span end points (and therefore edges shared
+  between triangles) are exact.
+- **2**: full correction. `(u/w, v/w, 1/w)` are interpolated across the span in
+  `float` and divided per pixel. Costs one divide per textured pixel, 12 bytes per
+  triangle and 8 bytes per span.
 
 ### `endRender()`
 
@@ -317,7 +330,9 @@ Currently does nothing; reserved for future use.
 - `main.cpp`: holds the frame buffer and the arena. Compiled with Emscripten it
   exports `demo3d_init`, `demo3d_frame`, `demo3d_get_fb`, `demo3d_get_width` and
   `demo3d_get_height`; compiled natively it writes one frame to a PPM file.
-- `Makefile`: Emscripten build into `docs/example/demo3d/demo3d.wasm`.
+- `Makefile`: Emscripten build into `docs/example/demo3d/demo3d.wasm`. The
+  sample is built with the library's default `SHAPOGFX3D_CORRECT_PERSPECTIVE`;
+  the floor is deliberately left unsubdivided to show the effect.
 - `docs/example/demo3d/index.html`, `main.js`: loads the WASM module, converts the
   RGB565 frame buffer to RGBA and draws it on a canvas. Mouse and keyboard control
   the camera.

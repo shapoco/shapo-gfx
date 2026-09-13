@@ -23,7 +23,8 @@ comes from an arena that you provide.
 - Alpha blending and additive blending with correct ordering against opaque geometry
 - Triangle lists, strips and fans; a built-in subdivided box
 - OpenGL-style right-handed coordinate system and matrix stack
-- Optional perspective-correct texture mapping (compile-time switch)
+- Perspective-correct texture mapping in three levels: off, vertical only
+  (default, two divides per span) or full (per-pixel divide)
 - Per-pixel work is integer only (16-bit fixed point); vertex work is `float`
 - Pure C++17, no platform dependencies; multiple independent `Renderer` instances
 
@@ -109,20 +110,39 @@ Options:
 
 | Option | Default | Description |
 |---|---|---|
-| `SHAPOGFX3D_CORRECT_PERSPECTIVE` | `OFF` | Perspective-correct texture mapping (adds a per-pixel divide) |
+| `SHAPOGFX3D_CORRECT_PERSPECTIVE` | empty (library default, 1) | Perspective correction level: `0` off, `1` vertical only, `2` full. See below. |
 | `SHAPOGFX_BUILD_EXAMPLES` | `ON` when top-level | Build `example/demo3d` |
 
 ### Without CMake
 
 Add `include/` to the include path and compile `src/gfx3d/gfx3d.cpp` with C++17.
-Define `SHAPOGFX3D_CORRECT_PERSPECTIVE=1` when compiling `gfx3d.cpp` to enable
-perspective-correct texture mapping (the default is affine interpolation).
+Define `SHAPOGFX3D_CORRECT_PERSPECTIVE=<level>` when compiling `gfx3d.cpp` to
+change the perspective correction level (see below).
+
+### Perspective correction
+
+`SHAPOGFX3D_CORRECT_PERSPECTIVE` selects how texture coordinates are
+interpolated. It only affects the compilation of `gfx3d.cpp`.
+
+| Level | Behavior | Cost |
+|---|---|---|
+| `0` | Affine interpolation everywhere (classic "PS1 look" on large polygons) | none |
+| `1` (default) | The two end points of every span are perspective-correct; the span interior is affine | 2 float divides per span, +12 bytes per triangle |
+| `2` | Fully perspective-correct: `(u/w, v/w, 1/w)` interpolated and divided per pixel | 1 float divide per textured pixel, +12 bytes per triangle, +8 bytes per span |
+
+Level 1 removes all distortion from horizontal surfaces (floors, ceilings) seen
+by a camera without roll, because along a scanline such surfaces have constant
+depth and affine interpolation is already exact there. Surfaces whose depth
+changes along the scanline (walls receding sideways) keep some distortion inside
+each span; subdivide them or use level 2 if that matters.
 
 ## Sample: demo3d
 
 `example/demo3d/` renders a 480x320 scene with a textured floor, a chrome
 (environment-mapped) torus and three cubes (opaque, alpha-blended, additive).
-The same scene is used by both the browser and the native build.
+The same scene is used by both the browser and the native build. The sample
+uses the library's default perspective correction level; the floor is a single
+large quad per face, which shows the effect of the correction clearly.
 
 Browser (requires [Emscripten](https://emscripten.org/)):
 
@@ -148,10 +168,11 @@ All working memory is taken from the arena passed to `Renderer::init()`. On a
 | Line buckets | screen height x 4 bytes |
 | Matrix stack (16 entries) | about 1.1 KB |
 | Vertex cache (64 entries) | about 2.8 KB |
-| Span pool | 1/4 of the remainder (32 to 512 spans, 64 bytes each; 72 with perspective correction) |
-| Triangle buffer | the rest (124 bytes per triangle plus 4 bytes of indices; 136 + 4 with perspective correction) |
+| Span pool | 1/4 of the remainder (32 to 512 spans, 64 bytes each; 72 at correction level 2) |
+| Triangle buffer | the rest (136 bytes per triangle plus 4 bytes of indices; 124 + 4 at correction level 0) |
 
-For example, a 128 KB arena at 480x320 holds about 740 triangles and 490 spans.
+For example, a 128 KB arena at 480x320 holds about 670 triangles and 490 spans
+with the default settings.
 When a buffer overflows, the excess triangles or spans are dropped for that
 frame; `Renderer::getStats()` reports capacities, peak usage and drop counts so
 you can size the arena.
@@ -173,7 +194,8 @@ texture and environment mapping):
 
 - WebAssembly on a desktop PC (Node.js, single thread): well under 1 ms
 - RP2350 @ 312 MHz, single core: about 55 ms for `render()` (15 to 18 fps),
-  measured before per-pixel processing was converted to fixed point
+  measured before per-pixel processing was converted to fixed point and with
+  correction level 0
 
 ## License
 

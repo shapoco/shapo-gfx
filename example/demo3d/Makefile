@@ -13,11 +13,12 @@ HDRS := $(wildcard $(REPO_ROOT)/include/shapoco/gfx2d/*.hpp) \
         $(wildcard $(REPO_ROOT)/include/shapoco/gfx3d/*.hpp) \
         scene.hpp
 
-# Set to 1 to enable perspective-correct texture mapping
-SHAPOGFX3D_CORRECT_PERSPECTIVE ?= 0
+# Perspective correction level (0 = off, 1 = vertical only, 2 = full).
+# Leave empty to use the library default (1).
+SHAPOGFX3D_CORRECT_PERSPECTIVE ?=
 
 CXXFLAGS := -O2 -std=c++17 -Wall -Wextra -I $(REPO_ROOT)/include -I . \
-            -DSHAPOGFX3D_CORRECT_PERSPECTIVE=$(SHAPOGFX3D_CORRECT_PERSPECTIVE)
+            $(if $(SHAPOGFX3D_CORRECT_PERSPECTIVE),-DSHAPOGFX3D_CORRECT_PERSPECTIVE=$(SHAPOGFX3D_CORRECT_PERSPECTIVE))
 
 EXPORTS := _demo3d_init,_demo3d_frame,_demo3d_get_fb,_demo3d_get_width,_demo3d_get_height
 

@@ -204,9 +204,11 @@ void sceneBuild(g3::Renderer &r, float t, float yaw, float pitch, float dist,
   r.enableParallelLight({-0.5f, -1.0f, -0.6f}, {1.0f, 0.98f, 0.9f, 1.0f});
   r.enableEnvironmentLight({0.25f, 0.28f, 0.38f, 1.0f});
 
-  // Floor (large, so subdivide to hide the affine texture distortion)
+  // Floor: one large quad per face. With the default vertical perspective
+  // correction (SHAPOGFX3D_CORRECT_PERSPECTIVE=1) the texture stays straight
+  // without subdividing; with level 0 you would want divs=4 or so.
   r.setMaterial(matFloor);
-  r.putCube({0, -1.35f, 0}, {7.0f, 0.3f, 7.0f}, 4);
+  r.putCube({0, -1.35f, 0}, {7.0f, 0.3f, 7.0f});
 
   // Chrome torus
   r.pushState();
