@@ -121,6 +121,36 @@ struct mat4f {
     return r;
   }
 
+  // View matrix looking from eye towards target (like gluLookAt)
+  static mat4f lookAt(const vec3f &eye, const vec3f &target, const vec3f &up) {
+    vec3f f = normalize(target - eye);
+    vec3f s = normalize(cross(f, up));
+    vec3f u = cross(s, f);
+    mat4f r = identity();
+    r.m[0] = s.x, r.m[4] = s.y, r.m[8] = s.z;
+    r.m[1] = u.x, r.m[5] = u.y, r.m[9] = u.z;
+    r.m[2] = -f.x, r.m[6] = -f.y, r.m[10] = -f.z;
+    r.m[12] = -dot(s, eye);
+    r.m[13] = -dot(u, eye);
+    r.m[14] = dot(f, eye);
+    return r;
+  }
+
+  // Rotation from a unit quaternion (x, y, z, w)
+  static mat4f fromQuaternion(float x, float y, float z, float w) {
+    mat4f r = identity();
+    r.m[0] = 1 - 2 * (y * y + z * z);
+    r.m[1] = 2 * (x * y + z * w);
+    r.m[2] = 2 * (x * z - y * w);
+    r.m[4] = 2 * (x * y - z * w);
+    r.m[5] = 1 - 2 * (x * x + z * z);
+    r.m[6] = 2 * (y * z + x * w);
+    r.m[8] = 2 * (x * z + y * w);
+    r.m[9] = 2 * (y * z - x * w);
+    r.m[10] = 1 - 2 * (x * x + y * y);
+    return r;
+  }
+
   mat4f operator*(const mat4f &o) const {
     mat4f r;
     for (int col = 0; col < 4; col++) {

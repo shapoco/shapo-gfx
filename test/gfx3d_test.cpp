@@ -12,7 +12,7 @@ namespace g2 = shapoco::gfx2d;
 namespace g3 = shapoco::gfx3d;
 
 static constexpr int W = 96, H = 64;
-static uint8_t arena[48 * 1024];
+static uint8_t arena[256 * 1024];
 
 static uint16_t tex565[16 * 16];
 static uint16_t tex4444[16 * 16];
@@ -75,7 +75,7 @@ static void genTextures() {
   }
 }
 
-static void buildScene(g3::Renderer &r, const g3::Material *mat, float t) {
+static void buildScene(g3::Graphics3D &r, const g3::Material *mat, float t) {
   r.setPerspectiveProjection(1.0f, (float)W / H, 0.3f, 50.0f);
   r.beginScene();
   r.translate(0, 0, -4);
@@ -102,7 +102,7 @@ static g2::Color pixelAt(const g2::Surface &s, int x, int y) {
 }
 
 static void testBandsAndClear() {
-  g3::Renderer r;
+  g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   CHECK(r.isInitialized());
   g2::OwnedSurface whole = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
@@ -161,7 +161,7 @@ static void testBandsAndClear() {
 }
 
 static void testOutputFormats() {
-  g3::Renderer r;
+  g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   r.setClearColor({0.1f, 0.2f, 0.3f, 1});
   const g3::Material *mats[] = {&M_RED, &M_TEX565, &M_TEX4444, &M_TEXG1,
@@ -201,7 +201,7 @@ static void testOutputFormats() {
 
 static void testTextureAlpha() {
   // Holes in an ARGB4444 texture show the background
-  g3::Renderer r;
+  g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
   r.setClearColor({0, 1, 0, 1});
@@ -226,8 +226,135 @@ static void testTextureAlpha() {
   CHECK(green > 0 && other > 0);
 }
 
+// Every shape must render identically with and without back-face culling:
+// otherwise its winding is wrong (the culled version would show the inside).
+static void testShapeWinding() {
+  static const g3::Material M_CULL = {{0.8f, 0.8f, 0.8f, 1},
+                                      {0.8f, 0.8f, 0.8f, 1},
+                                      nullptr,
+                                      g3::BlendMode::NONE,
+                                      0};
+  static const g3::Material M_BOTH = {{0.8f, 0.8f, 0.8f, 1},
+                                      {0.8f, 0.8f, 0.8f, 1},
+                                      nullptr,
+                                      g3::BlendMode::NONE,
+                                      g3::MaterialFlags::DOUBLE_SIDED};
+  struct ShapeCase {
+    const char *name;
+    void (*put)(g3::Graphics3D &);
+  };
+  const ShapeCase cases[] = {
+      {"cube",
+       [](g3::Graphics3D &g) { g.putCube({0, 0, 0}, {1.2f, 1.2f, 1.2f}, 2); }},
+      {"plane",
+       [](g3::Graphics3D &g) { g.putPlane({0, -0.3f, 0}, 1.5f, 1.5f, 2, 3); }},
+      {"disk", [](g3::Graphics3D &g) { g.putDisk({0, -0.3f, 0}, 0.9f, 20); }},
+      {"sphere",
+       [](g3::Graphics3D &g) { g.putSphereUV({0, 0, 0}, 0.9f, 20, 10); }},
+      {"icosphere",
+       [](g3::Graphics3D &g) { g.putIcosphere({0, 0, 0}, 0.9f, 2); }},
+      {"cylinder",
+       [](g3::Graphics3D &g) { g.putCylinder({0, 0, 0}, 0.6f, 1.4f, 18, 2); }},
+      {"cone",
+       [](g3::Graphics3D &g) {
+         g.putCone({0, 0, 0}, 0.8f, 0.2f, 1.4f, 18, 3);
+       }},
+      {"cone-apex",
+       [](g3::Graphics3D &g) {
+         g.putCone({0, 0, 0}, 0.8f, 0.0f, 1.4f, 12, 1);
+       }},
+      {"torus",
+       [](g3::Graphics3D &g) { g.putTorus({0, 0, 0}, 0.7f, 0.25f, 20, 10); }},
+  };
+  g3::Graphics3D r;
+  r.init(W, H, arena, sizeof(arena));
+  r.setClearColor({0, 0, 0, 1});
+  for (const ShapeCase &sc : cases) {
+    g2::OwnedSurface a = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+    g2::OwnedSurface b = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+    for (int pass = 0; pass < 2; pass++) {
+      r.setPerspectiveProjection(1.0f, (float)W / H, 0.3f, 50.0f);
+      r.beginScene();
+      r.lookAt({2.2f, 1.6f, 2.6f}, {0, 0, 0});
+      r.enableParallelLight({-0.3f, -1, -0.4f}, {1, 1, 1, 1});
+      r.enableEnvironmentLight({0.2f, 0.2f, 0.2f, 1});
+      r.setMaterial(pass == 0 ? M_CULL : M_BOTH);
+      sc.put(r);
+      r.endScene();
+      r.beginRender();
+      r.render(0, 0, W, H, pass == 0 ? a : b);
+      r.endRender();
+      CHECK_EQ(r.getStats().triDropped, 0);
+      CHECK_EQ(r.getStats().badIndices, 0);
+    }
+    bool same = std::memcmp(a.pixels(), b.pixels(), a.bytes()) == 0;
+    if (!same) std::printf("  winding mismatch: %s\n", sc.name);
+    CHECK(same);
+    // Something must have been drawn
+    int drawn = 0;
+    for (int y = 0; y < H; y++) {
+      for (int x = 0; x < W; x++) {
+        if (pixelAt(a, x, y) != g2::Colors::BLACK) drawn++;
+      }
+    }
+    CHECK(drawn > 100);  // flat shapes are foreshortened at this camera angle
+  }
+}
+
+// Vertex colors modulate the lit color; out-of-range indices are counted and
+// dropped
+static void testVertexColorAndIndices() {
+  static const g3::Vertex verts[4] = {
+      {{-1, -1, 0}, {0, 0, 1}, {0, 1}, 0xFFFF0000u},
+      {{1, -1, 0}, {0, 0, 1}, {1, 1}, 0xFFFF0000u},
+      {{1, 1, 0}, {0, 0, 1}, {1, 0}, 0xFFFF0000u},
+      {{-1, 1, 0}, {0, 0, 1}, {0, 0}, 0xFFFF0000u},
+  };
+  static const g3::VertexBuffer vb = {4, verts};
+  static const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
+  static const uint16_t badIdx[6] = {0, 1, 2, 0, 2, 9};
+  static const g3::Material M_VC = {{1, 1, 1, 1},
+                                    {1, 1, 1, 1},
+                                    nullptr,
+                                    g3::BlendMode::NONE,
+                                    g3::MaterialFlags::VERTEX_COLOR};
+  static const g3::Material M_NOVC = {
+      {1, 1, 1, 1}, {1, 1, 1, 1}, nullptr, g3::BlendMode::NONE, 0};
+  g3::Graphics3D r;
+  r.init(W, H, arena, sizeof(arena));
+  r.setClearColor({0, 0, 0, 1});
+  r.setOrthographicProjection(-2, 2, -2, 2, 0.1f, 10);
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  for (int pass = 0; pass < 3; pass++) {
+    r.beginScene();
+    r.translate(0, 0, -3);
+    r.enableEnvironmentLight({1, 1, 1, 1});
+    g3::Primitive prim = {g3::PrimitiveType::TRIANGLES, &vb, 6,
+                          pass == 2 ? badIdx : idx,
+                          pass == 0 ? &M_VC : &M_NOVC};
+    r.putPrimitive(prim);
+    r.endScene();
+    r.beginRender();
+    r.render(0, 0, W, H, s);
+    r.endRender();
+    g2::Color c = pixelAt(s, W / 2, H / 2);
+    if (pass == 0) {
+      CHECK(g2::colorR(c) > 200 && g2::colorG(c) < 20 &&
+            g2::colorB(c) < 20);  // red
+    } else if (pass == 1) {
+      CHECK_EQ(c, g2::Colors::WHITE);
+      CHECK_EQ(r.getStats().badIndices, 0);
+    } else {
+      CHECK_EQ(r.getStats().badIndices, 1);
+      CHECK_EQ(r.getStats().triCount, 1);  // the second triangle was dropped
+    }
+  }
+}
+
 void testGfx3D() {
   genTextures();
+  testShapeWinding();
+  testVertexColorAndIndices();
   testBandsAndClear();
   testOutputFormats();
   testTextureAlpha();

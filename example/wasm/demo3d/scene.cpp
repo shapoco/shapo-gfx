@@ -130,65 +130,11 @@ static const g3::Material matGlow = {
 };
 
 // ---------------------------------------------------------------------------
-// Torus (also exercises TRIANGLE_STRIP)
-
-static constexpr int TORUS_MAJOR = 24;   // segments around the major circle
-static constexpr int TORUS_MINOR = 12;   // segments around the cross section
-static constexpr float TORUS_R = 1.0f;   // major radius
-static constexpr float TORUS_r = 0.35f;  // minor radius
-
-static g3::Vertex torusVerts[TORUS_MAJOR * TORUS_MINOR];
-static uint16_t
-    torusIndices[TORUS_MAJOR * (TORUS_MINOR * 2 + 2) + (TORUS_MAJOR - 1) * 2];
-static g3::VertexBuffer torusVb;
-static g3::Primitive torusPrim;
-
-static void generateTorus() {
-  for (int i = 0; i < TORUS_MAJOR; i++) {
-    float a = 2 * PI * i / TORUS_MAJOR;
-    float ca = std::cos(a), sa = std::sin(a);
-    for (int j = 0; j < TORUS_MINOR; j++) {
-      float b = 2 * PI * j / TORUS_MINOR;
-      float cb = std::cos(b), sb = std::sin(b);
-      g3::Vertex &v = torusVerts[i * TORUS_MINOR + j];
-      v.position = {(TORUS_R + TORUS_r * cb) * ca, TORUS_r * sb,
-                    (TORUS_R + TORUS_r * cb) * sa};
-      v.normal = {cb * ca, sb, cb * sa};
-      v.uv = {(float)i / TORUS_MAJOR, (float)j / TORUS_MINOR};
-    }
-  }
-  // One strip per ring, joined with degenerate triangles
-  int n = 0;
-  for (int i = 0; i < TORUS_MAJOR; i++) {
-    int i1 = (i + 1) % TORUS_MAJOR;
-    for (int j = 0; j <= TORUS_MINOR; j++) {
-      int jj = j % TORUS_MINOR;
-      torusIndices[n++] = (uint16_t)(i1 * TORUS_MINOR + jj);
-      torusIndices[n++] = (uint16_t)(i * TORUS_MINOR + jj);
-    }
-    if (i < TORUS_MAJOR - 1) {
-      // Degenerate join: repeat the last index and the first index of the next
-      // ring
-      torusIndices[n] = torusIndices[n - 1];
-      n++;
-      torusIndices[n] = (uint16_t)((i1 + 1) % TORUS_MAJOR * TORUS_MINOR);
-      n++;
-    }
-  }
-  torusVb = {TORUS_MAJOR * TORUS_MINOR, torusVerts};
-  torusPrim = {g3::PrimitiveType::TRIANGLE_STRIP, &torusVb, (uint16_t)n,
-               torusIndices, nullptr};
-}
-
-// ---------------------------------------------------------------------------
 // API
 
-void sceneInit() {
-  generateTextures();
-  generateTorus();
-}
+void sceneInit() { generateTextures(); }
 
-void sceneBuild(g3::Renderer &r, float t, float yaw, float pitch, float dist,
+void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
                 float aspect) {
   r.setPerspectiveProjection(60.0f * PI / 180.0f, aspect, 0.3f, 100.0f);
 
@@ -217,7 +163,7 @@ void sceneBuild(g3::Renderer &r, float t, float yaw, float pitch, float dist,
   r.rotate(t * 0.6f, 0, 1, 0);
   r.rotate(0.9f + 0.3f * std::sin(t * 0.4f), 1, 0, 0.2f);
   r.setMaterial(matChrome);
-  r.putPrimitive(torusPrim);
+  r.putTorus({0, 0, 0}, 1.0f, 0.35f, 24, 12);
   r.popState();
 
   // Red cube

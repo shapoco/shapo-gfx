@@ -154,8 +154,8 @@ static inline const Texture *materialTexture(const Material *mat) {
 // ---------------------------------------------------------------------------
 // Initialization
 
-void Renderer::init(int16_t w, int16_t h, void *arena, size_t arenaSize) {
-  *this = Renderer();
+void Graphics3D::init(int16_t w, int16_t h, void *arena, size_t arenaSize) {
+  *this = Graphics3D();
   screenW_ = w;
   screenH_ = h;
   arenaSize_ = arenaSize;
@@ -171,7 +171,7 @@ void Renderer::init(int16_t w, int16_t h, void *arena, size_t arenaSize) {
   const size_t vcacheBytes =
       alignUp8((size_t)VCACHE_SIZE * sizeof(CachedVertex));
   if (avail() < bucketBytes + stackBytes + vcacheBytes) {
-    *this = Renderer();
+    *this = Graphics3D();
     return;
   }
   bucketHead_ = (uint16_t *)p;
@@ -202,92 +202,101 @@ void Renderer::init(int16_t w, int16_t h, void *arena, size_t arenaSize) {
   triCapacity_ = std::min(triCap, (int)(avail() / sizeof(Triangle)));
   tris_ = (Triangle *)p;
   if (triCapacity_ <= 0 || spanCap <= 0) {
-    *this = Renderer();
+    *this = Graphics3D();
     return;
   }
 }
 
-void Renderer::deinit() { *this = Renderer(); }
+void Graphics3D::deinit() { *this = Graphics3D(); }
 
 // ---------------------------------------------------------------------------
 // Scene construction
 
-void Renderer::beginScene() {
+void Graphics3D::beginScene() {
   triCount_ = 0;
   triDropped_ = 0;
+  badIndices_ = 0;
+  nodesDropped_ = 0;
   stackTop_ = 0;
   cur_ = mat4f::identity();
 }
 
-void Renderer::endScene() {}
+void Graphics3D::endScene() {}
 
-void Renderer::loadIdentity() { cur_ = mat4f::identity(); }
+void Graphics3D::loadIdentity() { cur_ = mat4f::identity(); }
 
-void Renderer::translate(const vec3f &v) {
+void Graphics3D::translate(const vec3f &v) {
   cur_ = cur_ * mat4f::translation(v.x, v.y, v.z);
 }
-void Renderer::translate(float x, float y, float z) {
+void Graphics3D::translate(float x, float y, float z) {
   cur_ = cur_ * mat4f::translation(x, y, z);
 }
-void Renderer::rotate(float angle, const vec3f &axis) {
+void Graphics3D::rotate(float angle, const vec3f &axis) {
   cur_ = cur_ * mat4f::rotation(angle, axis);
 }
-void Renderer::rotate(float angle, float x, float y, float z) {
+void Graphics3D::rotate(float angle, float x, float y, float z) {
   cur_ = cur_ * mat4f::rotation(angle, {x, y, z});
 }
-void Renderer::scale(const vec3f &v) {
+void Graphics3D::scale(const vec3f &v) {
   cur_ = cur_ * mat4f::scaling(v.x, v.y, v.z);
 }
-void Renderer::scale(float x, float y, float z) {
+void Graphics3D::scale(float x, float y, float z) {
   cur_ = cur_ * mat4f::scaling(x, y, z);
 }
+void Graphics3D::transform(const mat4f &m) { cur_ = cur_ * m; }
+void Graphics3D::lookAt(const vec3f &eye, const vec3f &target,
+                        const vec3f &up) {
+  cur_ = cur_ * mat4f::lookAt(eye, target, up);
+}
 
-void Renderer::pushState() {
-  if (!stack_ || stackTop_ >= STACK_DEPTH) return;
+bool Graphics3D::pushState() {
+  if (!stack_ || stackTop_ >= STACK_DEPTH) return false;
   stack_[stackTop_].matrix = cur_;
   stack_[stackTop_].material = curMat_;
   stackTop_++;
+  return true;
 }
 
-void Renderer::popState() {
+void Graphics3D::popState() {
   if (!stack_ || stackTop_ <= 0) return;
   stackTop_--;
   cur_ = stack_[stackTop_].matrix;
   curMat_ = stack_[stackTop_].material;
 }
 
-void Renderer::setMaterial(const Material &mat) { curMat_ = &mat; }
+void Graphics3D::setMaterial(const Material &mat) { curMat_ = &mat; }
 
-void Renderer::enableParallelLight(const vec3f &dir, const colorf &col) {
+void Graphics3D::enableParallelLight(const vec3f &dir, const colorf &col) {
   lightEnabled_ = true;
   lightDir_ = normalize(cur_.transformDir(dir));
   lightCol_ = col;
 }
 
-void Renderer::disableParallelLight() { lightEnabled_ = false; }
+void Graphics3D::disableParallelLight() { lightEnabled_ = false; }
 
-void Renderer::enableEnvironmentLight(const colorf &col) {
+void Graphics3D::enableEnvironmentLight(const colorf &col) {
   envEnabled_ = true;
   envCol_ = col;
 }
 
-void Renderer::disableEnvironmentLight() { envEnabled_ = false; }
+void Graphics3D::disableEnvironmentLight() { envEnabled_ = false; }
 
-void Renderer::setClearColor(const colorf &col) {
+void Graphics3D::setClearColor(const colorf &col) {
   clearColor_ = col;
   clearEnabled_ = true;
 }
 
-void Renderer::disableClear() { clearEnabled_ = false; }
+void Graphics3D::disableClear() { clearEnabled_ = false; }
 
-void Renderer::setPerspectiveProjection(float fovY, float aspect, float zNear,
-                                        float zFar) {
+void Graphics3D::setPerspectiveProjection(float fovY, float aspect, float zNear,
+                                          float zFar) {
   proj_ = mat4f::perspective(fovY, aspect, zNear, zFar);
   zNear_ = zNear;
 }
 
-void Renderer::setOrthographicProjection(float left, float right, float bottom,
-                                         float top, float zNear, float zFar) {
+void Graphics3D::setOrthographicProjection(float left, float right,
+                                           float bottom, float top, float zNear,
+                                           float zFar) {
   proj_ = mat4f::orthographic(left, right, bottom, top, zNear, zFar);
   zNear_ = zNear;
 }
@@ -295,8 +304,8 @@ void Renderer::setOrthographicProjection(float left, float right, float bottom,
 // ---------------------------------------------------------------------------
 // Vertex processing (transform + lighting + projection)
 
-void Renderer::shadeVertex(const Vertex &in, const Material *mat,
-                           const Texture *tex, CachedVertex &out) const {
+void Graphics3D::shadeVertex(const Vertex &in, const Material *mat,
+                             const Texture *tex, CachedVertex &out) const {
   out.ok = false;
   vec3f viewPos = cur_.transformPoint(in.position);
   // Triangles crossing or in front of the near plane are dropped
@@ -350,6 +359,11 @@ void Renderer::shadeVertex(const Vertex &in, const Material *mat,
     g = mat->diffuse.g;
     b = mat->diffuse.b;
   }
+  if (mat->flags & MaterialFlags::VERTEX_COLOR) {
+    r *= gfx2d::colorR(in.color) * (1.0f / 255.0f);
+    g *= gfx2d::colorG(in.color) * (1.0f / 255.0f);
+    b *= gfx2d::colorB(in.color) * (1.0f / 255.0f);
+  }
   if (mat->blendMode == BlendMode::ADD) {
     // Additive blending just adds (color x opacity), so pre-multiply here
     float a = clamp01(mat->diffuse.a);
@@ -369,9 +383,9 @@ void Renderer::shadeVertex(const Vertex &in, const Material *mat,
 // ---------------------------------------------------------------------------
 // Triangle setup
 
-void Renderer::emitTriangle(const CachedVertex &a, const CachedVertex &b,
-                            const CachedVertex &c, const Material *mat,
-                            const Texture *tex) {
+void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
+                              const CachedVertex &c, const Material *mat,
+                              const Texture *tex) {
   if (!a.ok || !b.ok || !c.ok) return;
   if (triCount_ >= triCapacity_) {  // buffer overflow: drop for this frame
     triDropped_++;
@@ -452,19 +466,27 @@ void Renderer::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   triCount_++;
 }
 
-void Renderer::putPrimitive(const Primitive &prim) {
+void Graphics3D::putPrimitive(const Primitive &prim) {
   if (!tris_) return;
   const Material *mat = prim.material ? prim.material : curMat_;
   if (!mat) return;
   const Texture *tex = materialTexture(mat);
+  if (!prim.vertexBuffer || !prim.vertexBuffer->vertices || !prim.indices)
+    return;
   const Vertex *verts = prim.vertexBuffer->vertices;
+  const uint16_t vcount = prim.vertexBuffer->vertexCount;
   const uint16_t *idx = prim.indices;
   int n = prim.indexCount;
+  static const CachedVertex INVALID = {};  // ok == false: drops the triangle
 
   // Vertex cache: avoid re-transforming vertices shared by several triangles
   // (strips, fans, indexed meshes). Invalidated per primitive.
   for (int i = 0; i < VCACHE_SIZE; i++) vcache_[i].tag = NONE;
   auto fetch = [&](uint16_t vi) -> const CachedVertex & {
+    if (vi >= vcount) {  // out-of-range index: the triangle is dropped
+      badIndices_++;
+      return INVALID;
+    }
     CachedVertex &cv = vcache_[vi & (VCACHE_SIZE - 1)];
     if (cv.tag != vi) {
       shadeVertex(verts[vi], mat, tex, cv);
@@ -499,7 +521,7 @@ void Renderer::putPrimitive(const Primitive &prim) {
   }
 }
 
-void Renderer::putCube(const vec3f &center, const vec3f &size, int divs) {
+void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
   if (divs < 1) divs = 1;
 
   static const int8_t FACE_NORMALS[6][3] = {
@@ -552,6 +574,7 @@ void Renderer::putCube(const vec3f &center, const vec3f &size, int divs) {
           quad[k].position = corner[0] + du * us[k] + dv * vs[k];
           quad[k].normal = normal;
           quad[k].uv = FACE_UVS[0] + duvU * us[k] + duvV * vs[k];
+          quad[k].color = VERTEX_WHITE;
         }
         VertexBuffer vb = {4, quad};
         Primitive prim = {PrimitiveType::TRIANGLES, &vb, 6, QUAD_INDICES,
@@ -565,7 +588,7 @@ void Renderer::putCube(const vec3f &center, const vec3f &size, int divs) {
 // ---------------------------------------------------------------------------
 // Rendering
 
-void Renderer::beginRender() {
+void Graphics3D::beginRender() {
   // Sort farthest first (ascending view-space z: more negative comes first).
   // Depth order between opaque spans is resolved by the depth test at span
   // insertion, so this sort mainly determines the compositing order of
@@ -580,9 +603,9 @@ void Renderer::beginRender() {
   });
 }
 
-void Renderer::endRender() {}
+void Graphics3D::endRender() {}
 
-Span *Renderer::allocSpan() {
+Span *Graphics3D::allocSpan() {
   if (spanCount_ >= spanCapacity_) {
     spanDropped_++;
     return nullptr;
@@ -623,7 +646,7 @@ static inline bool fragNearer(const Span &frag, const Span &e, int ox0,
 // Remove the range [ox0, ox1) from list element e = *pp.
 // Returns the position at which to continue scanning (after the remaining part,
 // or the rest of e).
-Span **Renderer::cutSpan(Span **pp, int ox0, int ox1) {
+Span **Graphics3D::cutSpan(Span **pp, int ox0, int ox1) {
   Span *e = *pp;
   bool leftRemains = e->x0 < ox0;
   bool rightRemains = e->x1 > ox1;
@@ -652,7 +675,7 @@ Span **Renderer::cutSpan(Span **pp, int ox0, int ox1) {
 }
 
 // Append (part of) a span [sp.x0, x1) to the translucent list
-void Renderer::appendTranslucent(const Span &sp, int x1) {
+void Graphics3D::appendTranslucent(const Span &sp, int x1) {
   Span *n = allocSpan();
   if (!n) return;  // pool overflow: drop this span
   *n = sp;
@@ -670,7 +693,7 @@ void Renderer::appendTranslucent(const Span &sp, int x1) {
 // Overlaps with existing spans are resolved by comparing depth at the center of
 // the overlap and removing the farther part. Because this does not rely on the
 // per-triangle sort order, large and small polygons are ordered correctly too.
-void Renderer::insertOpaque(Span &frag) {
+void Graphics3D::insertOpaque(Span &frag) {
   Span **pp = &opaqueHead_;
   while (*pp && (*pp)->x1 <= frag.x0) pp = &(*pp)->next;
   while (*pp && (*pp)->x0 < frag.x1) {
@@ -712,7 +735,7 @@ void Renderer::insertOpaque(Span &frag) {
 
 // Add a translucent span to the translucent list, excluding the parts hidden by
 // nearer opaque spans
-void Renderer::insertTranslucent(Span &frag) {
+void Graphics3D::insertTranslucent(Span &frag) {
   Span **pp = &opaqueHead_;
   while (*pp && (*pp)->x1 <= frag.x0) pp = &(*pp)->next;
   while (*pp && (*pp)->x0 < frag.x1) {
@@ -736,7 +759,7 @@ void Renderer::insertTranslucent(Span &frag) {
 
 // Remove the parts of translucent spans that lie behind the new opaque span
 // frag
-void Renderer::clipTranslucent(const Span &frag) {
+void Graphics3D::clipTranslucent(const Span &frag) {
   Span **pp = &transHead_;
   bool modified = false;
   while (*pp) {
@@ -1133,7 +1156,7 @@ static const RasterFn RASTER_FNS_RGB444[RASTER_TABLE_SIZE] =
 #endif
 
 // Merge two ascending lists (links are stored in link_)
-uint16_t Renderer::mergeLists(uint16_t a, uint16_t b) {
+uint16_t Graphics3D::mergeLists(uint16_t a, uint16_t b) {
   uint16_t *link = link_;
   uint16_t head = NONE;
   uint16_t *pp = &head;
@@ -1152,8 +1175,8 @@ uint16_t Renderer::mergeLists(uint16_t a, uint16_t b) {
   return head;
 }
 
-void Renderer::render(int16_t x, int16_t y, int16_t w, int16_t h,
-                      const Surface &dst, int16_t dstX, int16_t dstY) {
+void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
+                        const Surface &dst, int16_t dstX, int16_t dstY) {
   if (!tris_ || !spanPool_ || !dst.pixels) return;
 
   // Output format
@@ -1270,7 +1293,7 @@ void Renderer::render(int16_t x, int16_t y, int16_t w, int16_t h,
 // ---------------------------------------------------------------------------
 // Statistics
 
-Stats Renderer::getStats() const {
+Stats Graphics3D::getStats() const {
   Stats st;
   st.arenaSize = arenaSize_;
   st.arenaUsed = arenaFixed_ +
@@ -1282,6 +1305,8 @@ Stats Renderer::getStats() const {
   st.spanCapacity = spanCapacity_;
   st.spanPeak = spanPeak_;
   st.spanDropped = spanDropped_;
+  st.badIndices = badIndices_;
+  st.nodesDropped = nodesDropped_;
   return st;
 }
 

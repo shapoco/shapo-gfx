@@ -58,7 +58,7 @@ can be disabled at compile time to remove its code (see below).
 - Optional transparent background: uncovered pixels keep the target's content,
   so a 3D scene can be drawn over a 2D backdrop
 - Per-pixel work is integer only (16-bit fixed point); vertex work is `float`
-- Multiple independent `Renderer` instances, each with its own arena
+- Multiple independent `Graphics3D` instances, each with its own arena
 
 ## Directory layout
 
@@ -108,7 +108,7 @@ namespace g3 = shapoco::gfx3d;
 static uint8_t arena[64 * 1024];
 static uint16_t band[320 * 40];  // 40-line transfer buffer, RGB565BE
 static const g2::Surface bandSurface = {g2::PixelFormat::RGB565BE, 320, 40, 320 * 2, band};
-static g3::Renderer renderer;
+static g3::Graphics3D renderer;
 
 static const g3::Material matRed = {
     {0.9f, 0.15f, 0.1f, 1.0f}, {0.9f, 0.15f, 0.1f, 1.0f}, nullptr, g3::BlendMode::NONE, 0,
@@ -230,7 +230,7 @@ WASM binaries are committed so that `docs/` can be published as a static site.
 
 ## Memory usage (3D)
 
-All working memory of a `Renderer` is taken from the arena passed to `init()`.
+All working memory of a `Graphics3D` is taken from the arena passed to `init()`.
 On a 32-bit target the layout is roughly:
 
 | Region | Size |
@@ -243,7 +243,7 @@ On a 32-bit target the layout is roughly:
 
 For example, a 128 KB arena at 480x320 holds about 670 triangles and 490 spans
 with the default settings. When a buffer overflows, the excess triangles or
-spans are dropped for that frame; `Renderer::getStats()` reports capacities,
+spans are dropped for that frame; `Graphics3D::getStats()` reports capacities,
 peak usage and drop counts so you can size the arena.
 
 The 2D API needs no working memory beyond the target buffer.
@@ -260,7 +260,7 @@ The 2D API needs no working memory beyond the target buffer.
   float implementation).
 - Polygons filled by `Graphics2D::fillPolygon()` may have at most 16 edge
   crossings per scanline.
-- Neither renderer is thread-safe; use one `Renderer` / `Graphics2D` per thread.
+- Neither renderer is thread-safe; use one `Graphics3D` / `Graphics2D` per thread.
 
 ## Performance reference
 

@@ -16,7 +16,7 @@ constexpr float CAM_DIST_INIT = 7.0f;
 constexpr float CAM_PITCH_MIN = -0.2f, CAM_PITCH_MAX = 1.4f;
 constexpr float CAM_DIST_MIN = 3.0f, CAM_DIST_MAX = 20.0f;
 
-// Generate the textures and the torus (call once at startup)
+// Generate the textures (call once at startup)
 void sceneInit();
 
 // Build the scene (projection setup and beginScene() .. endScene()).
@@ -24,7 +24,7 @@ void sceneInit();
 // Rendering (beginRender() / render() / endRender()) is left to the caller.
 // t: elapsed seconds, yaw/pitch: camera angles (radians), dist: camera
 // distance, aspect: screen aspect ratio (width / height)
-void sceneBuild(shapoco::gfx3d::Renderer &r, float t, float yaw, float pitch,
+void sceneBuild(shapoco::gfx3d::Graphics3D &r, float t, float yaw, float pitch,
                 float dist, float aspect);
 
 }  // namespace demo3d

@@ -31,7 +31,7 @@ static uint16_t fb[SCREEN_W * SCREEN_H];  // RGB565BE
 static const g2::Surface fbSurface = {g2::PixelFormat::RGB565BE, SCREEN_W,
                                       SCREEN_H, SCREEN_W * 2, fb};
 static uint8_t arena[128 * 1024];
-static g3::Renderer renderer;
+static g3::Graphics3D g3d;
 
 // ---------------------------------------------------------------------------
 // Exported API
@@ -44,8 +44,8 @@ DEMO3D_EXPORT int demo3d_get_height() { return SCREEN_H; }
 
 DEMO3D_EXPORT void demo3d_init() {
   demo3d::sceneInit();
-  renderer.init(SCREEN_W, SCREEN_H, arena, sizeof(arena));
-  renderer.disableClear();  // the 2D backdrop provides the background
+  g3d.init(SCREEN_W, SCREEN_H, arena, sizeof(arena));
+  g3d.disableClear();  // the 2D backdrop provides the background
 }
 
 // 2D backdrop: vertical gradient, twinkling stars and a caption
@@ -78,16 +78,16 @@ static void drawBackdrop(float t) {
 // t: elapsed seconds, yaw/pitch: camera angles (radians), dist: camera distance
 DEMO3D_EXPORT void demo3d_frame(float t, float yaw, float pitch, float dist) {
   drawBackdrop(t);
-  demo3d::sceneBuild(renderer, t, yaw, pitch, dist, (float)SCREEN_W / SCREEN_H);
+  demo3d::sceneBuild(g3d, t, yaw, pitch, dist, (float)SCREEN_W / SCREEN_H);
 
-  renderer.beginRender();
+  g3d.beginRender();
   // Render in 4 bands, as a device with a small transfer buffer would do
   constexpr int BAND_H = SCREEN_H / 4;
   for (int i = 0; i < 4; i++) {
     int y = i * BAND_H;
-    renderer.render(0, (int16_t)y, SCREEN_W, BAND_H, fbSurface, 0, (int16_t)y);
+    g3d.render(0, (int16_t)y, SCREEN_W, BAND_H, fbSurface, 0, (int16_t)y);
   }
-  renderer.endRender();
+  g3d.endRender();
 }
 
 }  // extern "C"
@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
   }
   std::fclose(fp);
 
-  g3::Stats st = renderer.getStats();
+  g3::Stats st = g3d.getStats();
   std::printf("wrote %s (%dx%d)\n", path, SCREEN_W, SCREEN_H);
   std::printf("arena: %zu / %zu bytes used\n", st.arenaUsed, st.arenaSize);
   std::printf("triangles: %d / %d (dropped %d)\n", st.triCount, st.triCapacity,

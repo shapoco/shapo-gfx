@@ -275,14 +275,14 @@ Translucency: a triangle is translucent when its material's blend mode is not
 `NONE` or when its texture is ARGB4444. Translucent spans do not remove spans behind
 them and are composited in list order.
 
-### `Renderer`
+### `Graphics3D`
 
-All state lives in a `Renderer` object; several may coexist, each with its own arena.
-A `Renderer` is movable but not copyable. Drawing methods called before `init()` (or
+All state lives in a `Graphics3D` object; several may coexist, each with its own arena.
+A `Graphics3D` is movable but not copyable. Drawing methods called before `init()` (or
 after `deinit()`) are no-ops.
 
 ```c++
-class Renderer {
+class Graphics3D {
  public:
   void init(int16_t w, int16_t h, void *arena, size_t arenaSize);
   void deinit();
