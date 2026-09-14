@@ -129,6 +129,13 @@ static const g3::Material matGlass = {
     {0.4f, 0.7f, 1.0f, 0.45f}, {0.4f, 0.7f, 1.0f, 1.0f},        nullptr,
     g3::BlendMode::ALPHA,      g3::MaterialFlags::DOUBLE_SIDED,
 };
+static const g3::Material matWire = {
+    {0.9f, 0.95f, 1.0f, 1.0f},
+    {0.9f, 0.95f, 1.0f, 1.0f},
+    nullptr,
+    g3::BlendMode::NONE,
+    0,
+};
 static const g3::Material matGlow = {
     {1.0f, 0.7f, 0.2f, 0.8f}, {1.0f, 0.7f, 0.2f, 1.0f},        nullptr,
     g3::BlendMode::ADD,       g3::MaterialFlags::DOUBLE_SIDED,
@@ -200,6 +207,11 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   r.rotate(t * 1.2f, 1, 0.5f, 0);
   r.setMaterial(matGlass);
   r.putCube({0, 0, 0}, {1.2f, 1.2f, 1.2f});
+  // Wireframe edges on the translucent cube (LINES with a small depth bias)
+  r.setMaterial(matWire);
+  r.setDepthBias(-0.002f);
+  r.putWireCube({0, 0, 0}, {1.2f, 1.2f, 1.2f});
+  r.setDepthBias(0.0f);
   r.popState();
 
   // Windmill: a glTF model drawn with putScene(); the blades rotate through the

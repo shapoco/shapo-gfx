@@ -103,9 +103,17 @@ static void testGltf2cpp() {
   // Structure produced from test/data/test_model.glb
   CHECK_EQ(test_model::scene.rootCount, 1);
   CHECK(test_model::scene.roots[0] == &test_model::node_Root);
-  CHECK_EQ(test_model::node_Root.childCount, 2);
+  CHECK_EQ(test_model::node_Root.childCount, 3);
   CHECK(test_model::node_Root.children[0] == &test_model::node_Cube);
   CHECK(test_model::node_Root.children[1] == &test_model::node_Pyramid);
+  CHECK(test_model::node_Root.children[2] == &test_model::node_Axes);
+  // LINES primitive: unlit vertex colors, no material in the glTF -> default
+  // material
+  const g3::Primitive &axes = test_model::node_Axes.mesh->primitives[0];
+  CHECK_EQ((int)axes.type, (int)g3::PrimitiveType::LINES);
+  CHECK_EQ(axes.indexCount, 6);
+  CHECK((axes.material->flags & g3::MaterialFlags::VERTEX_COLOR) != 0);
+  CHECK_EQ(axes.vertexBuffer->vertices[1].color, 0xFFFF0000u);
   CHECK_EQ(test_model::node_Pyramid.childCount, 1);
   CHECK(std::strcmp(test_model::node_Tip_Pyramid.name, "Tip Pyramid") == 0);
   CHECK(test_model::node_Cube.mesh != nullptr);
@@ -146,7 +154,7 @@ static void testGltf2cpp() {
   int noPyramid = renderScene(r, b, &v);
   CHECK(noPyramid < all);
   CHECK_EQ(v.visited,
-           3);  // Root, Cube, Pyramid (children of Pyramid not visited)
+           4);  // Root, Cube, Pyramid, Axes (Pyramid's child not visited)
   // Visitor: modifying a transform changes the image but not the triangle count
   TestVisitor spin;
   spin.spin = "Cube";

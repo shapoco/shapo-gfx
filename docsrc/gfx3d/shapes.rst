@@ -26,6 +26,8 @@
    "``putCylinder(center, radius, height, segments = 16, heightDivs = 1, caps = true)``", "円柱", "側面: u = 周方向、v = 0 が上端、1 が下端。蓋は円盤と同じ"
    "``putCone(center, radiusBottom, radiusTop, height, segments = 16, heightDivs = 1, caps = true)``", "円錐台。``radiusTop = 0`` で円錐、両半径が同じなら円柱", "putCylinder と同じ"
    "``putTorus(center, majorRadius, minorRadius, majorSegments = 24, minorSegments = 12)``", "トーラス", "u = 大円周方向、v = 管の周方向"
+   "``putLine(a, b)``", "線分 (ライティングなし、1 px)", "なし"
+   "``putWireCube(center, size)``", "直方体の 12 辺 (線)", "なし"
 
 .. code-block:: cpp
 

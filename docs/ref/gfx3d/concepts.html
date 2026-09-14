@@ -7,7 +7,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>3D レンダラの概念 &mdash; ShapoGFX Reference Manual</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=9adbe090" />
 
@@ -15,8 +15,8 @@
       <script src="../_static/jquery.js?v=5d32c60e"></script>
       <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../_static/documentation_options.js?v=4eb6406d"></script>
-      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
       <script src="../_static/translations.js?v=4755f45a"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="索引" href="../genindex.html" />
@@ -130,11 +130,12 @@
 <li class="toctree-l2"><a class="reference internal" href="#id2">座標系</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#id3">ライティングとマテリアル</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#id4">半透明</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#id5">背景</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#id6">透視補正</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#id7">メモリ</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#id8">三角形が破棄される条件</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#id9">複数インスタンス</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id5">点と線</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id6">背景</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id7">透視補正</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id8">メモリ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id9">三角形が破棄される条件</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id10">複数インスタンス</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="graphics3d.html">Graphics3D API</a><ul>
@@ -310,13 +311,38 @@
 </ul>
 </section>
 <section id="id5">
-<h2>背景<a class="headerlink" href="#id5" title="Link to this heading"></a></h2>
+<h2>点と線<a class="headerlink" href="#id5" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">POINTS</span></code> / <code class="docutils literal notranslate"><span class="pre">LINES</span></code> / <code class="docutils literal notranslate"><span class="pre">LINE_STRIP</span></code> / <code class="docutils literal notranslate"><span class="pre">LINE_LOOP</span></code> は三角形と同じ <code class="docutils literal notranslate"><span class="pre">putPrimitive()</span></code> で描けます。</p>
+<ul class="simple">
+<li><p><strong>ライティングなし</strong>: 頂点色は <code class="docutils literal notranslate"><span class="pre">diffuse</span></code> (<code class="docutils literal notranslate"><span class="pre">VERTEX_COLOR</span></code> なら <code class="docutils literal notranslate"><span class="pre">Vertex::color</span></code> を乗算) です。
+テクスチャ、環境マップ、バックフェイスカリングは適用されません。</p></li>
+<li><p><strong>太さ</strong>: 線は 1 px 固定、点は <code class="docutils literal notranslate"><span class="pre">setPointSize()</span></code> の正方形 (既定 1 px) です。</p></li>
+<li><p><strong>被覆</strong>: 線は Bresenham と同じピクセルを塗ります (立った線は 1 行 1 px、寝た線は 1 列 1 px)。両端点は描かれます。</p></li>
+<li><p><strong>ニア平面</strong>: 線はビュー空間でクリップされ、カメラの後ろへ伸びる線分も手前の部分だけ描かれます。点は手前なら破棄。</p></li>
+<li><p><strong>隠線消去</strong>: 線と点も通常のスパンとして深度解決に参加するので、手前のポリゴンに隠れた部分は消えます。
+半透明 (<code class="docutils literal notranslate"><span class="pre">ALPHA</span></code> / <code class="docutils literal notranslate"><span class="pre">ADD</span></code>) も同様に合成されます。</p></li>
+<li><p><strong>深度バイアス</strong>: 塗りポリゴンの辺にワイヤーフレームを重ねると Z ファイトするので、
+<code class="docutils literal notranslate"><span class="pre">setDepthBias(-0.002f)</span></code> のように少し手前へずらしてから線を描きます (三角形にも効きます)。</p></li>
+<li><p>点と線も三角形バッファの容量 (<code class="docutils literal notranslate"><span class="pre">Stats::triCapacity</span></code>) を 1 個ずつ消費します。</p></li>
+</ul>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">g3d</span><span class="p">.</span><span class="n">setMaterial</span><span class="p">(</span><span class="n">matSolid</span><span class="p">);</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">putCube</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">setMaterial</span><span class="p">(</span><span class="n">matWhite</span><span class="p">);</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">setDepthBias</span><span class="p">(</span><span class="mf">-0.002f</span><span class="p">);</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">putWireCube</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span><span class="w">   </span><span class="c1">// 12 本の辺</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">setDepthBias</span><span class="p">(</span><span class="mf">0.0f</span><span class="p">);</span>
+<span class="n">g3d</span><span class="p">.</span><span class="n">putLine</span><span class="p">({</span><span class="mi">-2</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">});</span>
+</pre></div>
+</div>
+</section>
+<section id="id6">
+<h2>背景<a class="headerlink" href="#id6" title="Link to this heading"></a></h2>
 <p>線分で覆われないピクセルは <code class="docutils literal notranslate"><span class="pre">setClearColor()</span></code> の色で塗られます。
 <code class="docutils literal notranslate"><span class="pre">disableClear()</span></code> を呼ぶと塗らずに描画先の内容を残すので、<code class="docutils literal notranslate"><span class="pre">Graphics2D</span></code> で描いた背景の上に 3D を重ねられます
 (demo3d はこの方法で背景を描いています)。</p>
 </section>
-<section id="id6">
-<h2>透視補正<a class="headerlink" href="#id6" title="Link to this heading"></a></h2>
+<section id="id7">
+<h2>透視補正<a class="headerlink" href="#id7" title="Link to this heading"></a></h2>
 <p>テクスチャ座標の補間方法はコンパイル時オプション <code class="docutils literal notranslate"><span class="pre">SHAPOGFX3D_CORRECT_PERSPECTIVE</span></code> で選びます。</p>
 <table class="docutils align-default">
 <thead>
@@ -344,8 +370,8 @@
 スキャンラインに沿って奥行きが変わる面 (横に伸びる壁) では線分内部に歪みが残るので、
 分割するかレベル 2 を使ってください。</p>
 </section>
-<section id="id7">
-<h2>メモリ<a class="headerlink" href="#id7" title="Link to this heading"></a></h2>
+<section id="id8">
+<h2>メモリ<a class="headerlink" href="#id8" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">init()</span></code> に渡したアリーナは次のように分割されます (32bit ターゲットの目安)。</p>
 <table class="docutils align-default">
 <thead>
@@ -375,8 +401,8 @@
 あふれた三角形や線分はそのフレームでは破棄され、<code class="docutils literal notranslate"><span class="pre">getStats()</span></code> で容量・ピーク・破棄数を確認できます。
 2D API は描画先バッファ以外のメモリを必要としません。</p>
 </section>
-<section id="id8">
-<h2>三角形が破棄される条件<a class="headerlink" href="#id8" title="Link to this heading"></a></h2>
+<section id="id9">
+<h2>三角形が破棄される条件<a class="headerlink" href="#id9" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">putPrimitive()</span></code> の段階で次の三角形は破棄されます。</p>
 <ul class="simple">
 <li><p>ニア平面をまたぐ、または手前にある (クリップは行いません)</p></li>
@@ -386,8 +412,8 @@
 <li><p>添字が頂点バッファの範囲外 (<code class="docutils literal notranslate"><span class="pre">Stats::badIndices</span></code>)。この検査により、出自の不確かなメッシュデータでも安全に描けます。</p></li>
 </ul>
 </section>
-<section id="id9">
-<h2>複数インスタンス<a class="headerlink" href="#id9" title="Link to this heading"></a></h2>
+<section id="id10">
+<h2>複数インスタンス<a class="headerlink" href="#id10" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">Graphics3D</span></code> は状態を全てオブジェクト内に持つので、アリーナを分ければ複数を同時に使えます
 (例: 画面用と、小さなオフスクリーン用)。ムーブ可能、コピー不可です。</p>
 </section>

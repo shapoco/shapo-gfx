@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate test/data/test_model.glb, a small glTF exercising gltf2cpp:
-an indexed textured cube with vertex colors, a pyramid without normals and a
-three-level node hierarchy with TRS transforms. Regenerate the header with:
+an indexed textured cube with vertex colors, a pyramid without normals, a LINES
+primitive with vertex colors and a three-level node hierarchy with TRS transforms. Regenerate the header with:
 
   python3 test/tools/make_test_gltf.py
   bin/gltf2cpp test/data/test_model.glb test/data/test_model.hpp
@@ -47,6 +47,15 @@ def pyramid():
     # Sides and base, counter-clockwise seen from outside
     idx = np.array([0, 4, 1, 1, 4, 2, 2, 4, 3, 3, 4, 0, 0, 1, 2, 0, 2, 3], np.uint16)
     return pos, idx
+
+
+def axes():
+    # Three colored line segments from the origin (LINES mode), vertex colors only
+    pos = np.array([[0, 0, 0], [1, 0, 0], [0, 0, 0], [0, 1, 0], [0, 0, 0], [0, 0, 1]], np.float32)
+    col = np.array([[255, 0, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255], [0, 255, 0, 255],
+                    [0, 0, 255, 255], [0, 0, 255, 255]], np.uint8)
+    idx = np.array([0, 1, 2, 3, 4, 5], np.uint16)
+    return pos, col, idx
 
 
 def checker_png():
@@ -96,6 +105,10 @@ def main():
     ppos, pidx = pyramid()
     a_ppos = add_accessor(ppos, pygltflib.FLOAT, "VEC3", target=pygltflib.ARRAY_BUFFER)
     a_pidx = add_accessor(pidx, pygltflib.UNSIGNED_SHORT, "SCALAR", target=pygltflib.ELEMENT_ARRAY_BUFFER)
+    apos, acol, aidx = axes()
+    a_apos = add_accessor(apos, pygltflib.FLOAT, "VEC3", target=pygltflib.ARRAY_BUFFER)
+    a_acol = add_accessor(acol, pygltflib.UNSIGNED_BYTE, "VEC4", normalized=True, target=pygltflib.ARRAY_BUFFER)
+    a_aidx = add_accessor(aidx, pygltflib.UNSIGNED_SHORT, "SCALAR", target=pygltflib.ELEMENT_ARRAY_BUFFER)
     img_view = add_view(checker_png())
 
     gltf = pygltflib.GLTF2(
@@ -103,10 +116,11 @@ def main():
         scene=0,
         scenes=[pygltflib.Scene(name="Scene", nodes=[0])],
         nodes=[
-            pygltflib.Node(name="Root", translation=[0.0, 0.2, 0.0], children=[1, 2]),
+            pygltflib.Node(name="Root", translation=[0.0, 0.2, 0.0], children=[1, 2, 4]),
             pygltflib.Node(name="Cube", mesh=0, rotation=[0.0, 0.38268343, 0.0, 0.92387953], translation=[-0.8, 0.0, 0.0]),
             pygltflib.Node(name="Pyramid", mesh=1, scale=[1.5, 1.0, 1.5], translation=[0.8, -0.4, 0.0], children=[3]),
             pygltflib.Node(name="Tip Pyramid", mesh=1, translation=[0.0, 0.9, 0.0], scale=[0.4, 0.4, 0.4]),
+            pygltflib.Node(name="Axes", mesh=2, scale=[1.5, 1.5, 1.5]),
         ],
         meshes=[
             pygltflib.Mesh(name="CubeMesh", primitives=[pygltflib.Primitive(
@@ -114,6 +128,8 @@ def main():
                 indices=a_idx, material=0)]),
             pygltflib.Mesh(name="PyramidMesh", primitives=[pygltflib.Primitive(
                 attributes=pygltflib.Attributes(POSITION=a_ppos), indices=a_pidx, material=1)]),
+            pygltflib.Mesh(name="AxesMesh", primitives=[pygltflib.Primitive(
+                attributes=pygltflib.Attributes(POSITION=a_apos, COLOR_0=a_acol), indices=a_aidx, mode=1)]),
         ],
         materials=[
             pygltflib.Material(name="Checker", pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(

@@ -56,6 +56,10 @@ constexpr uint8_t FLAT =
     1u << 0;  // all three vertex colors are equal (no color interpolation)
 constexpr uint8_t TEX = 1u << 1;     // samples a texture
 constexpr uint8_t OPAQUE = 1u << 2;  // opaque (BlendMode::NONE)
+constexpr uint8_t LINE = 1u
+                         << 3;  // line segment v[0] -> v[1] (see makeLineSpan)
+constexpr uint8_t POINT =
+    1u << 4;  // point: v[0].sx/sy = top-left pixel, invDy[0] = size
 }  // namespace TriFlags
 
 struct Triangle {
@@ -103,6 +107,12 @@ struct CachedVertex {
   float viewZ;
   uint16_t tag;  // vertex index (NONE = empty)
   bool ok;  // false: in front of the near plane (the whole triangle is dropped)
+};
+
+// Vertex of a point or line: view-space position and unlit color (0..255)
+struct UnlitVertex {
+  vec3f view;
+  float r, g, b;
 };
 
 static constexpr int STACK_DEPTH = 16;
@@ -396,6 +406,9 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   t.v[0] = a.sv;
   t.v[1] = b.sv;
   t.v[2] = c.sv;
+  if (depthBias_ != 0.0f) {
+    for (int i = 0; i < 3; i++) t.v[i].zNdc += depthBias_;
+  }
 
   // Back-face culling (screen y points down, so front-facing = negative area)
   float area2 = (t.v[1].sx - t.v[0].sx) * (t.v[2].sy - t.v[0].sy) -
@@ -466,6 +479,152 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   triCount_++;
 }
 
+// ---------------------------------------------------------------------------
+// Points and lines
+//
+// They are unlit (diffuse x vertex color), never culled and clipped against
+// the near plane. Both are stored in the triangle buffer and become spans in
+// makeSpan(), so they are depth-resolved against everything else.
+
+void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
+                             UnlitVertex &out) const {
+  out.view = cur_.transformPoint(in.position);
+  float r = mat->diffuse.r, g = mat->diffuse.g, b = mat->diffuse.b;
+  if (mat->flags & MaterialFlags::VERTEX_COLOR) {
+    r *= gfx2d::colorR(in.color) * (1.0f / 255.0f);
+    g *= gfx2d::colorG(in.color) * (1.0f / 255.0f);
+    b *= gfx2d::colorB(in.color) * (1.0f / 255.0f);
+  }
+  if (mat->blendMode == BlendMode::ADD) {
+    float a = clamp01(mat->diffuse.a);
+    r *= a, g *= a, b *= a;
+  }
+  out.r = clamp01(r) * 255.0f;
+  out.g = clamp01(g) * 255.0f;
+  out.b = clamp01(b) * 255.0f;
+}
+
+// Project a view-space vertex; false when behind the camera
+static bool projectUnlit(const mat4f &proj, int16_t screenW, int16_t screenH,
+                         const UnlitVertex &in, ShadedVertex &sv) {
+  float w;
+  vec3f clip = proj.transformPoint4(in.view, w);
+  if (w <= 0.0f) return false;
+  float invW = 1.0f / w;
+  sv.sx = (clip.x * invW * 0.5f + 0.5f) * screenW;
+  sv.sy = (0.5f - clip.y * invW * 0.5f) * screenH;
+  sv.zNdc = clip.z * invW;
+  sv.u = sv.v = 0.0f;
+  sv.r = in.r, sv.g = in.g, sv.b = in.b;
+  return true;
+}
+
+static inline uint8_t unlitRasterFn(const Material *mat, bool flat) {
+  return (uint8_t)((int)TexFmt::NONE * RASTER_PER_TEX +
+                   (int)mat->blendMode * 2 + (flat ? 1 : 0));
+}
+
+void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
+  // Clip against the near plane (visible: z <= -zNear)
+  const float zn = -zNear_;
+  const bool aIn = a.view.z <= zn, bIn = b.view.z <= zn;
+  if (!aIn && !bIn) return;
+  if (aIn != bIn) {
+    float tt = (zn - a.view.z) / (b.view.z - a.view.z);
+    UnlitVertex c;
+    c.view = lerp(a.view, b.view, tt);
+    c.r = a.r + (b.r - a.r) * tt;
+    c.g = a.g + (b.g - a.g) * tt;
+    c.b = a.b + (b.b - a.b) * tt;
+    (aIn ? b : a) = c;
+  }
+  ShadedVertex sa, sb;
+  if (!projectUnlit(proj_, screenW_, screenH_, a, sa)) return;
+  if (!projectUnlit(proj_, screenW_, screenH_, b, sb)) return;
+  sa.zNdc += depthBias_;
+  sb.zNdc += depthBias_;
+
+  // Rows containing the end points; nothing to do when fully off screen
+  int yMin = (int)std::floor(std::min(sa.sy, sb.sy));
+  int yMax = (int)std::floor(std::max(sa.sy, sb.sy));
+  yMin = std::max(yMin, 0);
+  yMax = std::min(yMax, (int)screenH_ - 1);
+  if (yMin > yMax) return;
+  if (std::max(sa.sx, sb.sx) < 0.0f ||
+      std::min(sa.sx, sb.sx) >= (float)screenW_)
+    return;
+
+  if (triCount_ >= triCapacity_) {
+    triDropped_++;
+    return;
+  }
+  Triangle &t = tris_[triCount_];
+  t.v[0] = sa;
+  t.v[1] = sb;
+  t.v[2] = sb;
+  const float dx = sb.sx - sa.sx, dy = sb.sy - sa.sy;
+  t.invDy[0] = (dx != 0.0f) ? 1.0f / dx : 0.0f;  // 1/dx
+  t.invDy[1] = (dy != 0.0f) ? 1.0f / dy : 0.0f;  // 1/dy
+  t.invDy[2] = 0.0f;
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
+  t.invW[0] = t.invW[1] = t.invW[2] = 1.0f;
+#endif
+  const bool flat = (sa.r == sb.r && sa.g == sb.g && sa.b == sb.b);
+  uint8_t flags = TriFlags::LINE;
+  if (flat) flags |= TriFlags::FLAT;
+  if (mat->blendMode == BlendMode::NONE) flags |= TriFlags::OPAQUE;
+  t.mat = mat;
+  t.depth = (a.view.z + b.view.z) * 0.5f;
+  t.yMin = (int16_t)yMin;
+  t.yMax = (int16_t)yMax;
+  t.flags = flags;
+  t.alpha64 = (uint8_t)((mat->blendMode == BlendMode::NONE)
+                            ? 64
+                            : (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f));
+  t.rasterFn = unlitRasterFn(mat, flat);
+  triCount_++;
+}
+
+void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
+  if (a.view.z > -zNear_) return;
+  ShadedVertex sv;
+  if (!projectUnlit(proj_, screenW_, screenH_, a, sv)) return;
+  sv.zNdc += depthBias_;
+  const int size = pointSize_;
+  // Square of `size` pixels centered on the point
+  const int x0 = (int)std::floor(sv.sx - size * 0.5f + 0.5f);
+  const int y0 = (int)std::floor(sv.sy - size * 0.5f + 0.5f);
+  if (x0 + size <= 0 || x0 >= (int)screenW_) return;
+  int yMin = std::max(y0, 0), yMax = std::min(y0 + size - 1, (int)screenH_ - 1);
+  if (yMin > yMax) return;
+
+  if (triCount_ >= triCapacity_) {
+    triDropped_++;
+    return;
+  }
+  Triangle &t = tris_[triCount_];
+  sv.sx = (float)x0;
+  sv.sy = (float)y0;
+  t.v[0] = t.v[1] = t.v[2] = sv;
+  t.invDy[0] = (float)size;
+  t.invDy[1] = t.invDy[2] = 0.0f;
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
+  t.invW[0] = t.invW[1] = t.invW[2] = 1.0f;
+#endif
+  uint8_t flags = TriFlags::POINT | TriFlags::FLAT;
+  if (mat->blendMode == BlendMode::NONE) flags |= TriFlags::OPAQUE;
+  t.mat = mat;
+  t.depth = a.view.z;
+  t.yMin = (int16_t)yMin;
+  t.yMax = (int16_t)yMax;
+  t.flags = flags;
+  t.alpha64 = (uint8_t)((mat->blendMode == BlendMode::NONE)
+                            ? 64
+                            : (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f));
+  t.rasterFn = unlitRasterFn(mat, true);
+  triCount_++;
+}
+
 void Graphics3D::putPrimitive(const Primitive &prim) {
   if (!tris_) return;
   const Material *mat = prim.material ? prim.material : curMat_;
@@ -518,6 +677,41 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
         emitTriangle(fetch(idx[0]), fetch(idx[i - 1]), fetch(idx[i]), mat, tex);
       }
       break;
+    case PrimitiveType::POINTS:
+    case PrimitiveType::LINES:
+    case PrimitiveType::LINE_STRIP:
+    case PrimitiveType::LINE_LOOP: {
+      // Unlit vertices are cheap, so they are computed on the fly (no cache)
+      auto fetchUnlit = [&](uint16_t vi, UnlitVertex &out) -> bool {
+        if (vi >= vcount) {
+          badIndices_++;
+          return false;
+        }
+        unlitVertex(verts[vi], mat, out);
+        return true;
+      };
+      UnlitVertex a, b;
+      if (prim.type == PrimitiveType::POINTS) {
+        for (int i = 0; i < n; i++) {
+          if (fetchUnlit(idx[i], a)) emitPoint(a, mat);
+        }
+      } else if (prim.type == PrimitiveType::LINES) {
+        for (int i = 0; i + 1 < n; i += 2) {
+          if (fetchUnlit(idx[i], a) && fetchUnlit(idx[i + 1], b))
+            emitLine(a, b, mat);
+        }
+      } else {
+        for (int i = 1; i < n; i++) {
+          if (fetchUnlit(idx[i - 1], a) && fetchUnlit(idx[i], b))
+            emitLine(a, b, mat);
+        }
+        if (prim.type == PrimitiveType::LINE_LOOP && n > 2) {
+          if (fetchUnlit(idx[n - 1], a) && fetchUnlit(idx[0], b))
+            emitLine(a, b, mat);
+        }
+      }
+      break;
+    }
   }
 }
 
@@ -786,7 +980,106 @@ void Graphics3D::clipTranslucent(const Span &frag) {
 // Build a span from the intersection of scanline yc with triangle t.
 // Returns false if there is no intersection or it lies outside the region [rx0,
 // rx1).
+// Fill the span's attributes for pixels [x0, x1) with values at parameter
+// tStart (at the center of x0) and per-pixel parameter step tStep along the
+// line a -> b. Texture coordinates are unused (points and lines are
+// untextured).
+static void fillUnlitSpan(const ShadedVertex &a, const ShadedVertex &b,
+                          float tStart, float tStep, int x0, int x1,
+                          const Triangle &t, Span &out) {
+  auto lin = [&](float a0, float a1, float &start, float &delta) {
+    start = a0 + (a1 - a0) * tStart;
+    delta = (a1 - a0) * tStep;
+  };
+  auto linColor = [&](float a0, float a1, int32_t &start, int32_t &delta) {
+    float sf, df;
+    lin(std::min(a0, 255.0f), std::min(a1, 255.0f), sf, df);
+    start = (int32_t)(std::max(sf, 0.0f) * FIX_ONE);
+    delta = (int32_t)(df * FIX_ONE);
+  };
+  out.x0 = x0;
+  out.x1 = x1;
+  lin(a.zNdc, b.zNdc, out.z0, out.dz);
+  linColor(a.r, b.r, out.r, out.dr);
+  linColor(a.g, b.g, out.g, out.dg);
+  linColor(a.b, b.b, out.b, out.db);
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+  out.uw = out.vw = out.duw = out.dvw = 0.0f;
+  out.iw = 1.0f;
+  out.diw = 0.0f;
+#else
+  out.u = out.v = out.du = out.dv = 0;
+#endif
+  out.tri = &t;
+  out.next = nullptr;
+}
+
+// Line segment v[0] -> v[1] on pixel row yi: one pixel per row for steep
+// lines, one pixel per column (a horizontal run) for shallow lines, so the
+// coverage matches a Bresenham line. Both end points are drawn.
+static bool makeLineSpan(const Triangle &t, int yi, int rx0, int rx1,
+                         Span &out) {
+  const ShadedVertex &a = t.v[0], &b = t.v[1];
+  const float dx = b.sx - a.sx, dy = b.sy - a.sy;
+  const float invDx = t.invDy[0], invDy = t.invDy[1];
+  int c0, c1;
+  float tStart, tStep;
+  if (std::fabs(dy) >= std::fabs(dx)) {
+    // Steep: the pixel at the row center
+    float tt = (dy != 0.0f) ? clamp01(((float)yi + 0.5f - a.sy) * invDy) : 0.0f;
+    c0 = (int)std::floor(a.sx + dx * tt);
+    c1 = c0 + 1;
+    if (c0 < rx0 || c0 >= rx1) return false;
+    tStart = tt;
+    tStep = 0.0f;
+  } else {
+    // Shallow: columns whose center's y falls into [yi, yi + 1)
+    const int ca = (int)std::floor(a.sx), cb = (int)std::floor(b.sx);
+    const int cMin = std::min(ca, cb), cMax = std::max(ca, cb);
+    if (dy == 0.0f) {
+      c0 = cMin;
+      c1 = cMax + 1;
+    } else {
+      float xA = a.sx + dx * (((float)yi - a.sy) * invDy);
+      float xB = a.sx + dx * (((float)yi + 1.0f - a.sy) * invDy);
+      if (xA > xB) std::swap(xA, xB);
+      c0 = (int)std::ceil(xA - 0.5f);
+      c1 = (int)std::ceil(xB - 0.5f);
+      // The rows of the end points always include the end point pixels
+      if (yi == (int)std::floor(a.sy)) {
+        c0 = std::min(c0, ca);
+        c1 = std::max(c1, ca + 1);
+      }
+      if (yi == (int)std::floor(b.sy)) {
+        c0 = std::min(c0, cb);
+        c1 = std::max(c1, cb + 1);
+      }
+      c0 = std::max(c0, cMin);
+      c1 = std::min(c1, cMax + 1);
+    }
+    c0 = std::max(c0, rx0);
+    c1 = std::min(c1, rx1);
+    if (c0 >= c1) return false;
+    tStart = clamp01(((float)c0 + 0.5f - a.sx) * invDx);
+    tStep = invDx;
+  }
+  fillUnlitSpan(a, b, tStart, tStep, c0, c1, t, out);
+  return true;
+}
+
+// Point: a square with its top-left pixel at (v[0].sx, v[0].sy), size invDy[0]
+static bool makePointSpan(const Triangle &t, int rx0, int rx1, Span &out) {
+  const int size = (int)t.invDy[0];
+  int c0 = std::max((int)t.v[0].sx, rx0);
+  int c1 = std::min((int)t.v[0].sx + size, rx1);
+  if (c0 >= c1) return false;
+  fillUnlitSpan(t.v[0], t.v[0], 0.0f, 0.0f, c0, c1, t, out);
+  return true;
+}
+
 static bool makeSpan(const Triangle &t, float yc, int rx0, int rx1, Span &out) {
+  if (t.flags & TriFlags::LINE) return makeLineSpan(t, (int)yc, rx0, rx1, out);
+  if (t.flags & TriFlags::POINT) return makePointSpan(t, rx0, rx1, out);
   struct EndPt {
     float x, z, u, v, r, g, b;
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1

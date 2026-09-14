@@ -9,7 +9,7 @@ The output is a set of `static const` objects (textures, materials, vertex and
 index arrays, meshes, nodes, scenes) that live in flash and are drawn with
 Graphics3D::putScene() / putNode() / putMesh(). Nothing is allocated at run time.
 
-Supported: TRIANGLES / TRIANGLE_STRIP / TRIANGLE_FAN primitives with POSITION,
+Supported: triangle, line and point primitives (all glTF modes) with POSITION,
 NORMAL (generated when missing), TEXCOORD_0 and COLOR_0; pbrMetallicRoughness
 baseColorFactor / baseColorTexture; alphaMode; doubleSided; node TRS or matrix
 transforms; scenes. Indices must fit in 16 bits.
@@ -38,7 +38,8 @@ COMPONENT_FMT = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f
 COMPONENT_SIZE = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}
 COMPONENT_MAX = {5120: 127.0, 5121: 255.0, 5122: 32767.0, 5123: 65535.0}
 TYPE_COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT2": 4, "MAT3": 9, "MAT4": 16}
-MODES = {4: "TRIANGLES", 5: "TRIANGLE_STRIP", 6: "TRIANGLE_FAN"}
+MODES = {0: "POINTS", 1: "LINES", 2: "LINE_LOOP", 3: "LINE_STRIP", 4: "TRIANGLES", 5: "TRIANGLE_STRIP", 6: "TRIANGLE_FAN"}
+TRIANGLE_MODES = (4, 5, 6)
 
 
 def warn(msg):
@@ -281,8 +282,10 @@ class Generator:
                 continue
             if attrs.NORMAL is not None:
                 nrm, _ = read_accessor(self.gltf, attrs.NORMAL)
-            else:
+            elif mode in TRIANGLE_MODES:
                 nrm = compute_normals(pos, indices, mode)
+            else:
+                nrm = np.zeros_like(pos)  # points and lines are unlit
             uv = None
             if attrs.TEXCOORD_0 is not None:
                 uv, _ = read_accessor(self.gltf, attrs.TEXCOORD_0)

@@ -351,8 +351,173 @@ static void testVertexColorAndIndices() {
   }
 }
 
+// Points and lines: Bresenham-like coverage, end points, hidden-line removal,
+// point size, near-plane clipping, depth bias
+static void testPointsAndLines() {
+  static const g3::Material M_LINE = {
+      {1, 1, 1, 1}, {1, 1, 1, 1}, nullptr, g3::BlendMode::NONE, 0};
+  static const g3::Material M_SOLID = {{0.5f, 0.5f, 0.5f, 1},
+                                       {0.5f, 0.5f, 0.5f, 1},
+                                       nullptr,
+                                       g3::BlendMode::NONE,
+                                       0};
+  g3::Graphics3D r;
+  r.init(W, H, arena, sizeof(arena));
+  r.setClearColor({0, 0, 0, 1});
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  auto render = [&]() {
+    r.beginRender();
+    r.render(0, 0, W, H, s);
+    r.endRender();
+  };
+  auto countWhite = [&]() {
+    int n = 0;
+    for (int y = 0; y < H; y++)
+      for (int x = 0; x < W; x++)
+        if (pixelAt(s, x, y) == g2::Colors::WHITE) n++;
+    return n;
+  };
+  // Orthographic view: x in [-1, 1] spans the width, y scaled by the aspect
+  // ratio
+  const float ay = (float)H / W;
+  auto ortho = [&]() {
+    r.setOrthographicProjection(-1, 1, -ay, ay, 0.1f, 10);
+    r.beginScene();
+    r.translate(0, 0, -2);
+    r.setMaterial(M_LINE);
+  };
+  auto sx = [&](float x) { return (int)((x * 0.5f + 0.5f) * W); };
+  auto sy = [&](float y) { return (int)((0.5f - y / ay * 0.5f) * H); };
+
+  // Shallow line across the screen: every column has exactly one white pixel
+  ortho();
+  r.putLine({-0.9f, -0.2f, 0}, {0.9f, 0.3f, 0});
+  r.endScene();
+  render();
+  int badCols = 0, cols = 0;
+  for (int x = 0; x < W; x++) {
+    int n = 0;
+    for (int y = 0; y < H; y++)
+      if (pixelAt(s, x, y) == g2::Colors::WHITE) n++;
+    if (n == 1)
+      cols++;
+    else if (n > 1)
+      badCols++;
+  }
+  CHECK(badCols <= 2);  // the end point rows may add one pixel each
+  CHECK(cols >= (int)(W * 0.9f) - 2);
+  CHECK_EQ(pixelAt(s, sx(-0.9f), sy(-0.2f)),
+           g2::Colors::WHITE);  // end points drawn
+  CHECK_EQ(pixelAt(s, sx(0.9f), sy(0.3f)), g2::Colors::WHITE);
+
+  // Steep line: exactly one pixel per row over its extent
+  ortho();
+  r.putLine({-0.1f, -0.5f, 0}, {0.2f, 0.5f, 0});
+  r.endScene();
+  render();
+  int rows = 0, badRows = 0;
+  for (int y = 0; y < H; y++) {
+    int n = 0;
+    for (int x = 0; x < W; x++)
+      if (pixelAt(s, x, y) == g2::Colors::WHITE) n++;
+    if (n == 1)
+      rows++;
+    else if (n > 1)
+      badRows++;
+  }
+  CHECK_EQ(badRows, 0);
+  CHECK(rows > H / 2);
+
+  // LINE_LOOP closes the loop: a rectangle has pixels on all four edges
+  ortho();
+  {
+    static const g3::Vertex v[4] = {
+        {{-0.5f, -0.3f, 0}, {0, 1, 0}, {0, 0}, g3::VERTEX_WHITE},
+        {{0.5f, -0.3f, 0}, {0, 1, 0}, {0, 0}, g3::VERTEX_WHITE},
+        {{0.5f, 0.3f, 0}, {0, 1, 0}, {0, 0}, g3::VERTEX_WHITE},
+        {{-0.5f, 0.3f, 0}, {0, 1, 0}, {0, 0}, g3::VERTEX_WHITE}};
+    static const g3::VertexBuffer vb = {4, v};
+    static const uint16_t idx[4] = {0, 1, 2, 3};
+    g3::Primitive loop = {g3::PrimitiveType::LINE_LOOP, &vb, 4, idx, nullptr};
+    r.putPrimitive(loop);
+  }
+  r.endScene();
+  render();
+  CHECK(countWhite() > W / 2);
+  CHECK_EQ(pixelAt(s, W / 2, sy(0.3f)), g2::Colors::WHITE);   // top edge
+  CHECK_EQ(pixelAt(s, W / 2, sy(-0.3f)), g2::Colors::WHITE);  // bottom edge
+  CHECK_EQ(pixelAt(s, sx(-0.5f), H / 2), g2::Colors::WHITE);  // left edge
+  CHECK_EQ(pixelAt(s, sx(0.5f), H / 2), g2::Colors::WHITE);   // right edge
+
+  // Hidden-line removal: a cube in front hides the middle of the line
+  ortho();
+  r.putLine({-0.9f, 0, -1}, {0.9f, 0, -1});
+  r.setMaterial(M_SOLID);
+  r.putCube({0, 0, 0}, {0.6f, 0.6f, 0.6f});
+  r.endScene();
+  render();
+  CHECK(pixelAt(s, W / 2, H / 2) != g2::Colors::WHITE);  // covered by the cube
+  CHECK_EQ(pixelAt(s, W / 10, H / 2), g2::Colors::WHITE);  // visible part
+
+  // Points: size 1 draws one pixel, size 3 draws nine
+  {
+    static const g3::Vertex v[1] = {
+        {{0.11f, 0.07f, 0}, {0, 1, 0}, {0, 0}, g3::VERTEX_WHITE}};
+    static const g3::VertexBuffer vb = {1, v};
+    static const uint16_t idx[1] = {0};
+    g3::Primitive pts = {g3::PrimitiveType::POINTS, &vb, 1, idx, nullptr};
+    ortho();
+    r.setPointSize(1);
+    r.putPrimitive(pts);
+    r.endScene();
+    render();
+    CHECK_EQ(countWhite(), 1);
+    ortho();
+    r.setPointSize(3);
+    r.putPrimitive(pts);
+    r.endScene();
+    render();
+    CHECK_EQ(countWhite(), 9);
+    r.setPointSize(1);
+  }
+
+  // Near-plane clipping: a line ending behind the camera is drawn partially
+  ortho();
+  r.putLine({-0.5f, 0, -1},
+            {0.5f, 0, 5});  // second end is behind the camera (view z > -zNear)
+  r.endScene();
+  render();
+  CHECK(countWhite() >= 1);
+  CHECK_EQ(r.getStats().triDropped, 0);
+
+  // Depth bias: a line coplanar with a quad is visible with a negative bias,
+  // hidden with a positive one
+  for (int pass = 0; pass < 2; pass++) {
+    r.setOrthographicProjection(-1, 1, -ay, ay, 0.1f, 10);
+    r.beginScene();
+    r.translate(0, 0, -2);
+    r.rotate(1.5707963f, 1, 0, 0);  // the plane's +Y now points at the camera
+    r.setMaterial(M_SOLID);
+    r.putPlane({0, 0, 0}, 1.6f, 1.0f);
+    r.setMaterial(M_LINE);
+    r.setDepthBias(pass == 0 ? -0.01f : 0.01f);
+    r.putLine({-0.7f, 0, 0.3f}, {0.7f, 0, -0.3f});  // in the plane (y = 0)
+    r.setDepthBias(0.0f);
+    r.endScene();
+    render();
+    int n = countWhite();
+    if (pass == 0) {
+      CHECK(n > W / 2);
+    } else {
+      CHECK_EQ(n, 0);
+    }
+  }
+  CHECK_EQ(r.getStats().badIndices, 0);
+}
+
 void testGfx3D() {
   genTextures();
+  testPointsAndLines();
   testShapeWinding();
   testVertexColorAndIndices();
   testBandsAndClear();

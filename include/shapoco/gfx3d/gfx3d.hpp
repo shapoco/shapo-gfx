@@ -53,10 +53,18 @@ struct Material {
   uint32_t flags;  // combination of MaterialFlags
 };
 
+// Triangles are lit, textured and back-face culled. Points and lines are
+// unlit (diffuse x vertex color), 1 pixel wide (points: pointSize()), never
+// culled, and clipped against the near plane. They take part in the depth
+// resolution like any other span, so lines hidden by nearer surfaces disappear.
 enum class PrimitiveType : uint8_t {
   TRIANGLES,
   TRIANGLE_STRIP,
   TRIANGLE_FAN,
+  POINTS,
+  LINES,       // pairs of indices
+  LINE_STRIP,  // consecutive indices
+  LINE_LOOP,   // like LINE_STRIP, closed back to the first vertex
 };
 
 struct Primitive {
@@ -129,6 +137,7 @@ struct Triangle;
 struct Span;
 struct StackEntry;
 struct CachedVertex;
+struct UnlitVertex;
 }  // namespace detail
 
 // ---------------------------------------------------------------------------
@@ -175,6 +184,17 @@ class Graphics3D {
 
   void setMaterial(const Material &mat);     // set the current material
   void putPrimitive(const Primitive &prim);  // add a primitive to the scene
+
+  // Size of POINTS in pixels (a square, default 1, at most 64)
+  void setPointSize(int pixels) {
+    pointSize_ = pixels < 1 ? 1 : (pixels > 64 ? 64 : pixels);
+  }
+  int pointSize() const { return pointSize_; }
+  // Depth bias added to the NDC depth of every primitive emitted afterwards
+  // (NDC range -1..1; negative brings it nearer). Use a small negative value to
+  // draw lines on top of coplanar polygons without z-fighting.
+  void setDepthBias(float bias) { depthBias_ = bias; }
+  float depthBias() const { return depthBias_; }
   // --- Basic shapes
   // ----------------------------------------------------------- All shapes are
   // centered at `center`, have their axis along +Y, outward normals and
@@ -208,6 +228,9 @@ class Graphics3D {
   // Torus around +Y; u = around the ring, v = around the tube
   void putTorus(const vec3f &center, float majorRadius, float minorRadius,
                 int majorSegments = 24, int minorSegments = 12);
+  // Line segment (unlit, 1 pixel wide) and box outline (12 edges)
+  void putLine(const vec3f &a, const vec3f &b);
+  void putWireCube(const vec3f &center, const vec3f &size);
 
   // --- Static scenes
   // ------------------------------------------------------------
@@ -306,12 +329,20 @@ class Graphics3D {
   int badIndices_ = 0;
   int nodesDropped_ = 0;
 
+  int pointSize_ = 1;
+  float depthBias_ = 0.0f;
+
   void shadeVertex(const Vertex &in, const Material *mat, const Texture *tex,
                    detail::CachedVertex &out) const;
   void emitTriangle(const detail::CachedVertex &a,
                     const detail::CachedVertex &b,
                     const detail::CachedVertex &c, const Material *mat,
                     const Texture *tex);
+  void unlitVertex(const Vertex &in, const Material *mat,
+                   detail::UnlitVertex &out) const;
+  void emitLine(detail::UnlitVertex a, detail::UnlitVertex b,
+                const Material *mat);
+  void emitPoint(const detail::UnlitVertex &a, const Material *mat);
 
   detail::Span *allocSpan();
   detail::Span **cutSpan(detail::Span **pp, int ox0, int ox1);

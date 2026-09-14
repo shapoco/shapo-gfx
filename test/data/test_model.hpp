@@ -118,6 +118,30 @@ static const g3::Primitive mesh1Prims[] = {
 };
 static const g3::Mesh mesh1 = {mesh1Prims, 1};
 
+// mesh 2 primitive 0: 6 vertices, 6 indices
+static const g3::Vertex mesh2Prim0Vertices[] = {
+  {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, 0xFFFF0000u},
+  {{1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, 0xFFFF0000u},
+  {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, 0xFF00FF00u},
+  {{0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, 0xFF00FF00u},
+  {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, 0xFF0000FFu},
+  {{0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, 0xFF0000FFu},
+};
+static const g3::VertexBuffer mesh2Prim0Vb = {6, mesh2Prim0Vertices};
+static const uint16_t mesh2Prim0Indices[] = {
+  0, 1, 2, 3, 4, 5,
+};
+
+static const g3::Material matDefaultVc = {
+  {1.0f, 1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, nullptr,
+  g3::BlendMode::NONE, g3::MaterialFlags::VERTEX_COLOR,
+};
+
+static const g3::Primitive mesh2Prims[] = {
+  {g3::PrimitiveType::LINES, &mesh2Prim0Vb, 6, mesh2Prim0Indices, &matDefaultVc},
+};
+static const g3::Mesh mesh2 = {mesh2Prims, 1};
+
 static const g3::Node node_Cube = {
   "Cube",
   {{0.707107f, 0.0f, -0.707107f, 0.0f,
@@ -149,7 +173,17 @@ static const g3::Node node_Pyramid = {
   node_PyramidChildren, 1,
 };
 
-static const g3::Node *const node_RootChildren[] = {&node_Cube, &node_Pyramid};
+static const g3::Node node_Axes = {
+  "Axes",
+  {{1.5f, 0.0f, 0.0f, 0.0f,
+    0.0f, 1.5f, 0.0f, 0.0f,
+    0.0f, 0.0f, 1.5f, 0.0f,
+    0.0f, 0.0f, 0.0f, 1.0f}},
+  &mesh2,
+  nullptr, 0,
+};
+
+static const g3::Node *const node_RootChildren[] = {&node_Cube, &node_Pyramid, &node_Axes};
 static const g3::Node node_Root = {
   "Root",
   {{1.0f, 0.0f, 0.0f, 0.0f,
@@ -157,7 +191,7 @@ static const g3::Node node_Root = {
     0.0f, 0.0f, 1.0f, 0.0f,
     0.0f, 0.2f, 0.0f, 1.0f}},
   nullptr,
-  node_RootChildren, 2,
+  node_RootChildren, 3,
 };
 
 static const g3::Node *const scene0Roots[] = {&node_Root};
@@ -165,7 +199,7 @@ static const g3::Scene scene0 = {scene0Roots, 1};
 
 static const g3::Scene &scene = scene0;  // default scene
 
-// 29 vertices, 54 indices, 1 textures, about 1664 bytes
+// 35 vertices, 60 indices, 1 textures, about 1892 bytes
 
 }  // namespace test_model
 

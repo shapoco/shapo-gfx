@@ -29,7 +29,7 @@ gltf2cpp: glTF モデルを C++ コードに変換する
 .. csv-table::
    :header: "項目", "扱い"
 
-   "プリミティブモード", "TRIANGLES / TRIANGLE_STRIP / TRIANGLE_FAN。POINTS / LINES は警告して無視"
+   "プリミティブモード", "全モード対応。POINTS / LINES / LINE_LOOP / LINE_STRIP は ``PrimitiveType`` の同名の値になる (ライティングなし、法線は生成しない)"
    "POSITION", "必須"
    "NORMAL", "なければ面法線を頂点に累積して生成"
    "TEXCOORD_0", "UV (それ以外の UV セットは無視)"

@@ -62,7 +62,14 @@ Primitive
 
 .. code-block:: cpp
 
-   enum class PrimitiveType : uint8_t { TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN };
+   enum class PrimitiveType : uint8_t {
+     TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN,   // ライティング・テクスチャ・カリングあり
+     POINTS, LINES, LINE_STRIP, LINE_LOOP       // ライティングなし、1 px (点は pointSize)、カリングなし
+   };
+
+点と線については :doc:`concepts` の「点と線」を参照してください。
+
+.. code-block:: cpp
 
    struct Primitive {
      PrimitiveType type;
@@ -119,6 +126,8 @@ Stats
    "``void popState()``", "復元する"
    "``void setMaterial(const Material &)``", "現在のマテリアルを設定する (ポインタを保持するので endRender() まで有効なオブジェクトを渡す)"
    "``void putPrimitive(const Primitive &)``", "プリミティブを追加する。頂点処理はこの時点で行われる"
+   "``void setPointSize(int pixels)`` / ``int pointSize() const``", "POINTS の大きさ (正方形、1〜64 px、既定 1)"
+   "``void setDepthBias(float bias)`` / ``float depthBias() const``", "以後のプリミティブの NDC 深度 (-1..1) に加える値。負で手前。共面のポリゴンの上にワイヤーフレームを描くときに使う (例: -0.002)"
 
 ライトと背景
 --------------------------------------------------------------------------------

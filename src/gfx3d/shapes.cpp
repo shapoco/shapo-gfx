@@ -302,3 +302,38 @@ void Graphics3D::putIcosphere(const vec3f &c, float radius, int level) {
 }
 
 }  // namespace shapoco::gfx3d
+
+// ---------------------------------------------------------------------------
+// Lines
+
+namespace shapoco::gfx3d {
+
+void Graphics3D::putLine(const vec3f &a, const vec3f &b) {
+  const Vertex v[2] = {{a, {0, 1, 0}, {0, 0}, VERTEX_WHITE},
+                       {b, {0, 1, 0}, {0, 0}, VERTEX_WHITE}};
+  static const uint16_t IDX[2] = {0, 1};
+  const VertexBuffer vb = {2, v};
+  const Primitive prim = {PrimitiveType::LINES, &vb, 2, IDX, nullptr};
+  putPrimitive(prim);
+}
+
+void Graphics3D::putWireCube(const vec3f &c, const vec3f &size) {
+  const vec3f h = size * 0.5f;
+  Vertex v[8];
+  for (int i = 0; i < 8; i++) {
+    v[i].position = {c.x + ((i & 1) ? h.x : -h.x), c.y + ((i & 2) ? h.y : -h.y),
+                     c.z + ((i & 4) ? h.z : -h.z)};
+    v[i].normal = {0, 1, 0};
+    v[i].uv = {0, 0};
+    v[i].color = VERTEX_WHITE;
+  }
+  // 12 edges: along x, y and z
+  static const uint16_t IDX[24] = {0, 1, 2, 3, 4, 5, 6, 7,   // x
+                                   0, 2, 1, 3, 4, 6, 5, 7,   // y
+                                   0, 4, 1, 5, 2, 6, 3, 7};  // z
+  const VertexBuffer vb = {8, v};
+  const Primitive prim = {PrimitiveType::LINES, &vb, 24, IDX, nullptr};
+  putPrimitive(prim);
+}
+
+}  // namespace shapoco::gfx3d

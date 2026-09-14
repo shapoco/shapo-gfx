@@ -258,7 +258,10 @@ struct Material {
   uint32_t flags;          // MaterialFlags
 };
 
-enum class PrimitiveType : uint8_t { TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN };
+enum class PrimitiveType : uint8_t {
+  TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN,   // lit, textured, culled
+  POINTS, LINES, LINE_STRIP, LINE_LOOP       // unlit, 1 px (points: pointSize), not culled
+};
 
 struct Primitive {
   PrimitiveType type;
@@ -311,6 +314,8 @@ class Graphics3D {
 
   void setMaterial(const Material &);
   void putPrimitive(const Primitive &);
+  void setPointSize(int pixels);        // size of POINTS (square), 1..64, default 1
+  void setDepthBias(float bias);        // added to the NDC depth of later primitives (default 0)
 
   // shapes (see below)
   void putCube(const vec3f &center, const vec3f &size, int divs = 1);
@@ -324,6 +329,8 @@ class Graphics3D {
                int segments = 16, int heightDivs = 1, bool caps = true);
   void putTorus(const vec3f &center, float majorRadius, float minorRadius,
                 int majorSegments = 24, int minorSegments = 12);
+  void putLine(const vec3f &a, const vec3f &b);           // unlit segment
+  void putWireCube(const vec3f &center, const vec3f &size); // 12 edges
 
   // static scenes (see below)
   void putMesh(const Mesh &);
@@ -392,6 +399,34 @@ north pole; the icosphere uses the same equirectangular mapping with the seam an
 poles handled per face; cylinder/cone side u = around the axis, v = 0 at the top; plane
 u along +X, v along +Z; disk u/v = bounding square; torus u = around the ring, v =
 around the tube. All shape vertices are white (`VERTEX_WHITE`).
+
+### Points and lines
+
+`POINTS`, `LINES`, `LINE_STRIP` and `LINE_LOOP` are processed without lighting,
+texturing or culling: the vertex color is `diffuse` (times `Vertex::color` with
+`VERTEX_COLOR`, pre-multiplied by the opacity for `ADD`). Lines are clipped against the
+near plane in view space (a segment with one end behind the plane is shortened; the
+color is interpolated at the cut); points behind it are dropped. Both are stored in the
+triangle buffer (one entry each, counted in `Stats::triCount`) and turned into spans by
+`render()`:
+
+- A line covers, on each pixel row it crosses, either the single pixel at the row center
+  (steep lines) or the run of columns whose centers map into that row (shallow lines), so
+  the coverage is that of a Bresenham line with both end points drawn. Depth and color are
+  interpolated along the run.
+- A point is an axis-aligned square of `pointSize()` pixels centered on the projected
+  position.
+
+Their spans go through the same opaque / translucent lists as triangle spans, so lines are
+hidden by nearer surfaces (hidden-line removal) and blended with `ALPHA` / `ADD` like any
+other primitive. Line width is fixed at one pixel.
+
+### Depth bias
+
+`setDepthBias(bias)` adds `bias` to the NDC depth (range -1..1) of every primitive emitted
+afterwards; negative values bring them nearer. Its purpose is drawing wireframes or
+markers on top of coplanar polygons without z-fighting (e.g. `-0.002`). It applies to
+triangles as well.
 
 ### Vertex colors
 
@@ -531,6 +566,7 @@ module.
   Pixels are quantized with rounding; the memory layout matches `pixel.hpp`
   (RGB565BE and RGB444 are emitted as bytes, ARGB4444 as `uint16_t`).
 - **gltf2cpp** `[--namespace NS] [--texformat auto|...] [--dither D] [--key-color C] [--max-texture-size N] [--no-resize-pot] input.gltf|glb output.hpp`
+  (all glTF primitive modes are supported)
   emits, inside a namespace named after the file, `tex<i>` textures, `mat<i>` (and
   `mat<i>Vc` for primitives with vertex colors) materials, `mesh<i>Prim<j>Vertices` /
   `...Indices` / `mesh<i>`, `node_<name>` (or `node<i>`) nodes in child-first order,
@@ -539,9 +575,10 @@ module.
   normals; COLOR_0 becomes `Vertex::color` and sets `VERTEX_COLOR` on a material copy;
   node TRS is composed into the column-major matrix on the tool side. Textures are
   resized to a power of two (with a warning) unless `--no-resize-pot`; `auto` picks
-  ARGB4444 when the image or the material's alpha mode needs alpha. Unsupported
-  primitive modes, oversized index ranges and out-of-range indices are reported and
-  skipped, so the generated data always satisfies the renderer's invariants.
+  ARGB4444 when the image or the material's alpha mode needs alpha.
+    glTF point and line modes map to `POINTS` / `LINES` / `LINE_LOOP` / `LINE_STRIP` (no
+  normals are generated for them). Oversized index ranges and out-of-range indices are
+  reported and skipped, so the generated data always satisfies the renderer's invariants.
 
 ## Sample programs
 
@@ -574,7 +611,8 @@ bitmaps and text metrics, consistency between RGB565BE and RGB444 targets, and f
 the 3D renderer: banded versus whole-frame rendering (byte identical), offset
 rendering, transparent clear, all texture formats on both output formats, texel
 alpha, the winding of every shape (culled and double-sided renders must match),
-vertex colors and the index range check. `test/data` holds a procedural image and a
+vertex colors, the index range check, and points/lines (Bresenham coverage, end points,
+LINE_LOOP, hidden-line removal, point size, near-plane clipping, depth bias). `test/data` holds a procedural image and a
 small glTF model with the headers generated from them (`test/tools` regenerates
 them); the tests verify the generated textures against the source pixels and the
 generated scene graph (names, hierarchy, transforms, generated normals, traversal,

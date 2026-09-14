@@ -7,7 +7,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Graphics3D API &mdash; ShapoGFX Reference Manual</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=9adbe090" />
 
@@ -15,8 +15,8 @@
       <script src="../_static/jquery.js?v=5d32c60e"></script>
       <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../_static/documentation_options.js?v=4eb6406d"></script>
-      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
       <script src="../_static/translations.js?v=4755f45a"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="索引" href="../genindex.html" />
@@ -130,11 +130,12 @@
 <li class="toctree-l2"><a class="reference internal" href="concepts.html#id2">座標系</a></li>
 <li class="toctree-l2"><a class="reference internal" href="concepts.html#id3">ライティングとマテリアル</a></li>
 <li class="toctree-l2"><a class="reference internal" href="concepts.html#id4">半透明</a></li>
-<li class="toctree-l2"><a class="reference internal" href="concepts.html#id5">背景</a></li>
-<li class="toctree-l2"><a class="reference internal" href="concepts.html#id6">透視補正</a></li>
-<li class="toctree-l2"><a class="reference internal" href="concepts.html#id7">メモリ</a></li>
-<li class="toctree-l2"><a class="reference internal" href="concepts.html#id8">三角形が破棄される条件</a></li>
-<li class="toctree-l2"><a class="reference internal" href="concepts.html#id9">複数インスタンス</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concepts.html#id5">点と線</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concepts.html#id6">背景</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concepts.html#id7">透視補正</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concepts.html#id8">メモリ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concepts.html#id9">三角形が破棄される条件</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concepts.html#id10">複数インスタンス</a></li>
 </ul>
 </li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Graphics3D API</a><ul>
@@ -283,16 +284,21 @@
 </div>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">g3</span><span class="o">::</span><span class="n">Material</span><span class="w"> </span><span class="n">matGlass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="p">{</span><span class="mf">0.4f</span><span class="p">,</span><span class="w"> </span><span class="mf">0.7f</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">,</span><span class="w"> </span><span class="mf">0.45f</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mf">0.4f</span><span class="p">,</span><span class="w"> </span><span class="mf">0.7f</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">},</span>
-<span class="w">    </span><span class="nb">nullptr</span><span class="p">,</span><span class="w"> </span><span class="n">g3</span><span class="o">::</span><span class="n">BlendMode</span><span class="o">::</span><span class="n">ALPHA</span><span class="p">,</span><span class="w"> </span><span class="n">g3</span><span class="o">::</span><span class="n">MaterialFlags</span><span class="o">::</span><span class="n">DOUBLE_SIDED</span><span class="p">,</span>
+<span class="w">    </span><span class="k">nullptr</span><span class="p">,</span><span class="w"> </span><span class="n">g3</span><span class="o">::</span><span class="n">BlendMode</span><span class="o">::</span><span class="n">ALPHA</span><span class="p">,</span><span class="w"> </span><span class="n">g3</span><span class="o">::</span><span class="n">MaterialFlags</span><span class="o">::</span><span class="n">DOUBLE_SIDED</span><span class="p">,</span>
 <span class="p">};</span>
 </pre></div>
 </div>
 </section>
 <section id="primitive">
 <h3>Primitive<a class="headerlink" href="#primitive" title="Link to this heading"></a></h3>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">PrimitiveType</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">uint8_t</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">TRIANGLES</span><span class="p">,</span><span class="w"> </span><span class="n">TRIANGLE_STRIP</span><span class="p">,</span><span class="w"> </span><span class="n">TRIANGLE_FAN</span><span class="w"> </span><span class="p">};</span>
-
-<span class="k">struct</span><span class="w"> </span><span class="nc">Primitive</span><span class="w"> </span><span class="p">{</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">PrimitiveType</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">uint8_t</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">TRIANGLES</span><span class="p">,</span><span class="w"> </span><span class="n">TRIANGLE_STRIP</span><span class="p">,</span><span class="w"> </span><span class="n">TRIANGLE_FAN</span><span class="p">,</span><span class="w">   </span><span class="c1">// ライティング・テクスチャ・カリングあり</span>
+<span class="w">  </span><span class="n">POINTS</span><span class="p">,</span><span class="w"> </span><span class="n">LINES</span><span class="p">,</span><span class="w"> </span><span class="n">LINE_STRIP</span><span class="p">,</span><span class="w"> </span><span class="n">LINE_LOOP</span><span class="w">       </span><span class="c1">// ライティングなし、1 px (点は pointSize)、カリングなし</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>点と線については <a class="reference internal" href="concepts.html"><span class="doc">3D レンダラの概念</span></a> の「点と線」を参照してください。</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">Primitive</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="n">PrimitiveType</span><span class="w"> </span><span class="n">type</span><span class="p">;</span>
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">VertexBuffer</span><span class="w"> </span><span class="o">*</span><span class="n">vertexBuffer</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">uint16_t</span><span class="w"> </span><span class="n">indexCount</span><span class="p">;</span>
@@ -388,6 +394,12 @@
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">void</span> <span class="pre">putPrimitive(const</span> <span class="pre">Primitive</span> <span class="pre">&amp;)</span></code></p></td>
 <td><p>プリミティブを追加する。頂点処理はこの時点で行われる</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">void</span> <span class="pre">setPointSize(int</span> <span class="pre">pixels)</span></code> / <code class="docutils literal notranslate"><span class="pre">int</span> <span class="pre">pointSize()</span> <span class="pre">const</span></code></p></td>
+<td><p>POINTS の大きさ (正方形、1〜64 px、既定 1)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">void</span> <span class="pre">setDepthBias(float</span> <span class="pre">bias)</span></code> / <code class="docutils literal notranslate"><span class="pre">float</span> <span class="pre">depthBias()</span> <span class="pre">const</span></code></p></td>
+<td><p>以後のプリミティブの NDC 深度 (-1..1) に加える値。負で手前。共面のポリゴンの上にワイヤーフレームを描くときに使う (例: -0.002)</p></td>
 </tr>
 </tbody>
 </table>
