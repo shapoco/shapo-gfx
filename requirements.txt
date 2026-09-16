@@ -7,3 +7,6 @@
 # conflicts between local builds and the Publish Docs workflow.
 sphinx==8.2.3
 sphinx-rtd-theme==3.1.0
+# Pygments is a transitive dependency, but it generates _static/pygments.css,
+# whose content hash is referenced from every page, so it is pinned too.
+pygments==2.21.0
