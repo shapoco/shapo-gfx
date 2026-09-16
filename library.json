@@ -1,0 +1,67 @@
+{
+  "name": "ShapoGFX",
+  "version": "0.1.0",
+  "description": "2D/3D graphics library for embedded systems. A scanline software renderer that needs neither a frame buffer nor a Z buffer, plus a 2D drawing API with bitmap fonts. Supports GRAY1, RGB444, ARGB4444 and RGB565 (display byte order) pixel formats, renders any screen region into a band buffer, and never allocates memory: it draws into buffers you provide and takes its working memory from an arena you hand it. Pure C++17 with no platform dependencies.",
+  "keywords": [
+    "graphics",
+    "3d",
+    "renderer",
+    "rasterizer",
+    "display",
+    "tft",
+    "lcd",
+    "rgb565",
+    "font",
+    "gltf"
+  ],
+  "homepage": "https://shapoco.github.io/shapo-gfx/ref/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shapoco/shapo-gfx.git"
+  },
+  "authors": [
+    {
+      "name": "Shapoco",
+      "url": "https://github.com/shapoco",
+      "maintainer": true
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "*",
+  "headers": [
+    "shapoco/gfx2d/gfx2d.hpp",
+    "shapoco/gfx3d/gfx3d.hpp"
+  ],
+  "build": {
+    "includeDir": "include",
+    "srcDir": "src",
+    "srcFilter": [
+      "+<*>"
+    ],
+    "unflags": [
+      "-std=gnu++11",
+      "-std=gnu++14",
+      "-std=c++11",
+      "-std=c++14"
+    ],
+    "flags": [
+      "-std=gnu++17"
+    ]
+  },
+  "export": {
+    "exclude": [
+      ".clang-format",
+      ".github",
+      ".gitignore",
+      "CLAUDE.md",
+      "bin",
+      "docs",
+      "docsrc",
+      "example",
+      "launch_web_server.sh",
+      "requirements.txt",
+      "test"
+    ]
+  }
+}

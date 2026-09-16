@@ -4,7 +4,8 @@
 必要なもの
 ================================================================================
 
-- C++17 対応コンパイラ (GCC、Clang、Emscripten で確認)
+- **C++17 対応コンパイラ** (GCC、Clang、Emscripten で確認)。
+  ライブラリのソースだけでなく、ヘッダをインクルードする利用側のコードも C++17 でコンパイルしてください。
 - ビルドに CMake 3.13 以降を使う場合は CMake。使わなくても構いません。
 - ツール (``bin/``) とドキュメント生成には Python 3 と ``requirements.txt`` の依存パッケージ。
 
@@ -36,7 +37,41 @@ Pico SDK のプロジェクトでも同じです。
    "``SHAPOGFX_BUILD_EXAMPLES``", "トップレベル時 ON", "ネイティブ版サンプルをビルドする"
    "``SHAPOGFX_BUILD_TESTS``", "トップレベル時 ON", "テストをビルドする"
 
-CMake を使わない
+PlatformIO で使う
+================================================================================
+
+リポジトリのルートに ``library.json`` があるので、PlatformIO のライブラリとしてそのまま利用できます。
+
+.. code-block:: ini
+
+   [env:my_board]
+   platform = espressif32
+   board = seeed_xiao_esp32s3
+   framework = arduino
+   lib_deps = https://github.com/shapoco/shapo-gfx.git
+   ; ヘッダが C++17 を要求する。多くのコアは既定が gnu++11 のため上書きする
+   build_unflags = -std=gnu++11
+   build_flags = -std=gnu++17
+
+``lib_deps`` にはブランチやタグ (``...git#v0.1.0``)、ローカルパス (``symlink://../shapo-gfx``) も指定できます。
+
+``build_unflags`` / ``build_flags`` は **利用側のコード** のためのものです。
+ライブラリ自身のソースは ``library.json`` が ``-std=gnu++17`` を指定するので、これがなくてもビルドできますが、
+ヘッダをインクルードする側のコードは C++17 でコンパイルする必要があります
+(C++17 未満の場合は ``config.hpp`` が分かりやすいエラーメッセージを出します)。
+既定の規格はコアによって異なるため、``build_unflags`` には ``-std=gnu++11 -std=gnu++14`` のように
+複数列挙しても構いません (存在しないフラグは無視されます)。
+
+ピクセルフォーマットの無効化などのコンパイル時オプションも ``build_flags`` に書きます。
+
+.. code-block:: ini
+
+   build_flags =
+       -std=gnu++17
+       -D SHAPOGFX_FORMAT_GRAY1=0
+       -D SHAPOGFX_FORMAT_RGB444=0
+
+CMake も PlatformIO も使わない
 ================================================================================
 
 ``include/`` をインクルードパスに加え、``src/gfx2d/*.cpp`` と ``src/gfx3d/*.cpp`` を C++17 でコンパイルします。

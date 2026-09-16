@@ -42,8 +42,25 @@ add_subdirectory(path/to/shapo-gfx)
 target_link_libraries(your_target PRIVATE shapoco::gfx)
 ```
 
-Without CMake, add `include/` to the include path and compile
-`src/gfx2d/*.cpp` and `src/gfx3d/*.cpp` with C++17.
+### PlatformIO
+
+`library.json` makes the repository usable as a PlatformIO library:
+
+```ini
+[env:my_board]
+platform = espressif32
+board = seeed_xiao_esp32s3
+framework = arduino
+lib_deps = https://github.com/shapoco/shapo-gfx.git
+; the headers are C++17; many cores still default to gnu++11
+build_unflags = -std=gnu++11
+build_flags = -std=gnu++17
+```
+
+### Without a build system
+
+Add `include/` to the include path and compile `src/gfx2d/*.cpp` and
+`src/gfx3d/*.cpp` with C++17.
 
 Python tooling and documentation dependencies:
 
@@ -58,6 +75,7 @@ include/shapoco/gfx2d/   2D API and shared types (pixel formats, Surface, Graphi
 include/shapoco/gfx3d/   3D renderer (Graphics3D, shapes, static scenes, math)
 src/                     implementation
 bin/                     img2cpp, gltf2cpp and their requirements
+library.json             PlatformIO manifest
 example/wasm/            demo2d, demo3d (WASM and native entry points)
 docs/                    published site: example pages, generated manual in docs/ref/
 docsrc/                  Sphinx sources of the manual (build with `make -C docsrc html`)

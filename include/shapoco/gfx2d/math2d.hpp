@@ -1,6 +1,8 @@
 #ifndef SHAPOGFX2D_MATH2D_HPP
 #define SHAPOGFX2D_MATH2D_HPP
 
+#include "shapoco/gfx2d/config.hpp"
+
 namespace shapoco::gfx2d {
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,22 @@
 
 // Compile-time configuration shared by gfx2d and gfx3d.
 //
+// ShapoGFX is written in C++17. Diagnose a too-old standard here rather than
+// letting the headers fail with dozens of unrelated errors (PlatformIO projects
+// often default to gnu++11: add
+//   build_unflags = -std=gnu++11
+//   build_flags = -std=gnu++17
+// to platformio.ini).
+#if defined(_MSVC_LANG)
+#define SHAPOGFX_CPLUSPLUS _MSVC_LANG
+#else
+#define SHAPOGFX_CPLUSPLUS __cplusplus
+#endif
+#if SHAPOGFX_CPLUSPLUS < 201703L
+#error \
+    "ShapoGFX requires C++17 or later (compile with -std=gnu++17 / -std=c++17)."
+#endif
+//
 // Each pixel format can be disabled (define the macro as 0 before including the
 // headers, or on the compiler command line) to remove its code paths from both
 // the 2D and the 3D renderer.
