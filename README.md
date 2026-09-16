@@ -77,8 +77,9 @@ src/                     implementation
 bin/                     img2cpp, gltf2cpp and their requirements
 library.json             PlatformIO manifest
 example/wasm/            demo2d, demo3d (WASM and native entry points)
-docs/                    published site: example pages, generated manual in docs/ref/
-docsrc/                  Sphinx sources of the manual (build with `make -C docsrc html`)
+docs/                    published site: demo pages and their WASM builds
+docsrc/                  Sphinx sources of the manual, deployed to /ref/ by CI
+                         (`make -C docsrc preview` to read it locally)
 test/                    self-checking tests
 ```
 
