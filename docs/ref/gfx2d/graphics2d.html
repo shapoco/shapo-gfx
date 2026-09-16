@@ -7,7 +7,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Graphics2D &mdash; ShapoGFX Reference Manual</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=9adbe090" />
 
@@ -470,7 +470,7 @@
 ボックス高さを求め、グリフはベースラインを基準に配置されます。この規約により、フォントを切り替えても
 同じ <code class="docutils literal notranslate"><span class="pre">y</span></code> を渡せば上端が揃います。</p>
 <p>右寄せの例:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;12.3 s&quot;</span><span class="p">;</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"12.3 s"</span><span class="p">;</span>
 <span class="n">g</span><span class="p">.</span><span class="n">setFont</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ShapoSansP_s12c09a01w02</span><span class="p">);</span>
 <span class="n">g</span><span class="p">.</span><span class="n">drawString</span><span class="p">(</span><span class="n">box</span><span class="p">.</span><span class="n">right</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">8</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">g</span><span class="p">.</span><span class="n">measureText</span><span class="p">(</span><span class="n">s</span><span class="p">),</span><span class="w"> </span><span class="n">box</span><span class="p">.</span><span class="n">y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="n">s</span><span class="p">);</span>
 </pre></div>
