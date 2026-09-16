@@ -1,30 +1,35 @@
 name: Publish Docs
 
-# Builds the Sphinx manual from docsrc/ and commits the HTML to docs/ref/ on
-# main, where GitHub Pages serves it (Settings > Pages: branch main, folder /docs).
-# Pushes made with GITHUB_TOKEN do not trigger workflows, so this cannot loop.
+# Builds the site and deploys it to GitHub Pages as an artifact, so no
+# generated HTML is ever committed to the repository. The site is:
+#   docs/**        hand-written pages and the demo WASM builds (committed)
+#   ref/           the Sphinx manual, built here from docsrc/
+#
+# Requires Settings > Pages > Source = "GitHub Actions".
 
 on:
   push:
     branches:
       - main
     paths:
+      - docs/**
       - docsrc/**
       - requirements.txt
       - .github/workflows/publish-docs.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
-  group: publish-docs
-  cancel-in-progress: true
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  build-and-publish:
+  build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,24 +44,33 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build Sphinx HTML
-        run: |
-          # -d keeps .doctrees (which embeds absolute build paths) out of docs/ref
-          sphinx-build -b html -W --keep-going -d docsrc/_build/doctrees docsrc docsrc/_build/html
-
-      - name: Commit docs/ref
+      - name: Assemble the site
         run: |
           set -euo pipefail
-          rm -rf docs/ref
-          mkdir -p docs/ref
-          rsync -a --delete docsrc/_build/html/ docs/ref/
-          touch docs/.nojekyll  # GitHub Pages must not run Jekyll (it would drop _static/)
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/ref docs/.nojekyll
-          if git diff --cached --quiet; then
-            echo "No changes in docs/ref/"
-            exit 0
-          fi
-          git commit -m "docs: update ref from ${GITHUB_SHA}"
-          git push origin HEAD:main
+          mkdir -p _site
+          cp -r docs/. _site/
+          # The manual is generated here; drop any copy that is still committed
+          rm -rf _site/ref
+          # -d keeps Sphinx's internal cache out of the published output
+          sphinx-build -b html -W --keep-going -d docsrc/_build/doctrees docsrc _site/ref
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
