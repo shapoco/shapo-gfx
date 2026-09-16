@@ -12,8 +12,10 @@ BUILDDIR      = _build
 help:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
+# -d keeps Sphinx's internal cache (.doctrees) out of the published output:
+# it embeds absolute build paths and would differ between machines and CI.
 html:
-	$(SPHINXBUILD) -b html "$(SOURCEDIR)" "$(BUILDDIR)/html" $(SPHINXOPTS) $(O)
+	$(SPHINXBUILD) -b html -d "$(BUILDDIR)/doctrees" "$(SOURCEDIR)" "$(BUILDDIR)/html" $(SPHINXOPTS) $(O)
 	rm -rf ../docs/ref
 	mkdir -p ../docs/ref
 	cp -r $(BUILDDIR)/html/. ../docs/ref/

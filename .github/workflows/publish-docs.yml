@@ -41,7 +41,8 @@ jobs:
 
       - name: Build Sphinx HTML
         run: |
-          sphinx-build -b html -W --keep-going docsrc docsrc/_build/html
+          # -d keeps .doctrees (which embeds absolute build paths) out of docs/ref
+          sphinx-build -b html -W --keep-going -d docsrc/_build/doctrees docsrc docsrc/_build/html
 
       - name: Commit docs/ref
         run: |

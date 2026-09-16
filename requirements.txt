@@ -1,6 +1,9 @@
 # Python dependencies for the repository tooling:
 #   python3 -m pip install -r requirements.txt
 -r bin/requirements.txt
-# Documentation (docsrc/ -> docs/ref/)
-sphinx>=7.0
-sphinx-rtd-theme>=2.0
+# Documentation (docsrc/ -> docs/ref/).
+# Pinned: the generated HTML is committed to docs/ref, and different Sphinx
+# versions emit different asset hashes, which would show up as churn and as
+# conflicts between local builds and the Publish Docs workflow.
+sphinx==8.2.3
+sphinx-rtd-theme==3.1.0
