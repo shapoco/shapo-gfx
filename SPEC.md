@@ -38,6 +38,8 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
 | `SHAPOGFX3D_RP2_INTERP` | 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` |
+| `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
+| `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise) |
 | `SHAPOGFX3D_TEXTURE` | 1 | Texture and environment mapping |
 | `SHAPOGFX3D_GOURAUD` | 1 | Gouraud shading; 0 selects flat shading |
 | `SHAPOGFX3D_BLEND` | 1 | Translucency |

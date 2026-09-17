@@ -92,6 +92,18 @@
 #ifndef SHAPOGFX3D_RP2_INTERP
 #define SHAPOGFX3D_RP2_INTERP 0
 #endif
+
+// Attribute put on the rasterization side -- render() and everything it
+// calls per span -- so that a platform can place just that code somewhere
+// fast. About 14 KB on a Cortex-M0+. The Pico SDK keeps .time_critical.*
+// sections in RAM, so there
+//   -DSHAPOGFX3D_HOT_ATTR='__attribute__((section(".time_critical.gfx3d")))'
+// takes the span loops out of the XIP flash cache. The per-span functions
+// are templates, which need SHAPOGFX3D_HOT_INSTANTIATE=1 as well (see the
+// explicit instantiations next to the rasterizer tables).
+#ifndef SHAPOGFX3D_HOT_ATTR
+#define SHAPOGFX3D_HOT_ATTR
+#endif
 #if SHAPOGFX3D_RP2_INTERP
 #include "hardware/interp.h"
 #endif
@@ -1412,7 +1424,7 @@ void Graphics3D::beginRender() {
 
 void Graphics3D::endRender() {}
 
-Span *Graphics3D::allocSpan() {
+SHAPOGFX3D_HOT_ATTR Span *Graphics3D::allocSpan() {
   if (spanCount_ >= spanCapacity_) {
     spanDropped_++;
     return nullptr;
@@ -1463,7 +1475,7 @@ static inline bool fragNearer(const Span &frag, const Span &e, int ox0,
 // Remove the range [ox0, ox1) from list element e = *pp.
 // Returns the position at which to continue scanning (after the remaining part,
 // or the rest of e).
-Span **Graphics3D::cutSpan(Span **pp, int ox0, int ox1) {
+SHAPOGFX3D_HOT_ATTR Span **Graphics3D::cutSpan(Span **pp, int ox0, int ox1) {
   Span *e = *pp;
   bool leftRemains = e->x0 < ox0;
   bool rightRemains = e->x1 > ox1;
@@ -1494,7 +1506,7 @@ Span **Graphics3D::cutSpan(Span **pp, int ox0, int ox1) {
 #if SHAPOGFX3D_BLEND
 
 // Append (part of) a span [sp.x0, x1) to the translucent list
-void Graphics3D::appendTranslucent(const Span &sp, int x1) {
+SHAPOGFX3D_HOT_ATTR void Graphics3D::appendTranslucent(const Span &sp, int x1) {
   Span *n = allocSpan();
   if (!n) return;  // pool overflow: drop this span
   *n = sp;
@@ -1514,7 +1526,7 @@ void Graphics3D::appendTranslucent(const Span &sp, int x1) {
 // Overlaps with existing spans are resolved by comparing depth at the center of
 // the overlap and removing the farther part. Because this does not rely on the
 // per-triangle sort order, large and small polygons are ordered correctly too.
-void Graphics3D::insertOpaque(Span &frag) {
+SHAPOGFX3D_HOT_ATTR void Graphics3D::insertOpaque(Span &frag) {
   Span **pp = &opaqueHead_;
   while (*pp && (*pp)->x1 <= frag.x0) pp = &(*pp)->next;
   while (*pp && (*pp)->x0 < frag.x1) {
@@ -1558,7 +1570,7 @@ void Graphics3D::insertOpaque(Span &frag) {
 
 // Add a translucent span to the translucent list, excluding the parts hidden by
 // nearer opaque spans
-void Graphics3D::insertTranslucent(Span &frag) {
+SHAPOGFX3D_HOT_ATTR void Graphics3D::insertTranslucent(Span &frag) {
   Span **pp = &opaqueHead_;
   while (*pp && (*pp)->x1 <= frag.x0) pp = &(*pp)->next;
   while (*pp && (*pp)->x0 < frag.x1) {
@@ -1582,7 +1594,7 @@ void Graphics3D::insertTranslucent(Span &frag) {
 
 // Remove the parts of translucent spans that lie behind the new opaque span
 // frag
-void Graphics3D::clipTranslucent(const Span &frag) {
+SHAPOGFX3D_HOT_ATTR void Graphics3D::clipTranslucent(const Span &frag) {
   Span **pp = &transHead_;
   bool modified = false;
   while (*pp) {
@@ -2159,7 +2171,8 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
 
 // Rasterize n pixels of span sp starting at pixel x of row `line`
 template <BlendMode B, TexFmt T, bool FLAT, PixelFormat OUT>
-static void rasterSpanT(uint8_t *line, int x, int n, const Span &sp) {
+static SHAPOGFX3D_HOT_ATTR void rasterSpanT(uint8_t *line, int x, int n,
+                                            const Span &sp) {
   using O = OutTraits<OUT>;
   constexpr bool TEX = (T != TexFmt::NONE);
 
@@ -2207,11 +2220,75 @@ using RasterFn = void (*)(uint8_t *, int, int, const Span &);
 using FillFn = void (*)(uint8_t *, int, int, uint32_t);
 
 template <PixelFormat OUT>
-static void fillLineT(uint8_t *line, int x, int n, uint32_t native) {
+static SHAPOGFX3D_HOT_ATTR void fillLineT(uint8_t *line, int x, int n,
+                                          uint32_t native) {
   typename OutTraits<OUT>::Cursor cur;
   cur.init(line, x);
   cur.fill(n, native);
 }
+
+// GCC ignores a section attribute on a function template but honours it on
+// an explicit instantiation, so with SHAPOGFX3D_HOT_INSTANTIATE the span
+// functions the tables below select are instantiated here, explicitly, with
+// SHAPOGFX3D_HOT_ATTR. The rows mirror the tables' own.
+#ifndef SHAPOGFX3D_HOT_INSTANTIATE
+#define SHAPOGFX3D_HOT_INSTANTIATE 0
+#endif
+#if SHAPOGFX3D_HOT_INSTANTIATE
+#define SHAPOGFX3D_HOT_INST(B, T, FLAT, OUT)                      \
+  template SHAPOGFX3D_HOT_ATTR void rasterSpanT<B, T, FLAT, OUT>( \
+      uint8_t *, int, int, const Span &);
+#if SHAPOGFX3D_GOURAUD
+#define SHAPOGFX3D_HOT_SMOOTH(B, T, OUT) SHAPOGFX3D_HOT_INST(B, T, false, OUT)
+#else
+#define SHAPOGFX3D_HOT_SMOOTH(B, T, OUT)
+#endif
+#if SHAPOGFX3D_BLEND
+#define SHAPOGFX3D_HOT_PAIR(B, T, OUT) \
+  SHAPOGFX3D_HOT_SMOOTH(B, T, OUT) SHAPOGFX3D_HOT_INST(B, T, true, OUT)
+#else
+#define SHAPOGFX3D_HOT_PAIR(B, T, OUT)
+#endif
+#define SHAPOGFX3D_HOT_ROW(OUT, T)                   \
+  SHAPOGFX3D_HOT_SMOOTH(BlendMode::NONE, T, OUT)     \
+  SHAPOGFX3D_HOT_INST(BlendMode::NONE, T, true, OUT) \
+  SHAPOGFX3D_HOT_PAIR(BlendMode::ALPHA, T, OUT)      \
+  SHAPOGFX3D_HOT_PAIR(BlendMode::ADD, T, OUT)
+#if SHAPOGFX3D_TEXTURE && SHAPOGFX_FORMAT_GRAY1
+#define SHAPOGFX3D_HOT_ROW_GRAY1(OUT) SHAPOGFX3D_HOT_ROW(OUT, TexFmt::GRAY1)
+#else
+#define SHAPOGFX3D_HOT_ROW_GRAY1(OUT)
+#endif
+#if SHAPOGFX3D_TEXTURE && SHAPOGFX_FORMAT_RGB444
+#define SHAPOGFX3D_HOT_ROW_RGB444(OUT) SHAPOGFX3D_HOT_ROW(OUT, TexFmt::RGB444)
+#else
+#define SHAPOGFX3D_HOT_ROW_RGB444(OUT)
+#endif
+#if SHAPOGFX3D_TEXTURE && SHAPOGFX_FORMAT_ARGB4444
+#define SHAPOGFX3D_HOT_ROW_ARGB4444(OUT) \
+  SHAPOGFX3D_HOT_ROW(OUT, TexFmt::ARGB4444)
+#else
+#define SHAPOGFX3D_HOT_ROW_ARGB4444(OUT)
+#endif
+#if SHAPOGFX3D_TEXTURE && SHAPOGFX_FORMAT_RGB565BE
+#define SHAPOGFX3D_HOT_ROW_RGB565BE(OUT) \
+  SHAPOGFX3D_HOT_ROW(OUT, TexFmt::RGB565BE)
+#else
+#define SHAPOGFX3D_HOT_ROW_RGB565BE(OUT)
+#endif
+#define SHAPOGFX3D_HOT_TABLE(OUT)                                        \
+  SHAPOGFX3D_HOT_ROW(OUT, TexFmt::NONE)                                  \
+  SHAPOGFX3D_HOT_ROW_GRAY1(OUT)                                          \
+  SHAPOGFX3D_HOT_ROW_RGB444(OUT) SHAPOGFX3D_HOT_ROW_ARGB4444(OUT)        \
+      SHAPOGFX3D_HOT_ROW_RGB565BE(OUT) template SHAPOGFX3D_HOT_ATTR void \
+      fillLineT<OUT>(uint8_t *, int, int, uint32_t);
+#if SHAPOGFX_FORMAT_RGB565BE
+SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB565BE)
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB444)
+#endif
+#endif  // SHAPOGFX3D_HOT_INSTANTIATE
 
 // Rasterizer table for one output format, indexed by Triangle::rasterFn
 // (texture format x blend mode x flat). Entries this configuration never
@@ -2304,8 +2381,9 @@ uint16_t Graphics3D::mergeLists(uint16_t a, uint16_t b) {
   return head;
 }
 
-void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
-                        const Surface &dst, int16_t dstX, int16_t dstY) {
+SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int16_t x, int16_t y, int16_t w,
+                                            int16_t h, const Surface &dst,
+                                            int16_t dstX, int16_t dstY) {
   if (!recBase_ || !spanPool_ || !dst.pixels) return;
 
   // Output format
