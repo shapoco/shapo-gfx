@@ -186,9 +186,15 @@ class Graphics2D {
   void fillRectRaw(const Rect &clipped, uint32_t native, uint32_t alpha64);
 };
 
+// 0..255 opacity as 0..64 (64 = opaque): (a * 64 + 127) / 255, with the
+// division by 255 replaced by a multiply-shift that is exact for 0..255
+constexpr uint32_t alpha255To64(uint32_t a) {
+  return ((a * 64u + 127u) * 0x8081u) >> 23;
+}
+
 // Opacity of a Color as 0..64 (64 = opaque)
 constexpr uint32_t colorAlpha64(Color c) {
-  return ((uint32_t)colorA(c) * 64u + 127u) / 255u;
+  return alpha255To64((uint32_t)colorA(c));
 }
 
 }  // namespace shapoco::gfx2d

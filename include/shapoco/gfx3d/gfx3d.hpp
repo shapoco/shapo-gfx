@@ -138,6 +138,7 @@ struct Span;
 struct StackEntry;
 struct CachedVertex;
 struct UnlitVertex;
+struct PrimSetup;
 }  // namespace detail
 
 // ---------------------------------------------------------------------------
@@ -307,7 +308,11 @@ class Graphics3D {
   mat4f cur_ = mat4f::identity();
   const Material *curMat_ = nullptr;
 
+  // Projection. The kind lets the vertex stage skip the zero elements of the
+  // matrices built by the two setters.
+  enum class ProjKind : uint8_t { GENERIC, PERSPECTIVE, ORTHOGRAPHIC };
   mat4f proj_ = mat4f::identity();
+  ProjKind projKind_ = ProjKind::GENERIC;
   float zNear_ = 0.1f;
 
   bool lightEnabled_ = false;
@@ -332,7 +337,9 @@ class Graphics3D {
   int pointSize_ = 1;
   float depthBias_ = 0.0f;
 
-  void shadeVertex(const Vertex &in, const Material *mat, const Texture *tex,
+  bool projectPoint(const vec3f &view, float &sx, float &sy, float &zNdc,
+                    float &invW) const;
+  void shadeVertex(const Vertex &in, const detail::PrimSetup &ps,
                    detail::CachedVertex &out) const;
   void emitTriangle(const detail::CachedVertex &a,
                     const detail::CachedVertex &b,

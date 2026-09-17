@@ -2,17 +2,34 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 // Perspective correction of texture coordinates:
 //   0: none (affine interpolation everywhere)
 //   1: vertical only (default). (u/w, v/w, 1/w) are interpolated along the
-//      triangle edges and divided at the two end points of each span, so the
-//      end points are exact and the span interior is affine. Costs two divides
-//      per span. Exact for horizontal surfaces seen by a camera without roll.
-//   2: full. (u/w, v/w, 1/w) are interpolated across the span and divided per
-//      pixel.
+//      triangle plane and divided at the two end points of each span, so the
+//      end points are exact and the span interior is affine. Costs one float
+//      divide per span. Exact for horizontal surfaces seen by a camera without
+//      roll.
+//   2: full. (u/w, v/w, 1/w) are interpolated across the span and divided
+//      every SHAPOGFX3D_PERSPECTIVE_STEP pixels; the texture coordinates are
+//      interpolated linearly in between.
 #ifndef SHAPOGFX3D_CORRECT_PERSPECTIVE
 #define SHAPOGFX3D_CORRECT_PERSPECTIVE 1
+#endif
+
+// Level 2: pixels between two exact evaluations of (u, v). Power of two.
+#ifndef SHAPOGFX3D_PERSPECTIVE_STEP
+#define SHAPOGFX3D_PERSPECTIVE_STEP 16
+#endif
+
+// RP2040 / RP2350 (Pico SDK): fetch 16-bit texels through the SIO
+// interpolator (interp0 of the core that calls render()). Opt-in.
+#ifndef SHAPOGFX3D_RP2_INTERP
+#define SHAPOGFX3D_RP2_INTERP 0
+#endif
+#if SHAPOGFX3D_RP2_INTERP
+#include "hardware/interp.h"
 #endif
 
 namespace shapoco::gfx3d {
@@ -20,23 +37,41 @@ namespace shapoco::gfx3d {
 // ---------------------------------------------------------------------------
 // Internal data structures
 //
-// Vertex processing (transform, lighting, projection) and the computation of
-// span end points are done in float. All per-pixel work uses integer arithmetic
-// (fixed point with 16 fractional bits).
+// Vertex processing (transform, lighting, projection) and triangle setup are
+// done in float. Each attribute of a triangle is stored as a plane (a linear
+// function of the screen position), so a span is set up by evaluating the
+// planes at its leftmost pixel; the per-pixel steps are the plane gradients.
+// All per-pixel work uses integer arithmetic (16.16 fixed point for colors
+// and texture coordinates, 8.24 for depth).
 
 namespace detail {
 
 static constexpr int FIX_SHIFT = 16;
 static constexpr float FIX_ONE = 65536.0f;
+static constexpr float FIX_DELTA_MAX = 16000.0f;  // |per-pixel step| (8.16)
+static constexpr float FIX_TEX_MAX = 30000.0f;    // |texture coordinate|
+static constexpr float Z_ONE = 16777216.0f;       // 8.24 fixed point depth
+static constexpr float Z_MAX = 120.0f;
+static constexpr float Z_DELTA_MAX = 64.0f;
+
+static constexpr int PERSPECTIVE_STEP = SHAPOGFX3D_PERSPECTIVE_STEP;
+static_assert(PERSPECTIVE_STEP >= 2 &&
+                  (PERSPECTIVE_STEP & (PERSPECTIVE_STEP - 1)) == 0,
+              "SHAPOGFX3D_PERSPECTIVE_STEP must be a power of two");
 
 // A vertex after lighting and projection
 struct ShadedVertex {
-  float sx, sy;  // screen coordinates
-  float zNdc;    // NDC depth (linear in screen space; smaller = nearer)
-  float u,
-      v;  // texture coordinates in texels (u/w, v/w when perspective-correct)
+  float sx, sy;   // screen coordinates
+  float zNdc;     // NDC depth (linear in screen space; smaller = nearer)
+  float u, v;     // texture coordinates in texels
   float r, g, b;  // vertex color 0..255 (pre-multiplied by opacity for additive
                   // blending)
+};
+
+// Linear function of the screen position: value = c + dx * x + dy * y
+struct Plane {
+  float c, dx, dy;
+  float at(float x, float y) const { return c + dx * x + dy * y; }
 };
 
 // Texture format of a triangle; selects the rasterizer together with the blend
@@ -56,32 +91,42 @@ constexpr uint8_t FLAT =
     1u << 0;  // all three vertex colors are equal (no color interpolation)
 constexpr uint8_t TEX = 1u << 1;     // samples a texture
 constexpr uint8_t OPAQUE = 1u << 2;  // opaque (BlendMode::NONE)
-constexpr uint8_t LINE = 1u
-                         << 3;  // line segment v[0] -> v[1] (see makeLineSpan)
+constexpr uint8_t LINE = 1u << 3;  // line segment [0] -> [1] (see makeLineSpan)
 constexpr uint8_t POINT =
-    1u << 4;  // point: v[0].sx/sy = top-left pixel, invDy[0] = size
+    1u << 4;  // point: sx/sy[0] = top-left pixel, slope[0] = size
 }  // namespace TriFlags
 
+// A triangle, line or point after setup.
 struct Triangle {
-  ShadedVertex v[3];
+  // Triangles: the vertices sorted by sy; [0] = top, [1] = middle (the bottom
+  // vertex is only needed through the edge slopes). Lines: [0] = a, [1] = b.
+  // Points: [0] = top-left pixel.
+  float sx[2], sy[2];
+  // Triangles: dx/dy of the edges top->middle, middle->bottom, top->bottom
+  // (0 for horizontal edges). Lines: [0] = 1/dx, [1] = 1/dy (0 when the
+  // difference is 0). Points: [0] = size in pixels.
+  float slope[3];
+  Plane z;        // NDC depth
+  Plane r, g, b;  // vertex color 0..255
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
-  float invW[3];  // 1/w
+  Plane uw, vw, iw;  // (u/w, v/w, 1/w)
+#else
+  Plane u, v;  // texels
 #endif
-  float invDy[3];  // 1/(delta sy) of edge i (v[i] -> v[i+1]); 0 for horizontal
-                   // edges
   const Material *mat;
-  float depth;         // average view-space z (smaller = farther)
+  int32_t sortKey;     // ascending = farther first
   int16_t yMin, yMax;  // range of scanlines crossed (inclusive)
   uint8_t flags;       // TriFlags
   uint8_t alpha64;     // opacity (0..64)
   uint8_t rasterFn;    // index of the rasterizer (tex * 6 + blend * 2 + flat)
+  bool leftLong;       // triangles: the long edge (top->bottom) is on the left
 };
 
 // A span on a scanline: attribute values at the leftmost pixel and per-pixel
 // increments
 struct Span {
   int32_t x0, x1;   // pixel range [x0, x1)
-  float z0, dz;     // NDC depth (used only to resolve overlaps)
+  int32_t z0, dz;   // NDC depth, 8.24 fixed point (used to resolve overlaps)
   int32_t r, g, b;  // 8.16 fixed point (0..255)
   int32_t dr, dg, db;
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
@@ -115,6 +160,20 @@ struct UnlitVertex {
   float r, g, b;
 };
 
+// Per-primitive constants of the vertex stage
+struct PrimSetup {
+  const Material *mat;
+  const Texture *tex;  // nullptr when untextured
+  float texW, texH;
+  bool envMap;
+  bool lit;          // some light is enabled
+  bool viewNormal;   // the view-space normal is needed (environment map, or a
+                     // light with a non-uniformly scaled matrix)
+  vec3f lightModel;  // light direction (towards the light) in model space,
+                     // scaled so that dot(normal, lightModel) is the diffuse
+                     // factor; valid when lit && !viewNormal
+};
+
 static constexpr int STACK_DEPTH = 16;
 static constexpr int SPAN_CAPACITY_MIN = 32;
 static constexpr int SPAN_CAPACITY_MAX = 512;
@@ -130,6 +189,44 @@ using namespace detail;
 
 static inline uintptr_t alignUp8(uintptr_t p) {
   return (p + 7u) & ~(uintptr_t)7u;
+}
+
+// NaN maps to lo, so a degenerate value never reaches a float-to-int cast
+static inline float clampf(float v, float lo, float hi) {
+  return !(v > lo) ? lo : (v > hi ? hi : v);
+}
+
+// Float to int for screen coordinates (the range is limited first)
+static constexpr float COORD_MAX = 1e8f;
+static inline int floorInt(float v) {
+  return (int)std::floor(clampf(v, -COORD_MAX, COORD_MAX));
+}
+static inline int ceilInt(float v) {
+  return (int)std::ceil(clampf(v, -COORD_MAX, COORD_MAX));
+}
+
+static inline int32_t toFix(float v) { return (int32_t)(v * FIX_ONE); }
+static inline int32_t toFixDelta(float v) {
+  return toFix(clampf(v, -FIX_DELTA_MAX, FIX_DELTA_MAX));
+}
+static inline int32_t toFixColor(float v) {
+  return toFix(clampf(v, 0.0f, 255.0f));
+}
+static inline int32_t toFixTex(float v) {
+  return toFix(clampf(v, -FIX_TEX_MAX, FIX_TEX_MAX));
+}
+static inline int32_t toZ(float v) {
+  return (int32_t)(clampf(v, -Z_MAX, Z_MAX) * Z_ONE);
+}
+static inline int32_t toZDelta(float v) {
+  return (int32_t)(clampf(v, -Z_DELTA_MAX, Z_DELTA_MAX) * Z_ONE);
+}
+
+// Integer key with the same ordering as the float (no NaN)
+static inline int32_t floatSortKey(float f) {
+  int32_t i;
+  std::memcpy(&i, &f, sizeof(i));
+  return i ^ (int32_t)(((uint32_t)(i >> 31)) >> 1);
 }
 
 // Texture format usable by the rasterizer; NONE for disabled formats
@@ -301,6 +398,7 @@ void Graphics3D::disableClear() { clearEnabled_ = false; }
 void Graphics3D::setPerspectiveProjection(float fovY, float aspect, float zNear,
                                           float zFar) {
   proj_ = mat4f::perspective(fovY, aspect, zNear, zFar);
+  projKind_ = ProjKind::PERSPECTIVE;
   zNear_ = zNear;
 }
 
@@ -308,63 +406,119 @@ void Graphics3D::setOrthographicProjection(float left, float right,
                                            float bottom, float top, float zNear,
                                            float zFar) {
   proj_ = mat4f::orthographic(left, right, bottom, top, zNear, zFar);
+  projKind_ = ProjKind::ORTHOGRAPHIC;
   zNear_ = zNear;
 }
 
 // ---------------------------------------------------------------------------
 // Vertex processing (transform + lighting + projection)
 
-void Graphics3D::shadeVertex(const Vertex &in, const Material *mat,
-                             const Texture *tex, CachedVertex &out) const {
+// Project a view-space point to the screen. Returns false when w <= 0.
+// The projection matrices built by the two setters are sparse, so only their
+// non-zero elements are used.
+bool Graphics3D::projectPoint(const vec3f &p, float &sx, float &sy, float &zNdc,
+                              float &invW) const {
+  const float *m = proj_.m;
+  float cx, cy, cz, w;
+  switch (projKind_) {
+    case ProjKind::PERSPECTIVE:
+      cx = m[0] * p.x;
+      cy = m[5] * p.y;
+      cz = m[10] * p.z + m[14];
+      w = -p.z;
+      break;
+    case ProjKind::ORTHOGRAPHIC:
+      cx = m[0] * p.x + m[12];
+      cy = m[5] * p.y + m[13];
+      cz = m[10] * p.z + m[14];
+      w = 1.0f;
+      break;
+    default: {
+      vec3f c = proj_.transformPoint4(p, w);
+      cx = c.x;
+      cy = c.y;
+      cz = c.z;
+      break;
+    }
+  }
+  if (w <= 0.0f) return false;
+  invW = 1.0f / w;
+  sx = (cx * invW * 0.5f + 0.5f) * screenW_;
+  sy = (0.5f - cy * invW * 0.5f) * screenH_;
+  zNdc = cz * invW;
+  return true;
+}
+
+// Light direction in model space. Possible when the upper 3x3 of the model
+// matrix is a rotation times a uniform scale (columns orthogonal and of equal
+// length); then dot(n, out) equals the diffuse factor of the normalized
+// view-space normal for a unit model-space normal n. Returns false otherwise.
+static bool lightToModelSpace(const mat4f &m, const vec3f &lightDirView,
+                              vec3f &out) {
+  const vec3f c0 = {m.m[0], m.m[1], m.m[2]};
+  const vec3f c1 = {m.m[4], m.m[5], m.m[6]};
+  const vec3f c2 = {m.m[8], m.m[9], m.m[10]};
+  const float l0 = dot(c0, c0), l1 = dot(c1, c1), l2 = dot(c2, c2);
+  if (l0 <= 0.0f) return false;
+  const float tol = l0 * 1e-3f;
+  if (std::fabs(l1 - l0) > tol || std::fabs(l2 - l0) > tol) return false;
+  if (std::fabs(dot(c0, c1)) > tol || std::fabs(dot(c1, c2)) > tol ||
+      std::fabs(dot(c0, c2)) > tol)
+    return false;
+  const float inv = 1.0f / std::sqrt(l0);
+  const vec3f L = -lightDirView;
+  out = {dot(c0, L) * inv, dot(c1, L) * inv, dot(c2, L) * inv};
+  return true;
+}
+
+void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
+                             CachedVertex &out) const {
   out.ok = false;
   vec3f viewPos = cur_.transformPoint(in.position);
   // Triangles crossing or in front of the near plane are dropped
   if (viewPos.z > -zNear_) return;
-  float w;
-  vec3f clip = proj_.transformPoint4(viewPos, w);
-  if (w <= 0.0f) return;
-  float invW = 1.0f / w;
-
   ShadedVertex &sv = out.sv;
-  sv.sx = (clip.x * invW * 0.5f + 0.5f) * screenW_;
-  sv.sy = (0.5f - clip.y * invW * 0.5f) * screenH_;
-  sv.zNdc = clip.z * invW;
+  if (!projectPoint(viewPos, sv.sx, sv.sy, sv.zNdc, out.invW)) return;
 
-  vec3f n = normalize(cur_.transformDir(in.normal));
+  const Material *mat = ps.mat;
+  float d = 0.0f;  // diffuse factor
+  vec3f n = {0, 0, 0};
+  if (ps.viewNormal) {
+    n = normalize(cur_.transformDir(in.normal));
+    if (lightEnabled_) d = dot(n, -lightDir_);
+  } else if (lightEnabled_) {
+    d = dot(in.normal, ps.lightModel);
+  }
 
-  if (tex) {
+  if (ps.tex) {
     vec2f uv;
-    if (mat->flags & MaterialFlags::ENV_MAP) {
+    if (ps.envMap) {
       // Environment map UV from the view-space normal
       uv = {n.x * 0.5f + 0.5f, 0.5f - n.y * 0.5f};
     } else {
       uv = in.uv;
     }
-    sv.u = uv.x * tex->width;
-    sv.v = uv.y * tex->height;
+    sv.u = uv.x * ps.texW;
+    sv.v = uv.y * ps.texH;
   } else {
     sv.u = sv.v = 0.0f;
   }
 
   // Gouraud shading: lighting is evaluated per vertex
-  float r = 0, g = 0, b = 0;
-  bool lit = false;
-  if (envEnabled_) {
-    r += mat->ambient.r * envCol_.r;
-    g += mat->ambient.g * envCol_.g;
-    b += mat->ambient.b * envCol_.b;
-    lit = true;
-  }
-  if (lightEnabled_) {
-    float d = dot(n, -lightDir_);
-    if (d > 0.0f) {
+  float r, g, b;
+  if (ps.lit) {
+    r = g = b = 0.0f;
+    if (envEnabled_) {
+      r += mat->ambient.r * envCol_.r;
+      g += mat->ambient.g * envCol_.g;
+      b += mat->ambient.b * envCol_.b;
+    }
+    if (lightEnabled_ && d > 0.0f) {
       r += mat->diffuse.r * lightCol_.r * d;
       g += mat->diffuse.g * lightCol_.g * d;
       b += mat->diffuse.b * lightCol_.b * d;
     }
-    lit = true;
-  }
-  if (!lit) {
+  } else {
     r = mat->diffuse.r;
     g = mat->diffuse.g;
     b = mat->diffuse.b;
@@ -385,7 +539,6 @@ void Graphics3D::shadeVertex(const Vertex &in, const Material *mat,
   sv.g = clamp01(g) * 255.0f;
   sv.b = clamp01(b) * 255.0f;
 
-  out.invW = invW;
   out.viewZ = viewPos.z;
   out.ok = true;
 }
@@ -393,40 +546,73 @@ void Graphics3D::shadeVertex(const Vertex &in, const Material *mat,
 // ---------------------------------------------------------------------------
 // Triangle setup
 
+static inline uint8_t materialAlpha64(const Material *mat) {
+  return (uint8_t)((mat->blendMode == BlendMode::NONE)
+                       ? 64
+                       : (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f));
+}
+
 void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
                               const CachedVertex &c, const Material *mat,
                               const Texture *tex) {
   if (!a.ok || !b.ok || !c.ok) return;
-  if (triCount_ >= triCapacity_) {  // buffer overflow: drop for this frame
-    triDropped_++;
-    return;
-  }
-
-  Triangle &t = tris_[triCount_];
-  t.v[0] = a.sv;
-  t.v[1] = b.sv;
-  t.v[2] = c.sv;
-  if (depthBias_ != 0.0f) {
-    for (int i = 0; i < 3; i++) t.v[i].zNdc += depthBias_;
-  }
 
   // Back-face culling (screen y points down, so front-facing = negative area)
-  float area2 = (t.v[1].sx - t.v[0].sx) * (t.v[2].sy - t.v[0].sy) -
-                (t.v[2].sx - t.v[0].sx) * (t.v[1].sy - t.v[0].sy);
+  const float area2 = (b.sv.sx - a.sv.sx) * (c.sv.sy - a.sv.sy) -
+                      (c.sv.sx - a.sv.sx) * (b.sv.sy - a.sv.sy);
   if (area2 == 0.0f) return;
   if (area2 > 0.0f && !(mat->flags & MaterialFlags::DOUBLE_SIDED)) return;
 
-  float syMin = std::min({t.v[0].sy, t.v[1].sy, t.v[2].sy});
-  float syMax = std::max({t.v[0].sy, t.v[1].sy, t.v[2].sy});
-  int yMin = (int)std::ceil(syMin - 0.5f);
-  int yMax = (int)std::floor(syMax - 0.5f);
+  // Sort the vertices by screen y
+  const CachedVertex *cv[3] = {&a, &b, &c};
+  if (cv[1]->sv.sy < cv[0]->sv.sy) std::swap(cv[0], cv[1]);
+  if (cv[2]->sv.sy < cv[1]->sv.sy) std::swap(cv[1], cv[2]);
+  if (cv[1]->sv.sy < cv[0]->sv.sy) std::swap(cv[0], cv[1]);
+  const ShadedVertex &v0 = cv[0]->sv, &v1 = cv[1]->sv, &v2 = cv[2]->sv;
+
+  int yMin = ceilInt(v0.sy - 0.5f);
+  int yMax = floorInt(v2.sy - 0.5f);
   yMin = std::max(yMin, 0);
   yMax = std::min(yMax, (int)screenH_ - 1);
   if (yMin > yMax) return;
 
+  if (triCount_ >= triCapacity_) {  // buffer overflow: drop for this frame
+    triDropped_++;
+    return;
+  }
+  Triangle &t = tris_[triCount_];
+
+  // Attribute planes (Cramer's rule on the sorted vertices)
+  const float x0 = v0.sx, y0 = v0.sy;
+  const float x10 = v1.sx - x0, y10 = v1.sy - y0;
+  const float x20 = v2.sx - x0, y20 = v2.sy - y0;
+  const float invDet = 1.0f / (x10 * y20 - x20 * y10);  // never 0 (area2 != 0)
+  auto plane = [&](float a0, float a1, float a2) -> Plane {
+    const float d1 = a1 - a0, d2 = a2 - a0;
+    const float dx = (d1 * y20 - d2 * y10) * invDet;
+    const float dy = (d2 * x10 - d1 * x20) * invDet;
+    return {a0 - dx * x0 - dy * y0, dx, dy};
+  };
+
+  t.sx[0] = x0;
+  t.sy[0] = y0;
+  t.sx[1] = v1.sx;
+  t.sy[1] = v1.sy;
+  const float y21 = v2.sy - v1.sy;
+  t.slope[0] = (y10 != 0.0f) ? x10 / y10 : 0.0f;
+  t.slope[1] = (y21 != 0.0f) ? (v2.sx - v1.sx) / y21 : 0.0f;
+  t.slope[2] = x20 / y20;  // y20 > 0, otherwise area2 == 0
+  // The long edge is on the left when the middle vertex lies to its right
+  t.leftLong = (x0 + t.slope[2] * y10) < v1.sx;
+
+  t.z = plane(v0.zNdc + depthBias_, v1.zNdc + depthBias_, v2.zNdc + depthBias_);
+  t.r = plane(v0.r, v1.r, v2.r);
+  t.g = plane(v0.g, v1.g, v2.g);
+  t.b = plane(v0.b, v1.b, v2.b);
+
   uint8_t flags = 0;
-  if (t.v[0].r == t.v[1].r && t.v[0].r == t.v[2].r && t.v[0].g == t.v[1].g &&
-      t.v[0].g == t.v[2].g && t.v[0].b == t.v[1].b && t.v[0].b == t.v[2].b) {
+  if (v0.r == v1.r && v0.r == v2.r && v0.g == v1.g && v0.g == v2.g &&
+      v0.b == v1.b && v0.b == v2.b) {
     flags |= TriFlags::FLAT;
   }
   // A texture with alpha makes the triangle translucent even in BlendMode::NONE
@@ -439,41 +625,40 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 
   if (tex) {
     flags |= TriFlags::TEX;
+    float u[3] = {v0.u, v1.u, v2.u}, v[3] = {v0.v, v1.v, v2.v};
     // Wrap texture coordinates per triangle to avoid fixed-point overflow
-    // (subtract the integer period of the minimum from all three vertices;
-    // relative values are unchanged)
-    float uMin = std::min({t.v[0].u, t.v[1].u, t.v[2].u});
-    float vMin = std::min({t.v[0].v, t.v[1].v, t.v[2].v});
-    float uOff = std::floor(uMin / tex->width) * tex->width;
-    float vOff = std::floor(vMin / tex->height) * tex->height;
+    // (subtract the texture period below the minimum from all three
+    // vertices; relative values are unchanged). Sizes are powers of two.
+    const int wPot = 1 << gfx2d::log2Floor(tex->width);
+    const int hPot = 1 << gfx2d::log2Floor(tex->height);
+    const float uMin = clampf(std::min({u[0], u[1], u[2]}), -1e6f, 1e6f);
+    const float vMin = clampf(std::min({v[0], v[1], v[2]}), -1e6f, 1e6f);
+    const float uOff = (float)((int)std::floor(uMin) & ~(wPot - 1));
+    const float vOff = (float)((int)std::floor(vMin) & ~(hPot - 1));
     for (int i = 0; i < 3; i++) {
-      t.v[i].u -= uOff;
-      t.v[i].v -= vOff;
+      u[i] -= uOff;
+      v[i] -= vOff;
     }
-  }
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
-  const CachedVertex *cv[3] = {&a, &b, &c};
-  for (int i = 0; i < 3; i++) {
-    t.invW[i] = cv[i]->invW;
-    t.v[i].u *= cv[i]->invW;  // multiply by 1/w for perspective correction
-    t.v[i].v *= cv[i]->invW;
-  }
+    for (int i = 0; i < 3; i++) {  // (u/w, v/w) are linear in screen space
+      u[i] *= cv[i]->invW;
+      v[i] *= cv[i]->invW;
+    }
+    t.uw = plane(u[0], u[1], u[2]);
+    t.vw = plane(v[0], v[1], v[2]);
+    t.iw = plane(cv[0]->invW, cv[1]->invW, cv[2]->invW);
+#else
+    t.u = plane(u[0], u[1], u[2]);
+    t.v = plane(v[0], v[1], v[2]);
 #endif
-
-  for (int e = 0; e < 3; e++) {
-    float dy = t.v[e == 2 ? 0 : e + 1].sy - t.v[e].sy;
-    t.invDy[e] = (dy != 0.0f) ? 1.0f / dy : 0.0f;
   }
 
-  int alpha64 = (mat->blendMode == BlendMode::NONE)
-                    ? 64
-                    : (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f);
   t.mat = mat;
-  t.depth = (a.viewZ + b.viewZ + c.viewZ) * (1.0f / 3.0f);
+  t.sortKey = floatSortKey(a.viewZ + b.viewZ + c.viewZ);
   t.yMin = (int16_t)yMin;
   t.yMax = (int16_t)yMax;
   t.flags = flags;
-  t.alpha64 = (uint8_t)alpha64;
+  t.alpha64 = materialAlpha64(mat);
   t.rasterFn = (uint8_t)((int)tf * RASTER_PER_TEX + blend * 2 +
                          ((flags & TriFlags::FLAT) ? 1 : 0));
   triCount_++;
@@ -504,24 +689,21 @@ void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
   out.b = clamp01(b) * 255.0f;
 }
 
-// Project a view-space vertex; false when behind the camera
-static bool projectUnlit(const mat4f &proj, int16_t screenW, int16_t screenH,
-                         const UnlitVertex &in, ShadedVertex &sv) {
-  float w;
-  vec3f clip = proj.transformPoint4(in.view, w);
-  if (w <= 0.0f) return false;
-  float invW = 1.0f / w;
-  sv.sx = (clip.x * invW * 0.5f + 0.5f) * screenW;
-  sv.sy = (0.5f - clip.y * invW * 0.5f) * screenH;
-  sv.zNdc = clip.z * invW;
-  sv.u = sv.v = 0.0f;
-  sv.r = in.r, sv.g = in.g, sv.b = in.b;
-  return true;
-}
-
 static inline uint8_t unlitRasterFn(const Material *mat, bool flat) {
   return (uint8_t)((int)TexFmt::NONE * RASTER_PER_TEX +
                    (int)mat->blendMode * 2 + (flat ? 1 : 0));
+}
+
+static inline Plane constPlane(float v) { return {v, 0.0f, 0.0f}; }
+
+// Texture planes of untextured primitives
+static inline void clearTexPlanes(Triangle &t) {
+#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
+  t.uw = t.vw = constPlane(0.0f);
+  t.iw = constPlane(1.0f);
+#else
+  t.u = t.v = constPlane(0.0f);
+#endif
 }
 
 void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
@@ -538,62 +720,74 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
     c.b = a.b + (b.b - a.b) * tt;
     (aIn ? b : a) = c;
   }
-  ShadedVertex sa, sb;
-  if (!projectUnlit(proj_, screenW_, screenH_, a, sa)) return;
-  if (!projectUnlit(proj_, screenW_, screenH_, b, sb)) return;
-  sa.zNdc += depthBias_;
-  sb.zNdc += depthBias_;
+  float ax, ay, az, bx, by, bz, invW;
+  if (!projectPoint(a.view, ax, ay, az, invW)) return;
+  if (!projectPoint(b.view, bx, by, bz, invW)) return;
+  az += depthBias_;
+  bz += depthBias_;
 
   // Rows containing the end points; nothing to do when fully off screen
-  int yMin = (int)std::floor(std::min(sa.sy, sb.sy));
-  int yMax = (int)std::floor(std::max(sa.sy, sb.sy));
+  int yMin = floorInt(std::min(ay, by));
+  int yMax = floorInt(std::max(ay, by));
   yMin = std::max(yMin, 0);
   yMax = std::min(yMax, (int)screenH_ - 1);
   if (yMin > yMax) return;
-  if (std::max(sa.sx, sb.sx) < 0.0f ||
-      std::min(sa.sx, sb.sx) >= (float)screenW_)
-    return;
+  if (std::max(ax, bx) < 0.0f || std::min(ax, bx) >= (float)screenW_) return;
 
   if (triCount_ >= triCapacity_) {
     triDropped_++;
     return;
   }
   Triangle &t = tris_[triCount_];
-  t.v[0] = sa;
-  t.v[1] = sb;
-  t.v[2] = sb;
-  const float dx = sb.sx - sa.sx, dy = sb.sy - sa.sy;
-  t.invDy[0] = (dx != 0.0f) ? 1.0f / dx : 0.0f;  // 1/dx
-  t.invDy[1] = (dy != 0.0f) ? 1.0f / dy : 0.0f;  // 1/dy
-  t.invDy[2] = 0.0f;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
-  t.invW[0] = t.invW[1] = t.invW[2] = 1.0f;
-#endif
-  const bool flat = (sa.r == sb.r && sa.g == sb.g && sa.b == sb.b);
+  t.sx[0] = ax;
+  t.sy[0] = ay;
+  t.sx[1] = bx;
+  t.sy[1] = by;
+  const float dx = bx - ax, dy = by - ay;
+  t.slope[0] = (dx != 0.0f) ? 1.0f / dx : 0.0f;  // 1/dx
+  t.slope[1] = (dy != 0.0f) ? 1.0f / dy : 0.0f;  // 1/dy
+  t.slope[2] = 0.0f;
+  // Attributes vary along the major axis: per row for steep lines, per
+  // column for shallow ones (see makeLineSpan)
+  const bool steep = std::fabs(dy) >= std::fabs(dx);
+  auto linePlane = [&](float p, float q) -> Plane {
+    if (steep) {
+      const float k = (q - p) * t.slope[1];
+      return {p - k * ay, 0.0f, k};
+    }
+    const float k = (q - p) * t.slope[0];
+    return {p - k * ax, k, 0.0f};
+  };
+  t.z = linePlane(az, bz);
+  t.r = linePlane(a.r, b.r);
+  t.g = linePlane(a.g, b.g);
+  t.b = linePlane(a.b, b.b);
+  clearTexPlanes(t);
+
+  const bool flat = (a.r == b.r && a.g == b.g && a.b == b.b);
   uint8_t flags = TriFlags::LINE;
   if (flat) flags |= TriFlags::FLAT;
   if (mat->blendMode == BlendMode::NONE) flags |= TriFlags::OPAQUE;
   t.mat = mat;
-  t.depth = (a.view.z + b.view.z) * 0.5f;
+  t.sortKey = floatSortKey(a.view.z + b.view.z);
   t.yMin = (int16_t)yMin;
   t.yMax = (int16_t)yMax;
   t.flags = flags;
-  t.alpha64 = (uint8_t)((mat->blendMode == BlendMode::NONE)
-                            ? 64
-                            : (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f));
+  t.alpha64 = materialAlpha64(mat);
   t.rasterFn = unlitRasterFn(mat, flat);
+  t.leftLong = false;
   triCount_++;
 }
 
 void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   if (a.view.z > -zNear_) return;
-  ShadedVertex sv;
-  if (!projectUnlit(proj_, screenW_, screenH_, a, sv)) return;
-  sv.zNdc += depthBias_;
+  float sx, sy, z, invW;
+  if (!projectPoint(a.view, sx, sy, z, invW)) return;
+  z += depthBias_;
   const int size = pointSize_;
   // Square of `size` pixels centered on the point
-  const int x0 = (int)std::floor(sv.sx - size * 0.5f + 0.5f);
-  const int y0 = (int)std::floor(sv.sy - size * 0.5f + 0.5f);
+  const int x0 = floorInt(sx - size * 0.5f + 0.5f);
+  const int y0 = floorInt(sy - size * 0.5f + 0.5f);
   if (x0 + size <= 0 || x0 >= (int)screenW_) return;
   int yMin = std::max(y0, 0), yMax = std::min(y0 + size - 1, (int)screenH_ - 1);
   if (yMin > yMax) return;
@@ -603,25 +797,25 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
     return;
   }
   Triangle &t = tris_[triCount_];
-  sv.sx = (float)x0;
-  sv.sy = (float)y0;
-  t.v[0] = t.v[1] = t.v[2] = sv;
-  t.invDy[0] = (float)size;
-  t.invDy[1] = t.invDy[2] = 0.0f;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
-  t.invW[0] = t.invW[1] = t.invW[2] = 1.0f;
-#endif
+  t.sx[0] = t.sx[1] = (float)x0;
+  t.sy[0] = t.sy[1] = (float)y0;
+  t.slope[0] = (float)size;
+  t.slope[1] = t.slope[2] = 0.0f;
+  t.z = constPlane(z);
+  t.r = constPlane(a.r);
+  t.g = constPlane(a.g);
+  t.b = constPlane(a.b);
+  clearTexPlanes(t);
   uint8_t flags = TriFlags::POINT | TriFlags::FLAT;
   if (mat->blendMode == BlendMode::NONE) flags |= TriFlags::OPAQUE;
   t.mat = mat;
-  t.depth = a.view.z;
+  t.sortKey = floatSortKey(a.view.z);
   t.yMin = (int16_t)yMin;
   t.yMax = (int16_t)yMax;
   t.flags = flags;
-  t.alpha64 = (uint8_t)((mat->blendMode == BlendMode::NONE)
-                            ? 64
-                            : (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f));
+  t.alpha64 = materialAlpha64(mat);
   t.rasterFn = unlitRasterFn(mat, true);
+  t.leftLong = false;
   triCount_++;
 }
 
@@ -629,7 +823,6 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
   if (!tris_) return;
   const Material *mat = prim.material ? prim.material : curMat_;
   if (!mat) return;
-  const Texture *tex = materialTexture(mat);
   if (!prim.vertexBuffer || !prim.vertexBuffer->vertices || !prim.indices)
     return;
   const Vertex *verts = prim.vertexBuffer->vertices;
@@ -637,6 +830,20 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
   const uint16_t *idx = prim.indices;
   int n = prim.indexCount;
   static const CachedVertex INVALID = {};  // ok == false: drops the triangle
+
+  // Per-primitive constants of the vertex stage
+  PrimSetup ps;
+  ps.mat = mat;
+  ps.tex = materialTexture(mat);
+  ps.texW = ps.tex ? (float)ps.tex->width : 0.0f;
+  ps.texH = ps.tex ? (float)ps.tex->height : 0.0f;
+  ps.envMap = ps.tex && (mat->flags & MaterialFlags::ENV_MAP);
+  ps.lit = envEnabled_ || lightEnabled_;
+  ps.viewNormal = ps.envMap;
+  ps.lightModel = {0, 0, 0};
+  if (lightEnabled_ && !lightToModelSpace(cur_, lightDir_, ps.lightModel)) {
+    ps.viewNormal = true;
+  }
 
   // Vertex cache: avoid re-transforming vertices shared by several triangles
   // (strips, fans, indexed meshes). Invalidated per primitive.
@@ -648,7 +855,7 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
     }
     CachedVertex &cv = vcache_[vi & (VCACHE_SIZE - 1)];
     if (cv.tag != vi) {
-      shadeVertex(verts[vi], mat, tex, cv);
+      shadeVertex(verts[vi], ps, cv);
       cv.tag = vi;
     }
     return cv;
@@ -658,23 +865,24 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
     case PrimitiveType::TRIANGLES:
       for (int i = 0; i + 2 < n; i += 3) {
         emitTriangle(fetch(idx[i]), fetch(idx[i + 1]), fetch(idx[i + 2]), mat,
-                     tex);
+                     ps.tex);
       }
       break;
     case PrimitiveType::TRIANGLE_STRIP:
       for (int i = 2; i < n; i++) {
         if (i & 1) {
           emitTriangle(fetch(idx[i - 1]), fetch(idx[i - 2]), fetch(idx[i]), mat,
-                       tex);
+                       ps.tex);
         } else {
           emitTriangle(fetch(idx[i - 2]), fetch(idx[i - 1]), fetch(idx[i]), mat,
-                       tex);
+                       ps.tex);
         }
       }
       break;
     case PrimitiveType::TRIANGLE_FAN:
       for (int i = 2; i < n; i++) {
-        emitTriangle(fetch(idx[0]), fetch(idx[i - 1]), fetch(idx[i]), mat, tex);
+        emitTriangle(fetch(idx[0]), fetch(idx[i - 1]), fetch(idx[i]), mat,
+                     ps.tex);
       }
       break;
     case PrimitiveType::POINTS:
@@ -735,6 +943,7 @@ void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
   static const uint16_t QUAD_INDICES[6] = {0, 1, 2, 0, 2, 3};
 
   vec3f half = size * 0.5f;
+  const float invDivs = 1.0f / (float)divs;
 
   for (int f = 0; f < 6; f++) {
     vec3f corner[4];
@@ -758,8 +967,8 @@ void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
     // interpolated)
     for (int j = 0; j < divs; j++) {
       for (int i = 0; i < divs; i++) {
-        float u0 = (float)i / divs, u1 = (float)(i + 1) / divs;
-        float v0 = (float)j / divs, v1 = (float)(j + 1) / divs;
+        float u0 = (float)i * invDivs, u1 = (float)(i + 1) * invDivs;
+        float v0 = (float)j * invDivs, v1 = (float)(j + 1) * invDivs;
         const float us[4] = {u0, u1, u1, u0};
         const float vs[4] = {v0, v0, v1, v1};
 
@@ -793,7 +1002,7 @@ void Graphics3D::beginRender() {
   for (int i = 0; i < triCount_; i++) order_[i] = (uint16_t)i;
   const Triangle *tris = tris_;
   std::sort(order_, order_ + triCount_, [tris](uint16_t a, uint16_t b) {
-    return tris[a].depth < tris[b].depth;
+    return tris[a].sortKey < tris[b].sortKey;
   });
 }
 
@@ -825,16 +1034,15 @@ static inline void spanAdvance(Span &sp, int n) {
 #endif
 }
 
-// NDC depth of the span at pixel position x
-static inline float spanDepthAt(const Span &sp, float x) {
-  return sp.z0 + sp.dz * (x - (float)sp.x0);
-}
-
-// Is frag nearer than e at the center of the overlap [ox0, ox1)?
+// Is frag nearer than e at the center of the overlap [ox0, ox1)? Depths are
+// compared doubled so that the half-pixel center stays integer.
 static inline bool fragNearer(const Span &frag, const Span &e, int ox0,
                               int ox1) {
-  float xm = (float)(ox0 + ox1 - 1) * 0.5f;
-  return spanDepthAt(frag, xm) < spanDepthAt(e, xm);
+  const int k = ox0 + ox1 - 1;  // 2 * center
+  const int64_t zf =
+      2 * (int64_t)frag.z0 + (int64_t)frag.dz * (k - 2 * frag.x0);
+  const int64_t ze = 2 * (int64_t)e.z0 + (int64_t)e.dz * (k - 2 * e.x0);
+  return zf < ze;
 }
 
 // Remove the range [ox0, ox1) from list element e = *pp.
@@ -977,32 +1185,30 @@ void Graphics3D::clipTranslucent(const Span &frag) {
   }
 }
 
-// Build a span from the intersection of scanline yc with triangle t.
-// Returns false if there is no intersection or it lies outside the region [rx0,
-// rx1).
-// Fill the span's attributes for pixels [x0, x1) with values at parameter
-// tStart (at the center of x0) and per-pixel parameter step tStep along the
-// line a -> b. Texture coordinates are unused (points and lines are
-// untextured).
-static void fillUnlitSpan(const ShadedVertex &a, const ShadedVertex &b,
-                          float tStart, float tStep, int x0, int x1,
-                          const Triangle &t, Span &out) {
-  auto lin = [&](float a0, float a1, float &start, float &delta) {
-    start = a0 + (a1 - a0) * tStart;
-    delta = (a1 - a0) * tStep;
-  };
-  auto linColor = [&](float a0, float a1, int32_t &start, int32_t &delta) {
-    float sf, df;
-    lin(std::min(a0, 255.0f), std::min(a1, 255.0f), sf, df);
-    start = (int32_t)(std::max(sf, 0.0f) * FIX_ONE);
-    delta = (int32_t)(df * FIX_ONE);
-  };
+// Fill the depth and color of a span covering [x0, x1) from the planes of t,
+// evaluated at the center of the leftmost pixel (xc, yc)
+static inline void fillSpanBase(const Triangle &t, float xc, float yc, int x0,
+                                int x1, Span &out) {
   out.x0 = x0;
   out.x1 = x1;
-  lin(a.zNdc, b.zNdc, out.z0, out.dz);
-  linColor(a.r, b.r, out.r, out.dr);
-  linColor(a.g, b.g, out.g, out.dg);
-  linColor(a.b, b.b, out.b, out.db);
+  out.z0 = toZ(t.z.at(xc, yc));
+  out.dz = toZDelta(t.z.dx);
+  // Color: the plane values at pixel centers inside the triangle lie within
+  // 0..255 up to rounding; clamp the start value to guard the rounding.
+  out.r = toFixColor(t.r.at(xc, yc));
+  out.g = toFixColor(t.g.at(xc, yc));
+  out.b = toFixColor(t.b.at(xc, yc));
+  out.dr = toFixDelta(t.r.dx);
+  out.dg = toFixDelta(t.g.dx);
+  out.db = toFixDelta(t.b.dx);
+  out.tri = &t;
+  out.next = nullptr;
+}
+
+// Span of an untextured primitive (points and lines)
+static inline void fillUnlitSpan(const Triangle &t, float xc, float yc, int x0,
+                                 int x1, Span &out) {
+  fillSpanBase(t, xc, yc, x0, x1, out);
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
   out.uw = out.vw = out.duw = out.dvw = 0.0f;
   out.iw = 1.0f;
@@ -1010,47 +1216,42 @@ static void fillUnlitSpan(const ShadedVertex &a, const ShadedVertex &b,
 #else
   out.u = out.v = out.du = out.dv = 0;
 #endif
-  out.tri = &t;
-  out.next = nullptr;
 }
 
-// Line segment v[0] -> v[1] on pixel row yi: one pixel per row for steep
-// lines, one pixel per column (a horizontal run) for shallow lines, so the
-// coverage matches a Bresenham line. Both end points are drawn.
+// Line segment a -> b on pixel row yi: one pixel per row for steep lines, one
+// pixel per column (a horizontal run) for shallow lines, so the coverage
+// matches a Bresenham line. Both end points are drawn.
 static bool makeLineSpan(const Triangle &t, int yi, int rx0, int rx1,
                          Span &out) {
-  const ShadedVertex &a = t.v[0], &b = t.v[1];
-  const float dx = b.sx - a.sx, dy = b.sy - a.sy;
-  const float invDx = t.invDy[0], invDy = t.invDy[1];
+  const float ax = t.sx[0], ay = t.sy[0], bx = t.sx[1], by = t.sy[1];
+  const float dx = bx - ax, dy = by - ay;
+  const float invDy = t.slope[1];
   int c0, c1;
-  float tStart, tStep;
   if (std::fabs(dy) >= std::fabs(dx)) {
     // Steep: the pixel at the row center
-    float tt = (dy != 0.0f) ? clamp01(((float)yi + 0.5f - a.sy) * invDy) : 0.0f;
-    c0 = (int)std::floor(a.sx + dx * tt);
+    float tt = (dy != 0.0f) ? clamp01(((float)yi + 0.5f - ay) * invDy) : 0.0f;
+    c0 = floorInt(ax + dx * tt);
     c1 = c0 + 1;
     if (c0 < rx0 || c0 >= rx1) return false;
-    tStart = tt;
-    tStep = 0.0f;
   } else {
     // Shallow: columns whose center's y falls into [yi, yi + 1)
-    const int ca = (int)std::floor(a.sx), cb = (int)std::floor(b.sx);
+    const int ca = floorInt(ax), cb = floorInt(bx);
     const int cMin = std::min(ca, cb), cMax = std::max(ca, cb);
     if (dy == 0.0f) {
       c0 = cMin;
       c1 = cMax + 1;
     } else {
-      float xA = a.sx + dx * (((float)yi - a.sy) * invDy);
-      float xB = a.sx + dx * (((float)yi + 1.0f - a.sy) * invDy);
+      float xA = ax + dx * (((float)yi - ay) * invDy);
+      float xB = ax + dx * (((float)yi + 1.0f - ay) * invDy);
       if (xA > xB) std::swap(xA, xB);
-      c0 = (int)std::ceil(xA - 0.5f);
-      c1 = (int)std::ceil(xB - 0.5f);
+      c0 = ceilInt(xA - 0.5f);
+      c1 = ceilInt(xB - 0.5f);
       // The rows of the end points always include the end point pixels
-      if (yi == (int)std::floor(a.sy)) {
+      if (yi == floorInt(ay)) {
         c0 = std::min(c0, ca);
         c1 = std::max(c1, ca + 1);
       }
-      if (yi == (int)std::floor(b.sy)) {
+      if (yi == floorInt(by)) {
         c0 = std::min(c0, cb);
         c1 = std::max(c1, cb + 1);
       }
@@ -1060,118 +1261,88 @@ static bool makeLineSpan(const Triangle &t, int yi, int rx0, int rx1,
     c0 = std::max(c0, rx0);
     c1 = std::min(c1, rx1);
     if (c0 >= c1) return false;
-    tStart = clamp01(((float)c0 + 0.5f - a.sx) * invDx);
-    tStep = invDx;
   }
-  fillUnlitSpan(a, b, tStart, tStep, c0, c1, t, out);
+  fillUnlitSpan(t, (float)c0 + 0.5f, (float)yi + 0.5f, c0, c1, out);
   return true;
 }
 
-// Point: a square with its top-left pixel at (v[0].sx, v[0].sy), size invDy[0]
-static bool makePointSpan(const Triangle &t, int rx0, int rx1, Span &out) {
-  const int size = (int)t.invDy[0];
-  int c0 = std::max((int)t.v[0].sx, rx0);
-  int c1 = std::min((int)t.v[0].sx + size, rx1);
+// Point: a square with its top-left pixel at (sx[0], sy[0]), size slope[0]
+static bool makePointSpan(const Triangle &t, int yi, int rx0, int rx1,
+                          Span &out) {
+  const int size = (int)t.slope[0];
+  int c0 = std::max((int)t.sx[0], rx0);
+  int c1 = std::min((int)t.sx[0] + size, rx1);
   if (c0 >= c1) return false;
-  fillUnlitSpan(t.v[0], t.v[0], 0.0f, 0.0f, c0, c1, t, out);
+  fillUnlitSpan(t, (float)c0 + 0.5f, (float)yi + 0.5f, c0, c1, out);
   return true;
 }
 
-static bool makeSpan(const Triangle &t, float yc, int rx0, int rx1, Span &out) {
-  if (t.flags & TriFlags::LINE) return makeLineSpan(t, (int)yc, rx0, rx1, out);
-  if (t.flags & TriFlags::POINT) return makePointSpan(t, rx0, rx1, out);
-  struct EndPt {
-    float x, z, u, v, r, g, b;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
-    float iw;
-#endif
-  };
-  EndPt pts[2];
-  int n = 0;
+// Build the span of triangle t on the scanline with center yc, limited to
+// the region [rx0, rx1). Returns false when the triangle covers no pixel
+// center there.
+static bool makeTriSpan(const Triangle &t, float yc, int rx0, int rx1,
+                        Span &out) {
+  // Edge x at yc: the long edge, and the short edge covering this row (the
+  // top->middle edge covers [sy0, sy1), middle->bottom covers [sy1, sy2))
+  const float xLong = t.sx[0] + t.slope[2] * (yc - t.sy[0]);
+  const float xShort = (yc < t.sy[1]) ? t.sx[0] + t.slope[0] * (yc - t.sy[0])
+                                      : t.sx[1] + t.slope[1] * (yc - t.sy[1]);
+  const float xl = t.leftLong ? xLong : xShort;
+  const float xr = t.leftLong ? xShort : xLong;
+  const float width = xr - xl;
+  if (width <= 0.0f) return false;
 
-  for (int e = 0; e < 3 && n < 2; e++) {
-    const ShadedVertex &a = t.v[e];
-    const ShadedVertex &b = t.v[e == 2 ? 0 : e + 1];
-    // Half-open test so that an intersection exactly at a vertex is not counted
-    // twice
-    if ((a.sy <= yc && yc < b.sy) || (b.sy <= yc && yc < a.sy)) {
-      float tt = (yc - a.sy) * t.invDy[e];
-      EndPt &p = pts[n++];
-      p.x = a.sx + (b.sx - a.sx) * tt;
-      p.z = a.zNdc + (b.zNdc - a.zNdc) * tt;
-      p.u = a.u + (b.u - a.u) * tt;
-      p.v = a.v + (b.v - a.v) * tt;
-      p.r = a.r + (b.r - a.r) * tt;
-      p.g = a.g + (b.g - a.g) * tt;
-      p.b = a.b + (b.b - a.b) * tt;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
-      p.iw = t.invW[e] + (t.invW[e == 2 ? 0 : e + 1] - t.invW[e]) * tt;
-#endif
-    }
-  }
-  if (n < 2) return false;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 1
-  // Vertical-only correction: divide at the end points so they are exact;
-  // the span interior is then interpolated affinely
-  for (int i = 0; i < 2; i++) {
-    float inv = 1.0f / pts[i].iw;
-    pts[i].u *= inv;
-    pts[i].v *= inv;
-  }
-#endif
-
-  const EndPt *l = &pts[0], *r = &pts[1];
-  if (l->x > r->x) std::swap(l, r);
-  float width = r->x - l->x;
-  if (width <= 0.0f) return false;  // zero width
-
-  // Fill the pixels whose centers (xi + 0.5) fall inside [x0, x1)
-  int xi0 = (int)std::ceil(l->x - 0.5f);
-  int xi1 = (int)std::ceil(r->x - 0.5f);
+  // Fill the pixels whose centers (xi + 0.5) fall inside [xl, xr)
+  int xi0 = ceilInt(xl - 0.5f);
+  int xi1 = ceilInt(xr - 0.5f);
   xi0 = std::max(xi0, rx0);
   xi1 = std::min(xi1, rx1);
   if (xi0 >= xi1) return false;
 
-  // Attribute values at the center of the leftmost pixel and per-pixel
-  // increments
-  float invW = 1.0f / width;
-  float t0 = ((float)xi0 + 0.5f - l->x) * invW;
-  auto lin = [&](float a0, float a1, float &start, float &delta) {
-    float d = (a1 - a0) * invW;
-    start = a0 + (a1 - a0) * t0;
-    delta = d;
-  };
-  // Color: if both ends are within 0..255 so are all values in between.
-  // Clamp at 0 to guard against slightly negative values from rounding.
-  auto linColor = [&](float a0, float a1, int32_t &start, int32_t &delta) {
-    float sf, df;
-    lin(std::min(a0, 255.0f), std::min(a1, 255.0f), sf, df);
-    start = (int32_t)(std::max(sf, 0.0f) * FIX_ONE);
-    delta = (int32_t)(df * FIX_ONE);
-  };
+  const float xc = (float)xi0 + 0.5f;
+  fillSpanBase(t, xc, yc, xi0, xi1, out);
 
-  out.x0 = xi0;
-  out.x1 = xi1;
-  lin(l->z, r->z, out.z0, out.dz);
-  linColor(l->r, r->r, out.r, out.dr);
-  linColor(l->g, r->g, out.g, out.dg);
-  linColor(l->b, r->b, out.b, out.db);
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
-  lin(l->u, r->u, out.uw, out.duw);
-  lin(l->v, r->v, out.vw, out.dvw);
-  lin(l->iw, r->iw, out.iw, out.diw);
+  out.uw = t.uw.at(xc, yc);
+  out.vw = t.vw.at(xc, yc);
+  out.iw = t.iw.at(xc, yc);
+  out.duw = t.uw.dx;
+  out.dvw = t.vw.dx;
+  out.diw = t.iw.dx;
+#elif SHAPOGFX3D_CORRECT_PERSPECTIVE == 1
+  if (t.flags & TriFlags::TEX) {
+    // Vertical-only correction: (u, v) are exact at the span end points and
+    // interpolated affinely in between. The three divides (1/w at both ends,
+    // 1/width) are folded into one.
+    const float iwL = t.iw.at(xl, yc), iwR = t.iw.at(xr, yc);
+    const float uwL = t.uw.at(xl, yc), uwR = t.uw.at(xr, yc);
+    const float vwL = t.vw.at(xl, yc), vwR = t.vw.at(xr, yc);
+    const float k = 1.0f / (iwL * iwR * width);
+    const float kL = iwR * width * k;  // 1 / iwL
+    const float du = (uwR * iwL - uwL * iwR) * k;
+    const float dv = (vwR * iwL - vwL * iwR) * k;
+    const float t0 = xc - xl;
+    out.u = toFixTex(uwL * kL + du * t0);
+    out.v = toFixTex(vwL * kL + dv * t0);
+    out.du = toFixDelta(du);
+    out.dv = toFixDelta(dv);
+  } else {
+    out.u = out.v = out.du = out.dv = 0;
+  }
 #else
-  float sf, df;
-  lin(l->u, r->u, sf, df);
-  out.u = (int32_t)(sf * FIX_ONE);
-  out.du = (int32_t)(df * FIX_ONE);
-  lin(l->v, r->v, sf, df);
-  out.v = (int32_t)(sf * FIX_ONE);
-  out.dv = (int32_t)(df * FIX_ONE);
+  out.u = toFixTex(t.u.at(xc, yc));
+  out.v = toFixTex(t.v.at(xc, yc));
+  out.du = toFixDelta(t.u.dx);
+  out.dv = toFixDelta(t.v.dx);
 #endif
-  out.tri = &t;
-  out.next = nullptr;
   return true;
+}
+
+static inline bool makeSpan(const Triangle &t, int yi, int rx0, int rx1,
+                            Span &out) {
+  if (t.flags & TriFlags::LINE) return makeLineSpan(t, yi, rx0, rx1, out);
+  if (t.flags & TriFlags::POINT) return makePointSpan(t, yi, rx0, rx1, out);
+  return makeTriSpan(t, (float)yi + 0.5f, rx0, rx1, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1236,6 +1407,89 @@ struct TexSampler<TexFmt::RGB565BE> {
 };
 #endif
 
+// Texture coordinate walker: (u, v) in 16.16 texels, wrapped with bit masks
+// (width and height must be powers of two). fetchNext() returns the current
+// texel and advances to the next pixel.
+template <TexFmt T>
+struct SoftTex {
+  const uint8_t *tp;
+  uint32_t uMask, vMask, tstride;
+  int32_t u, v, du, dv;
+
+  void init(const Texture &tex, int32_t u0, int32_t v0, int32_t du0,
+            int32_t dv0) {
+    uMask = (1u << gfx2d::log2Floor(tex.width)) - 1;
+    vMask = (1u << gfx2d::log2Floor(tex.height)) - 1;
+    tp = (const uint8_t *)tex.pixels;
+    tstride = tex.stride;
+    u = u0;
+    v = v0;
+    du = du0;
+    dv = dv0;
+  }
+  void setStep(int32_t du0, int32_t dv0) {
+    du = du0;
+    dv = dv0;
+  }
+  inline uint32_t fetchNext(uint32_t &a4) {
+    const uint8_t *row =
+        tp + (size_t)((uint32_t)(v >> FIX_SHIFT) & vMask) * tstride;
+    const uint32_t texel =
+        TexSampler<T>::fetch(row, (uint32_t)(u >> FIX_SHIFT) & uMask, a4);
+    u += du;
+    v += dv;
+    return texel;
+  }
+};
+
+#if SHAPOGFX3D_RP2_INTERP
+// Same, through the SIO interpolator: lane 0 turns u into the byte offset of
+// the texel in its row, lane 1 turns v into the byte offset of the row, and
+// POP_FULL returns the texel address and steps both accumulators. Only for
+// 16-bit texels with a power-of-two stride.
+template <TexFmt T>
+struct InterpTex {
+  static bool usable(const Texture &tex) {
+    const uint32_t s = tex.stride;
+    return tex.width >= 2 && tex.height >= 2 && s >= 2 && (s & (s - 1)) == 0 &&
+           gfx2d::log2Floor((int)s) <= FIX_SHIFT;
+  }
+  void init(const Texture &tex, int32_t u0, int32_t v0, int32_t du0,
+            int32_t dv0) {
+    const int log2w = gfx2d::log2Floor(tex.width);
+    const int log2h = gfx2d::log2Floor(tex.height);
+    const int log2s = gfx2d::log2Floor((int)tex.stride);
+    interp_config c = interp_default_config();
+    interp_config_set_add_raw(&c, true);
+    interp_config_set_shift(&c, FIX_SHIFT - 1);  // texel index x 2 bytes
+    interp_config_set_mask(&c, 1, log2w);
+    interp_set_config(interp0, 0, &c);
+    interp_config_set_shift(&c, FIX_SHIFT - log2s);  // row index x stride
+    interp_config_set_mask(&c, log2s, log2s + log2h - 1);
+    interp_set_config(interp0, 1, &c);
+    interp0->base[0] = (uint32_t)du0;
+    interp0->base[1] = (uint32_t)dv0;
+    interp0->base[2] = (uintptr_t)tex.pixels;
+    interp0->accum[0] = (uint32_t)u0;
+    interp0->accum[1] = (uint32_t)v0;
+  }
+  void setStep(int32_t du0, int32_t dv0) {
+    interp0->base[0] = (uint32_t)du0;
+    interp0->base[1] = (uint32_t)dv0;
+  }
+  inline uint32_t fetchNext(uint32_t &a4) {
+    const uint32_t p = *(const uint16_t *)(uintptr_t)(interp0->pop[2]);
+    if constexpr (T == TexFmt::ARGB4444) {
+      a4 = p >> 12;
+      return gfx2d::rgb444ToRgb565((uint16_t)(p & 0x0FFFu));
+    } else {
+      a4 = 15;
+      return gfx2d::bswap16((uint16_t)p);
+    }
+  }
+};
+#endif
+
 // Output format: pixel cursor, packing from 5/6/5 components, blending
 template <PixelFormat OUT>
 struct OutTraits;
@@ -1273,69 +1527,67 @@ struct OutTraits<PixelFormat::RGB444> {
 };
 #endif
 
-// Rasterize n pixels of span sp starting at pixel x of row `line`
-template <BlendMode B, TexFmt T, bool FLAT, PixelFormat OUT>
-static void rasterSpanT(uint8_t *line, int x, int n, const Span &sp) {
+// The pixel loop: n pixels of span sp through cursor cur, texels from tx
+template <BlendMode B, TexFmt T, bool FLAT, PixelFormat OUT, typename Tex>
+static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
+                              const Span &sp, int n, Tex &tx) {
   using O = OutTraits<OUT>;
   constexpr bool TEX = (T != TexFmt::NONE);
   constexpr bool TEXA = (T == TexFmt::ARGB4444);
 
-  typename O::Cursor cur;
-  cur.init(line, x);
-
-  const Triangle &t = *sp.tri;
   int32_t r = sp.r, g = sp.g, b = sp.b;
   const int32_t dr = sp.dr, dg = sp.dg, db = sp.db;
-  const uint32_t a64 = t.alpha64;
+  const uint32_t a64 = sp.tri->alpha64;
 
-  // With equal vertex colors and no texture, the color is constant over the
-  // span
   uint32_t sr = (uint32_t)(r >> 19) & 31u;
   uint32_t sg = (uint32_t)(g >> 18) & 63u;
   uint32_t sb = (uint32_t)(b >> 19) & 31u;
-  if (B == BlendMode::NONE && FLAT && !TEX) {
-    cur.fill(n, O::pack(sr, sg, sb));
-    return;
-  }
 
-  // Texture (width and height must be powers of two)
-  const uint8_t *tp = nullptr;
-  uint32_t uMask = 0, vMask = 0, tstride = 0;
-  if constexpr (TEX) {
-    const Texture &tex = *t.mat->texture;
-    uMask = (1u << gfx2d::log2Floor(tex.width)) - 1;
-    vMask = (1u << gfx2d::log2Floor(tex.height)) - 1;
-    tp = (const uint8_t *)tex.pixels;
-    tstride = tex.stride;
-  }
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+  // Sub-spans of PERSPECTIVE_STEP pixels: (u, v) are exact at the sub-span
+  // ends and interpolated linearly inside. uAcc/vAcc mirror the walker's
+  // accumulators at the sub-span start.
   float uw = sp.uw, vw = sp.vw, iw = sp.iw;
-  const float duw = sp.duw, dvw = sp.dvw, diw = sp.diw;
-#else
-  int32_t u = sp.u, v = sp.v;
-  const int32_t du = sp.du, dv = sp.dv;
+  int32_t uAcc = 0, vAcc = 0, du = 0, dv = 0;
+  int left = 0, prevM = 0;
+  if constexpr (TEX) {
+    const float inv = 1.0f / iw;
+    uAcc = toFixTex(uw * inv);
+    vAcc = toFixTex(vw * inv);
+  }
 #endif
 
   for (int i = 0; i < n; i++) {
     uint32_t a4 = 15;
     if constexpr (TEX) {
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
-      // Perspective correction: interpolate (u/w, v/w) and 1/w, divide per
-      // pixel
-      float inv = 1.0f / iw;
-      uint32_t ui = (uint32_t)(int32_t)(uw * inv);
-      uint32_t vi = (uint32_t)(int32_t)(vw * inv);
-#else
-      uint32_t ui = (uint32_t)(u >> FIX_SHIFT);
-      uint32_t vi = (uint32_t)(v >> FIX_SHIFT);
+      if (left == 0) {
+        uAcc += du * prevM;
+        vAcc += dv * prevM;
+        const int m = std::min(n - i, PERSPECTIVE_STEP);
+        uw += sp.duw * (float)m;
+        vw += sp.dvw * (float)m;
+        iw += sp.diw * (float)m;
+        const float inv = 1.0f / iw;
+        const int32_t u1 = toFixTex(uw * inv), v1 = toFixTex(vw * inv);
+        if (m == PERSPECTIVE_STEP) {
+          du = (u1 - uAcc) / PERSPECTIVE_STEP;
+          dv = (v1 - vAcc) / PERSPECTIVE_STEP;
+        } else {
+          du = (u1 - uAcc) / m;
+          dv = (v1 - vAcc) / m;
+        }
+        tx.setStep(du, dv);
+        left = prevM = m;
+      }
+      left--;
 #endif
-      const uint8_t *row = tp + (size_t)(vi & vMask) * tstride;
-      uint32_t texel = TexSampler<T>::fetch(row, ui & uMask, a4);
+      const uint32_t texel = tx.fetchNext(a4);
       // Modulate the texel (5/6/5 bits) by the vertex color (0..255).
       // (c + 1) * t >> 8 preserves the maximum value.
-      uint32_t cr = ((uint32_t)(r >> FIX_SHIFT) & 0xFFu) + 1;
-      uint32_t cg = ((uint32_t)(g >> FIX_SHIFT) & 0xFFu) + 1;
-      uint32_t cb = ((uint32_t)(b >> FIX_SHIFT) & 0xFFu) + 1;
+      const uint32_t cr = ((uint32_t)(r >> FIX_SHIFT) & 0xFFu) + 1;
+      const uint32_t cg = ((uint32_t)(g >> FIX_SHIFT) & 0xFFu) + 1;
+      const uint32_t cb = ((uint32_t)(b >> FIX_SHIFT) & 0xFFu) + 1;
       sr = (cr * (texel >> 11)) >> 8;
       sg = (cg * ((texel >> 5) & 63u)) >> 8;
       sb = (cb * (texel & 31u)) >> 8;
@@ -1348,9 +1600,9 @@ static void rasterSpanT(uint8_t *line, int x, int n, const Span &sp) {
     // a4 * 17 + (a4 >> 3) maps 0..15 to 0..256
     const uint32_t a256 = TEXA ? (a4 * 17u + (a4 >> 3)) : 256u;
     if (!TEXA || a256 != 0) {
-      if (B == BlendMode::NONE) {
+      if constexpr (B == BlendMode::NONE) {
         cur.write(O::pack(sr, sg, sb));
-      } else if (B == BlendMode::ALPHA) {
+      } else if constexpr (B == BlendMode::ALPHA) {
         uint32_t a = TEXA ? ((a64 * a256) >> 8) : a64;
         cur.write(O::blend(cur.read(), O::pack(sr, sg, sb), a));
       } else {
@@ -1371,16 +1623,50 @@ static void rasterSpanT(uint8_t *line, int x, int n, const Span &sp) {
       g += dg;
       b += db;
     }
-    if constexpr (TEX) {
+  }
+}
+
+// Rasterize n pixels of span sp starting at pixel x of row `line`
+template <BlendMode B, TexFmt T, bool FLAT, PixelFormat OUT>
+static void rasterSpanT(uint8_t *line, int x, int n, const Span &sp) {
+  using O = OutTraits<OUT>;
+  constexpr bool TEX = (T != TexFmt::NONE);
+
+  typename O::Cursor cur;
+  cur.init(line, x);
+
+  // With equal vertex colors and no texture, the color is constant over the
+  // span
+  if constexpr (B == BlendMode::NONE && FLAT && !TEX) {
+    cur.fill(n,
+             O::pack((uint32_t)(sp.r >> 19) & 31u, (uint32_t)(sp.g >> 18) & 63u,
+                     (uint32_t)(sp.b >> 19) & 31u));
+    return;
+  }
+
+  if constexpr (TEX) {
+    const Texture &tex = *sp.tri->mat->texture;
 #if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
-      uw += duw;
-      vw += dvw;
-      iw += diw;
+    const int32_t u0 = 0, v0 = 0, du0 = 0, dv0 = 0;  // set per sub-span
 #else
-      u += du;
-      v += dv;
+    const int32_t u0 = sp.u, v0 = sp.v, du0 = sp.du, dv0 = sp.dv;
 #endif
+#if SHAPOGFX3D_RP2_INTERP
+    if constexpr (T == TexFmt::RGB565BE || T == TexFmt::ARGB4444) {
+      if (InterpTex<T>::usable(tex)) {
+        InterpTex<T> tx;
+        tx.init(tex, u0, v0, du0, dv0);
+        rasterLoop<B, T, FLAT, OUT>(cur, sp, n, tx);
+        return;
+      }
     }
+#endif
+    SoftTex<T> tx;
+    tx.init(tex, u0, v0, du0, dv0);
+    rasterLoop<B, T, FLAT, OUT>(cur, sp, n, tx);
+  } else {
+    SoftTex<TexFmt::NONE> tx;
+    rasterLoop<B, T, FLAT, OUT>(cur, sp, n, tx);
   }
 }
 
@@ -1515,6 +1801,11 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
   if (y0 >= y1 || rx0 >= rx1) return;
   uint16_t *const link = link_;
 
+#if SHAPOGFX3D_RP2_INTERP
+  interp_hw_save_t interpSave;
+  interp_save(interp0, &interpSave);
+#endif
+
   // For each scanline of the region, build the list of triangles that start
   // intersecting at that line (linked by position in order_, i.e. by depth)
   for (int i = y0; i < y1; i++) bucketHead_[i] = bucketTail_[i] = NONE;
@@ -1540,7 +1831,6 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
     opaqueHead_ = nullptr;
     transHead_ = transTail_ = nullptr;
 
-    const float yc = (float)yi + 0.5f;
     uint16_t *pp = &active;
     while (*pp != NONE) {
       const uint16_t p = *pp;
@@ -1550,7 +1840,7 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
         continue;
       }
       Span sp;
-      if (makeSpan(t, yc, rx0, rx1, sp)) {
+      if (makeSpan(t, yi, rx0, rx1, sp)) {
         if (t.flags & TriFlags::OPAQUE) {
           clipTranslucent(sp);
           insertOpaque(sp);
@@ -1581,6 +1871,10 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
       table[e->tri->rasterFn](line, xBase + e->x0, e->x1 - e->x0, *e);
     }
   }
+
+#if SHAPOGFX3D_RP2_INTERP
+  interp_restore(interp0, &interpSave);
+#endif
 }
 
 // ---------------------------------------------------------------------------

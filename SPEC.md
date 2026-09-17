@@ -36,6 +36,12 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX_FORMAT_ARGB4444` | 1 | Enable the ARGB4444 format |
 | `SHAPOGFX_FORMAT_RGB565BE` | 1 | Enable the RGB565BE format |
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
+| `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
+| `SHAPOGFX3D_RP2_INTERP` | 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` |
+
+The last three macros are read by `gfx3d.cpp` only. With `SHAPOGFX3D_RP2_INTERP`
+the target must link `hardware_interp`; `render()` saves and restores `interp0` of
+the calling core, so interrupt handlers running during `render()` must not use it.
 
 Disabling a format removes its code from both renderers: the pixel cursors, the 2D
 per-format row operations, the 3D texture samplers and (for output formats) the 3D
@@ -186,8 +192,10 @@ Semantics:
   copied into an ARGB4444 target and ignored otherwise); `ALPHA` blends with the
   source alpha (only ARGB4444 has one; other formats are copied unless `opacity` is
   below 255); `ADD` adds the color scaled by alpha x opacity with saturation. Same
-  format 16-bit copies use `memcpy`; other combinations go through `Color` in chunks of
-  64 pixels on the stack.
+  format 16-bit copies use `memcpy`; the other `NONE` and `ALPHA` combinations use
+  per-pair row templates converting through RGB565 (lossless for every color depth;
+  GRAY1 targets keep the `Color` luminance threshold); `ADD` goes through `Color` in
+  chunks of 64 pixels on the stack.
 - **drawBitmap** renders a GRAY1 image as a two-color mask; runs of equal bits become
   spans. A transparent background leaves clear bits untouched.
 - **Text** uses Adafruit `GFXfont` data. `setFont` computes the ascent (largest height
@@ -195,8 +203,10 @@ Semantics:
   top-left corner of the line box and glyphs are placed relative to the baseline
   `ascent x scale` pixels below it. `background` (if not transparent) fills the box
   `xAdvance x lineHeight` of each glyph before drawing it. `'\n'` returns to the x of
-  the last `setCursor()` and advances by `yAdvance x scale`. Glyphs are drawn as runs
-  of set bits, each becoming a `scale x scale` block, so all formats and alpha work.
+  the last `setCursor()` and advances by `yAdvance x scale`. Glyphs are rendered by a
+  per-format template: at scale 1 the set bits are written through the row cursor, at
+  larger scales runs of set bits become `scale x scale` blocks; all formats and alpha
+  work.
 
 Every drawing function switches on the target format once per call (or per row),
 never per pixel; the per-pixel loops are instantiated per format from the cursor
@@ -463,6 +473,12 @@ Without lights the vertex color is `diffuse`. For `BlendMode::ADD` the color is
 pre-multiplied by the opacity. Vertex colors are interpolated linearly across each
 span and modulate the texel when a texture is present.
 
+Vertex normals must be unit length. When the upper 3x3 of the current matrix is a
+rotation times a uniform scale (the usual case), the light direction is transformed
+into model space once per primitive and `n . -L` is a single dot product per vertex;
+otherwise (non-uniform scale, shear, or environment mapping) the normal is transformed
+to view space and normalized per vertex.
+
 ### Environment mapping
 
 With `ENV_MAP`, `u = 0.5 + 0.5 n.x`, `v = 0.5 - 0.5 n.y` from the view-space normal.
@@ -482,9 +498,11 @@ and `ADD` multiply their opacity by `a4 / 15`. Texel alpha 0 skips the pixel.
 
 1. **Fixed part**: line buckets (2 x screen height x `uint16_t`), matrix stack
    (16 entries), vertex cache (64 entries).
-2. **Span pool**: a quarter of the remaining space, clamped to 32..512 spans.
+2. **Span pool**: a quarter of the remaining space, clamped to 32..512 spans
+   (64 bytes per span on 32-bit targets, 72 at perspective level 2).
 3. **Triangle buffer**: everything that remains, including 4 bytes per triangle for
-   the sort order and link arrays.
+   the sort order and link arrays (128 bytes per triangle on 32-bit targets, 116 at
+   perspective level 0).
 
 If the arena is too small for the fixed part, `init()` leaves the renderer
 uninitialized. Overflowing buffers drop the excess for the current frame.
@@ -493,8 +511,8 @@ uninitialized. Overflowing buffers drop the excess for the current frame.
 
 ### `beginRender()`
 
-Sorts the triangle indices (not the triangles) farthest first by their average
-view-space z. Depth order between opaque spans is resolved by depth comparison in
+Sorts the triangle indices (not the triangles) farthest first by the sum of their
+view-space z (as an integer key with the ordering of the float). Depth order between opaque spans is resolved by depth comparison in
 `render()`, so this sort primarily determines the compositing order of translucent
 triangles.
 
@@ -510,10 +528,12 @@ active list, triangles that have been passed are removed, and then:
 
 1. The span lists are cleared.
 2. For each active triangle, farthest first:
-    1. The two intersections of the triangle with the scanline give a span,
-       represented as "attribute values at the leftmost pixel + per-pixel
-       increments" (depth as `float`; color and texture coordinates as 16.16 fixed
-       point).
+    1. The two edges crossing the scanline give the span's pixel range; its
+       attributes are evaluated at the center of the leftmost pixel from the
+       triangle's attribute planes (each attribute is stored as `c + dx * x + dy *
+       y` in screen space, set up once per triangle), with the plane's `dx` as the
+       per-pixel increment (depth as 8.24 fixed point; color and texture coordinates
+       as 16.16 fixed point).
     2. The span is inserted. Opaque spans are kept in a list sorted by x that never
        overlaps; translucent spans in a separate list in insertion order. On overlap,
        the NDC depth is compared at the center of the overlapping interval. If the new
@@ -538,16 +558,24 @@ coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
 
 - **0**: affine everywhere.
 - **1** (default): vertical correction. `(u/w, v/w, 1/w)`, which are linear in screen
-  space, are interpolated along the edges; at the two end points of each span they are
+  space, are planes of the triangle; at the two end points of each span they are
   divided to obtain exact `(u, v)`, and the span interior is interpolated affinely in
-  fixed point. Costs two `float` divides per span and 12 bytes per triangle. Along a
+  fixed point. The three divides (both `1/w` and `1/width`) are folded into one
+  `float` divide per span; costs 12 bytes per triangle. Along a
   scanline, a horizontal surface seen by a camera without roll has constant depth, so
   this level renders such surfaces without distortion; surfaces whose depth varies
   along the scanline keep affine distortion inside each span, while span end points
   (and therefore edges shared between triangles) are exact.
 - **2**: full correction. `(u/w, v/w, 1/w)` are interpolated across the span in `float`
-  and divided per pixel. Costs one divide per textured pixel, 12 bytes per triangle
-  and 8 bytes per span.
+  and divided every `SHAPOGFX3D_PERSPECTIVE_STEP` pixels (default 16); `(u, v)` are
+  interpolated linearly in fixed point in between. Costs one divide per 16 textured
+  pixels, 12 bytes per triangle and 8 bytes per span.
+
+With `SHAPOGFX3D_RP2_INTERP` (RP2040/RP2350), RGB565BE and ARGB4444 texels of
+textures with a power-of-two stride are addressed by the SIO interpolator: lane 0
+maps `u` to the byte offset in the row, lane 1 maps `v` to the row offset, and one
+`POP_FULL` per pixel yields the texel address and steps both coordinates. Other
+textures use the software walker.
 
 ### `endRender()`
 

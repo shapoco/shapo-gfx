@@ -85,6 +85,8 @@ CMake も PlatformIO も使わない
 
    "``SHAPOGFX_FORMAT_GRAY1`` / ``SHAPOGFX_FORMAT_RGB444`` / ``SHAPOGFX_FORMAT_ARGB4444`` / ``SHAPOGFX_FORMAT_RGB565BE``", "1", "0 にするとそのピクセルフォーマットのコードを 2D・3D 両方から除去する。無効化したフォーマットの Surface / Texture は無視される"
    "``SHAPOGFX3D_CORRECT_PERSPECTIVE``", "1", "テクスチャ座標の透視補正レベル (``gfx3d.cpp`` のコンパイルにのみ影響)"
+   "``SHAPOGFX3D_PERSPECTIVE_STEP``", "16", "レベル 2 でテクスチャ座標を正確に求める間隔 (ピクセル、2 の冪。``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX3D_RP2_INTERP``", "0", "RP2040 / RP2350 (Pico SDK) で 16 ビットテクセルの参照に SIO interpolator (``interp0``) を使う。``hardware_interp`` のリンクが必要 (``gfx3d.cpp`` のみ)"
 
 フォーマットのマクロは、ヘッダを含む全ての翻訳単位で同じ値にしてください。
 

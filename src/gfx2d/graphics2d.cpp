@@ -68,6 +68,281 @@ static void writeColorsT(uint8_t *line, int x, int n, const Color *src,
   }
 }
 
+// ---------------------------------------------------------------------------
+// Direct format-to-format row conversions (no detour through Color). They
+// produce exactly the pixels of the Color path: all formats convert through
+// RGB565 (which is lossless for their color depth), except GRAY1 targets,
+// whose luminance threshold is defined on Color.
+
+// Native pixel of format S as native RGB565 plus its 4-bit alpha (15 = opaque)
+template <PixelFormat S>
+static inline uint32_t nativeToRgb565(uint32_t p, uint32_t &a4) {
+  a4 = 15;
+  if constexpr (S == PixelFormat::GRAY1) {
+    return p ? 0xFFFFu : 0u;
+  } else if constexpr (S == PixelFormat::RGB444) {
+    return rgb444ToRgb565((uint16_t)p);
+  } else if constexpr (S == PixelFormat::ARGB4444) {
+    a4 = p >> 12;
+    return rgb444ToRgb565((uint16_t)(p & 0x0FFFu));
+  } else {
+    return p;
+  }
+}
+
+// Convert a native pixel of S to an opaque native pixel of D
+template <PixelFormat S, PixelFormat D>
+static inline uint32_t convertPixel(uint32_t p) {
+  if constexpr (S == D) {
+    if constexpr (D == PixelFormat::ARGB4444) return p | 0xF000u;
+    return p;
+  } else if constexpr (D == PixelFormat::GRAY1) {
+    return FormatTraits<D>::fromColor(FormatTraits<S>::toColor(p));
+  } else {
+    uint32_t a4;
+    return FormatTraits<D>::fromRgb565(nativeToRgb565<S>(p, a4));
+  }
+}
+
+// Copy n pixels of S at (sl, sx) to D at (dl, dx), converting the format
+template <PixelFormat S, PixelFormat D>
+static void copyRowT(uint8_t *dl, int dx, const uint8_t *sl, int sx, int n) {
+  typename FormatTraits<S>::Cursor src;
+  typename FormatTraits<D>::Cursor dst;
+  src.init((void *)sl, sx);
+  dst.init(dl, dx);
+  for (int i = 0; i < n; i++) {
+    dst.write(convertPixel<S, D>(src.read()));
+    src.next();
+    dst.next();
+  }
+}
+
+// Blend n pixels of S over D with (source alpha x opacity64)
+template <PixelFormat S, PixelFormat D>
+static void blendRowT(uint8_t *dl, int dx, const uint8_t *sl, int sx, int n,
+                      uint32_t opacity64) {
+  typename FormatTraits<S>::Cursor src;
+  typename FormatTraits<D>::Cursor dst;
+  src.init((void *)sl, sx);
+  dst.init(dl, dx);
+  if constexpr (S == PixelFormat::ARGB4444) {
+    // Opacity of each 4-bit alpha, as the Color path computes it
+    uint32_t alpha[16];
+    for (uint32_t a4 = 0; a4 < 16; a4++)
+      alpha[a4] = (alpha255To64(a4 * 17u) * opacity64) >> 6;
+    for (int i = 0; i < n; i++) {
+      const uint32_t p = src.read();
+      const uint32_t a = alpha[p >> 12];
+      if (a != 0) {
+        dst.write(blendNative<D>(dst.read(), convertPixel<S, D>(p), a));
+      }
+      src.next();
+      dst.next();
+    }
+  } else {
+    for (int i = 0; i < n; i++) {
+      dst.write(blendNative<D>(dst.read(), convertPixel<S, D>(src.read()),
+                               opacity64));
+      src.next();
+      dst.next();
+    }
+  }
+}
+
+// Dispatch on the source format for a given target format
+template <PixelFormat D>
+static void copyRowD(PixelFormat srcFmt, uint8_t *dl, int dx, const uint8_t *sl,
+                     int sx, int n) {
+  switch (srcFmt) {
+#if SHAPOGFX_FORMAT_GRAY1
+    case PixelFormat::GRAY1:
+      copyRowT<PixelFormat::GRAY1, D>(dl, dx, sl, sx, n);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+    case PixelFormat::RGB444:
+      copyRowT<PixelFormat::RGB444, D>(dl, dx, sl, sx, n);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_ARGB4444
+    case PixelFormat::ARGB4444:
+      copyRowT<PixelFormat::ARGB4444, D>(dl, dx, sl, sx, n);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB565BE
+    case PixelFormat::RGB565BE:
+      copyRowT<PixelFormat::RGB565BE, D>(dl, dx, sl, sx, n);
+      break;
+#endif
+    default: break;
+  }
+}
+
+// Blending is specialized for ARGB4444 sources (sprites) and same-format
+// sources with an opacity; other combinations return false and go through
+// Color.
+template <PixelFormat D>
+static bool blendRowD(PixelFormat srcFmt, uint8_t *dl, int dx,
+                      const uint8_t *sl, int sx, int n, uint32_t opacity64) {
+#if SHAPOGFX_FORMAT_ARGB4444
+  if (srcFmt == PixelFormat::ARGB4444) {
+    blendRowT<PixelFormat::ARGB4444, D>(dl, dx, sl, sx, n, opacity64);
+    return true;
+  }
+#endif
+  if (srcFmt == D) {
+    blendRowT<D, D>(dl, dx, sl, sx, n, opacity64);
+    return true;
+  }
+  return false;
+}
+
+static void copyRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
+                       int dx, const uint8_t *sl, int sx, int n) {
+  switch (dstFmt) {
+#if SHAPOGFX_FORMAT_GRAY1
+    case PixelFormat::GRAY1:
+      copyRowD<PixelFormat::GRAY1>(srcFmt, dl, dx, sl, sx, n);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+    case PixelFormat::RGB444:
+      copyRowD<PixelFormat::RGB444>(srcFmt, dl, dx, sl, sx, n);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_ARGB4444
+    case PixelFormat::ARGB4444:
+      copyRowD<PixelFormat::ARGB4444>(srcFmt, dl, dx, sl, sx, n);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB565BE
+    case PixelFormat::RGB565BE:
+      copyRowD<PixelFormat::RGB565BE>(srcFmt, dl, dx, sl, sx, n);
+      break;
+#endif
+    default: break;
+  }
+}
+
+static bool blendRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
+                        int dx, const uint8_t *sl, int sx, int n,
+                        uint32_t opacity64) {
+  switch (dstFmt) {
+#if SHAPOGFX_FORMAT_GRAY1
+    case PixelFormat::GRAY1:
+      return blendRowD<PixelFormat::GRAY1>(srcFmt, dl, dx, sl, sx, n,
+                                           opacity64);
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+    case PixelFormat::RGB444:
+      return blendRowD<PixelFormat::RGB444>(srcFmt, dl, dx, sl, sx, n,
+                                            opacity64);
+#endif
+#if SHAPOGFX_FORMAT_ARGB4444
+    case PixelFormat::ARGB4444:
+      return blendRowD<PixelFormat::ARGB4444>(srcFmt, dl, dx, sl, sx, n,
+                                              opacity64);
+#endif
+#if SHAPOGFX_FORMAT_RGB565BE
+    case PixelFormat::RGB565BE:
+      return blendRowD<PixelFormat::RGB565BE>(srcFmt, dl, dx, sl, sx, n,
+                                              opacity64);
+#endif
+    default: return false;
+  }
+}
+
+// Glyph rows of a GFXfont: set bits become fg pixels (scale 1) or scale x
+// scale blocks. `bits` is the font bitmap, rows are `width` bits, contiguous.
+template <PixelFormat F>
+static void drawGlyphT(const Surface &target, const Rect &clip,
+                       const GFXglyph &g, const uint8_t *bits, int gx, int gy,
+                       int s, uint32_t native, uint32_t alpha64) {
+  using Cursor = typename FormatTraits<F>::Cursor;
+  const int w = g.width, h = g.height;
+  uint32_t bitIndex = (uint32_t)g.bitmapOffset * 8u;
+  auto bitAt = [bits](uint32_t bi) -> bool {
+    return (bits[bi >> 3] >> (7u - (bi & 7u))) & 1u;
+  };
+  if (s == 1) {
+    const int i0 = std::max(0, clip.x - gx);
+    const int i1 = std::min(w, clip.right() - gx);
+    if (i0 >= i1) return;
+    for (int j = 0; j < h; j++, bitIndex += (uint32_t)w) {
+      const int y = gy + j;
+      if (y < clip.y || y >= clip.bottom()) continue;
+      Cursor cur;
+      cur.init(target.linePtr(y), gx + i0);
+      uint32_t bi = bitIndex + (uint32_t)i0;
+      if (alpha64 >= 64) {
+        for (int i = i0; i < i1; i++, bi++) {
+          if (bitAt(bi)) cur.write(native);
+          cur.next();
+        }
+      } else {
+        for (int i = i0; i < i1; i++, bi++) {
+          if (bitAt(bi)) cur.write(blendNative<F>(cur.read(), native, alpha64));
+          cur.next();
+        }
+      }
+    }
+    return;
+  }
+  // Magnified: runs of set bits become filled blocks of s x s pixels each
+  for (int j = 0; j < h; j++, bitIndex += (uint32_t)w) {
+    const int y0 = std::max(gy + j * s, clip.y);
+    const int y1 = std::min(gy + (j + 1) * s, clip.bottom());
+    if (y0 >= y1) continue;
+    int runStart = -1;
+    for (int i = 0; i <= w; i++) {
+      const bool on = (i < w) && bitAt(bitIndex + (uint32_t)i);
+      if (on && runStart < 0) runStart = i;
+      if (!on && runStart >= 0) {
+        const int x0 = std::max(gx + runStart * s, clip.x);
+        const int x1 = std::min(gx + i * s, clip.right());
+        if (x0 < x1) {
+          for (int y = y0; y < y1; y++)
+            fillSpanT<F>(target.linePtr(y), x0, x1 - x0, native, alpha64);
+        }
+        runStart = -1;
+      }
+    }
+  }
+}
+
+static void drawGlyphFmt(const Surface &target, const Rect &clip,
+                         const GFXglyph &g, const uint8_t *bits, int gx, int gy,
+                         int s, uint32_t native, uint32_t alpha64) {
+  switch (target.format) {
+#if SHAPOGFX_FORMAT_GRAY1
+    case PixelFormat::GRAY1:
+      drawGlyphT<PixelFormat::GRAY1>(target, clip, g, bits, gx, gy, s, native,
+                                     alpha64);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+    case PixelFormat::RGB444:
+      drawGlyphT<PixelFormat::RGB444>(target, clip, g, bits, gx, gy, s, native,
+                                      alpha64);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_ARGB4444
+    case PixelFormat::ARGB4444:
+      drawGlyphT<PixelFormat::ARGB4444>(target, clip, g, bits, gx, gy, s,
+                                        native, alpha64);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB565BE
+    case PixelFormat::RGB565BE:
+      drawGlyphT<PixelFormat::RGB565BE>(target, clip, g, bits, gx, gy, s,
+                                        native, alpha64);
+      break;
+#endif
+    default: break;
+  }
+}
+
 static void fillSpanFmt(PixelFormat fmt, uint8_t *line, int x, int n,
                         uint32_t native, uint32_t alpha64) {
   switch (fmt) {
@@ -407,7 +682,12 @@ void Graphics2D::drawLine(int x0, int y0, int x1, int y1, Color c) {
   const int jMin = steep ? clip.x : clip.y;
   const int jMax = (steep ? clip.right() : clip.bottom()) - 1;
   const int di = x1 - x0;
-  const int32_t slope = di ? (int32_t)(((int64_t)(y1 - y0) * 65536) / di) : 0;
+  const int dj = y1 - y0;
+  // 32-bit division suffices for |dj| < 32768 (any real screen)
+  const int32_t slope = !di ? 0
+                        : (dj > -32768 && dj < 32768)
+                            ? (int32_t)((dj * 65536) / di)
+                            : (int32_t)(((int64_t)dj * 65536) / di);
   int iStart = std::max(x0, iMin), iEnd = std::min(x1, iMax);
   if (iStart > iEnd) return;
   int32_t jf = (int32_t)y0 * 65536 + 0x8000 + slope * (iStart - x0);
@@ -458,17 +738,36 @@ void Graphics2D::fillPolygon(const vec2i *pts, int n, Color c) {
   yMin = std::max(yMin, state_.clip.y);
   yMax = std::min(yMax, state_.clip.bottom() - 1);
 
+  // Edges with extents below 32768 use 32-bit arithmetic (the product
+  // (y - p.y) * (q.x - p.x) then fits); larger ones fall back to 64 bits.
+  bool small = true;
+  for (int i = 0; i < n; i++) {
+    const vec2i &p = pts[i];
+    const vec2i &q = pts[i + 1 < n ? i + 1 : 0];
+    const int dx = q.x - p.x, dy = q.y - p.y;
+    if (dx <= -32768 || dx >= 32768 || dy <= -32768 || dy >= 32768)
+      small = false;
+  }
+
   int xs[MAX_CROSSES];
   for (int y = yMin; y <= yMax; y++) {
     int m = 0;
     for (int i = 0; i < n && m < MAX_CROSSES; i++) {
       const vec2i &p = pts[i];
-      const vec2i &q = pts[(i + 1) % n];
+      const vec2i &q = pts[i + 1 < n ? i + 1 : 0];
       if ((p.y <= y && q.y > y) || (q.y <= y && p.y > y)) {
-        xs[m++] = p.x + (int)((int64_t)(y - p.y) * (q.x - p.x) / (q.y - p.y));
+        const int x =
+            small ? p.x + (y - p.y) * (q.x - p.x) / (q.y - p.y)
+                  : p.x + (int)((int64_t)(y - p.y) * (q.x - p.x) / (q.y - p.y));
+        // Insertion sort (m is small)
+        int k = m++;
+        while (k > 0 && xs[k - 1] > x) {
+          xs[k] = xs[k - 1];
+          k--;
+        }
+        xs[k] = x;
       }
     }
-    std::sort(xs, xs + m);
     for (int i = 0; i + 1 < m; i += 2) fillSpan(y, xs[i], xs[i + 1], native, a);
   }
 }
@@ -488,16 +787,16 @@ void Graphics2D::drawImage(const Texture &img, int dx, int dy,
   src.y += dst.y - dy;
   src.width = dst.width;
   src.height = dst.height;
-  const uint32_t op64 =
-      ((uint32_t)clampInt(0, 255, opacity) * 64u + 127u) / 255u;
+  const uint32_t op64 = alpha255To64((uint32_t)clampInt(0, 255, opacity));
   if (mode != BlendMode::NONE && op64 == 0) return;
 
   const bool srcHasAlpha = (img.format == PixelFormat::ARGB4444);
   const bool sameFormat = (img.format == target_.format);
+  // A format without alpha drawn with ALPHA at full opacity is a plain copy
+  if (mode == BlendMode::ALPHA && !srcHasAlpha && op64 >= 64)
+    mode = BlendMode::NONE;
   // Fast path: plain copy of 16-bit formats
-  if (sameFormat && bitsPerPixel(img.format) == 16 &&
-      (mode == BlendMode::NONE ||
-       (mode == BlendMode::ALPHA && !srcHasAlpha && op64 >= 64))) {
+  if (sameFormat && bitsPerPixel(img.format) == 16 && mode == BlendMode::NONE) {
     for (int j = 0; j < dst.height; j++) {
       std::memcpy(target_.linePtr(dst.y + j) + (size_t)dst.x * 2,
                   img.linePtr(src.y + j) + (size_t)src.x * 2,
@@ -505,11 +804,26 @@ void Graphics2D::drawImage(const Texture &img, int dx, int dy,
     }
     return;
   }
-  // A format without alpha drawn with ALPHA at full opacity is a plain copy
-  if (mode == BlendMode::ALPHA && !srcHasAlpha && op64 >= 64)
-    mode = BlendMode::NONE;
 
-  // Generic path: convert through Color in chunks
+  if (mode == BlendMode::NONE) {
+    for (int j = 0; j < dst.height; j++) {
+      copyRowFmt(target_.format, img.format, target_.linePtr(dst.y + j), dst.x,
+                 img.linePtr(src.y + j), src.x, dst.width);
+    }
+    return;
+  }
+  if (mode == BlendMode::ALPHA &&
+      blendRowFmt(target_.format, img.format, target_.linePtr(dst.y), dst.x,
+                  img.linePtr(src.y), src.x, dst.width, op64)) {
+    for (int j = 1; j < dst.height; j++) {
+      blendRowFmt(target_.format, img.format, target_.linePtr(dst.y + j), dst.x,
+                  img.linePtr(src.y + j), src.x, dst.width, op64);
+    }
+    return;
+  }
+
+  // Additive, and alpha blends of other format pairs: convert through Color
+  // in chunks
   static constexpr int CHUNK = 64;
   Color tmp[CHUNK];
   for (int j = 0; j < dst.height; j++) {
@@ -633,27 +947,8 @@ int Graphics2D::drawChar(int x, int y, int code) {
     return g.xAdvance * s;
   }
 
-  const uint32_t fn = colorToNative(target_.format, t.color);
-  const uint8_t *bits = t.font->bitmap;
-  uint32_t bitIndex = (uint32_t)g.bitmapOffset * 8u;
-  for (int j = 0; j < g.height; j++) {
-    // Runs of set bits become filled rectangles (s x s pixels per glyph pixel)
-    int runStart = -1;
-    for (int i = 0; i <= g.width; i++) {
-      bool on = false;
-      if (i < g.width) {
-        on = (bits[bitIndex >> 3] >> (7u - (bitIndex & 7u))) & 1u;
-        bitIndex++;
-      }
-      if (on && runStart < 0) runStart = i;
-      if (!on && runStart >= 0) {
-        Rect r = Rect{gx + runStart * s, gy + j * s, (i - runStart) * s, s}
-                     .intersect(state_.clip);
-        if (!r.isEmpty()) fillRectRaw(r, fn, fa);
-        runStart = -1;
-      }
-    }
-  }
+  drawGlyphFmt(target_, state_.clip, g, t.font->bitmap, gx, gy, s,
+               colorToNative(target_.format, t.color), fa);
   return g.xAdvance * s;
 }
 
