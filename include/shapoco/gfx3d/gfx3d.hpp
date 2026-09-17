@@ -28,9 +28,37 @@ struct Vertex {
 
 constexpr gfx2d::Color VERTEX_WHITE = 0xFFFFFFFFu;
 
+// Compact vertex (16 bytes instead of the 36 of Vertex) for models kept in
+// flash. A VertexBuffer holds either form; a packed vertex is decoded once per
+// vertex, which the vertex cache makes negligible.
+//
+//   position  integers scaled by VertexBuffer::scale and offset by
+//             VertexBuffer::bias, so the resolution is 1/65534 of the model's
+//             extent along each axis
+//   uv        1/1024 texel-space units (range -32..32)
+//   normal    1/127 units; the decoded vector is unit length to about 1%,
+//             which is well below the resolution of the output formats
+//   color     R, G, B (the alpha of Vertex::color is ignored anyway)
+struct PackedVertex {
+  int16_t position[3];
+  int16_t uv[2];
+  int8_t normal[3];
+  uint8_t color[3];
+};
+static_assert(sizeof(PackedVertex) == 16, "PackedVertex must stay 16 bytes");
+
+constexpr float PACKED_UV_SCALE = 1.0f / 1024.0f;
+constexpr float PACKED_NORMAL_SCALE = 1.0f / 127.0f;
+
+// Vertices of a primitive, in either form. `scale` and `bias` apply to packed
+// positions only; the remaining members may be left at their defaults for a
+// buffer of plain `Vertex` (`VertexBuffer vb = {count, vertices};`).
 struct VertexBuffer {
   uint16_t vertexCount;
-  const Vertex *vertices;
+  const Vertex *vertices;                // nullptr: the buffer is packed
+  const PackedVertex *packed = nullptr;  // used when `vertices` is nullptr
+  vec3f scale = {1, 1, 1};               // packed position scale
+  vec3f bias = {0, 0, 0};                // packed position offset
 };
 
 namespace MaterialFlags {
@@ -45,6 +73,10 @@ constexpr uint32_t VERTEX_COLOR =
 // Textures may be in any enabled pixel format; width and height must be powers
 // of two. A texture in ARGB4444 makes the material translucent: its alpha is
 // multiplied into the material opacity per pixel.
+//
+// Texturing and translucency can be compiled out of the renderer
+// (SHAPOGFX3D_TEXTURE, SHAPOGFX3D_BLEND); the corresponding members are then
+// ignored at run time, exactly like a surface in a disabled pixel format.
 struct Material {
   colorf diffuse;          // diffuse color (a is used as opacity)
   colorf ambient;          // ambient color
@@ -178,7 +210,8 @@ class Graphics3D {
   void lookAt(const vec3f &eye, const vec3f &target,
               const vec3f &up = {0, 1, 0});
 
-  // Push the current matrix and material onto the stack (depth 16).
+  // Push the current matrix and material onto the stack (SHAPOGFX3D_STACK_DEPTH
+  // levels, 16 by default).
   // Returns false (and pushes nothing) when the stack is full.
   bool pushState();
   void popState();  // restore the matrix and material from the stack
@@ -339,6 +372,12 @@ class Graphics3D {
 
   bool projectPoint(const vec3f &view, float &sx, float &sy, float &zNdc,
                     float &invW) const;
+  // Transformed vertex `vi` of `vb`, from the vertex cache; decodes a packed
+  // vertex on a miss. Out of line: putPrimitive() calls it from every branch.
+  const detail::CachedVertex &fetchVertex(const VertexBuffer &vb, uint16_t vi,
+                                          const detail::PrimSetup &ps);
+  bool fetchUnlitVertex(const VertexBuffer &vb, uint16_t vi,
+                        const Material *mat, detail::UnlitVertex &out);
   void shadeVertex(const Vertex &in, const detail::PrimSetup &ps,
                    detail::CachedVertex &out) const;
   void emitTriangle(const detail::CachedVertex &a,

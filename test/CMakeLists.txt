@@ -8,4 +8,9 @@ add_executable(shapogfx_tests pixel_test.cpp graphics2d_test.cpp gfx3d_test.cpp 
 target_include_directories(shapogfx_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(shapogfx_tests PRIVATE shapoco::gfx)
 target_compile_options(shapogfx_tests PRIVATE -Wall -Wextra)
+# The renderer options change no public type, but the tests need to know which
+# features are compiled in so that they can skip what cannot be drawn.
+if(SHAPOGFX_FEATURE_DEFS)
+    target_compile_definitions(shapogfx_tests PRIVATE ${SHAPOGFX_FEATURE_DEFS})
+endif()
 add_test(NAME shapogfx_tests COMMAND shapogfx_tests)

@@ -38,10 +38,44 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
 | `SHAPOGFX3D_RP2_INTERP` | 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` |
+| `SHAPOGFX3D_TEXTURE` | 1 | Texture and environment mapping |
+| `SHAPOGFX3D_GOURAUD` | 1 | Gouraud shading; 0 selects flat shading |
+| `SHAPOGFX3D_BLEND` | 1 | Translucency |
+| `SHAPOGFX3D_LINES` | 1 | `LINES` / `LINE_STRIP` / `LINE_LOOP` primitives |
+| `SHAPOGFX3D_POINTS` | 1 | `POINTS` primitives |
+| `SHAPOGFX3D_STACK_DEPTH` | 16 | Levels of the matrix stack (`pushState()`) |
+| `SHAPOGFX3D_VCACHE_SIZE` | 64 | Entries of the vertex cache (power of two) |
 
-The last three macros are read by `gfx3d.cpp` only. With `SHAPOGFX3D_RP2_INTERP`
-the target must link `hardware_interp`; `render()` saves and restores `interp0` of
-the calling core, so interrupt handlers running during `render()` must not use it.
+Every macro below `SHAPOGFX3D_` is read by `src/gfx3d/*.cpp` only and changes no
+public type, so translation units cannot disagree about them. With
+`SHAPOGFX3D_RP2_INTERP` the target must link `hardware_interp`; `render()` saves
+and restores `interp0` of the calling core, so interrupt handlers running during
+`render()` must not use it.
+
+### Optional features of the 3D renderer
+
+Turning a feature off removes its code and shrinks the per-triangle and per-span
+working memory, so the same arena holds more geometry. The members it covers are
+then ignored at run time, exactly like a surface in a disabled pixel format, so
+scene data written for the full renderer still compiles and draws.
+
+| Off | Effect on the picture |
+|---|---|
+| `SHAPOGFX3D_TEXTURE` | `Material::texture` and the `TEXTURE` / `ENV_MAP` flags are ignored; materials draw in their plain lit color |
+| `SHAPOGFX3D_GOURAUD` | A primitive takes the color of its first vertex instead of interpolating, so smoothly shaded surfaces become faceted |
+| `SHAPOGFX3D_BLEND` | Everything is drawn opaque; the blend mode and the alpha of an ARGB4444 texture are ignored |
+| `SHAPOGFX3D_LINES` | Line primitives draw nothing, and so do `putLine()` and `putWireCube()` |
+| `SHAPOGFX3D_POINTS` | Point primitives draw nothing |
+
+Bytes per triangle (including the 4 bytes of sort order and link) and per span on
+a 32-bit target, at the default perspective level:
+
+| Configuration | Triangle | Span | Triangles in a 128 KB arena at 480x320 |
+|---|---|---|---|
+| default | 132 | 64 | 674 |
+| `SHAPOGFX3D_TEXTURE=0` | 96 | 48 | 904 |
+| `SHAPOGFX3D_GOURAUD=0` | 100 | 44 | 899 |
+| both | 64 | 28 | 1392 |
 
 Disabling a format removes its code from both renderers: the pixel cursors, the 2D
 per-format row operations, the 3D texture samplers and (for output formats) the 3D
@@ -251,7 +285,19 @@ struct Vertex {
   vec3f position; vec3f normal; vec2f uv;
   gfx2d::Color color;   // ARGB8888, used with MaterialFlags::VERTEX_COLOR (alpha ignored)
 };
-struct VertexBuffer { uint16_t vertexCount; const Vertex *vertices; };
+struct PackedVertex {      // 16-byte vertex for models in flash
+  int16_t position[3];    // x VertexBuffer::scale + VertexBuffer::bias
+  int16_t uv[2];          // 1/1024 texel-space units (range -32..32)
+  int8_t normal[3];       // 1/127 units
+  uint8_t color[3];       // R, G, B
+};
+struct VertexBuffer {
+  uint16_t vertexCount;
+  const Vertex *vertices;                // nullptr: the buffer is packed
+  const PackedVertex *packed = nullptr;  // used when `vertices` is nullptr
+  vec3f scale = {1, 1, 1};               // packed position scale
+  vec3f bias = {0, 0, 0};                // packed position offset
+};
 
 namespace MaterialFlags {
 constexpr uint32_t TEXTURE = 1u << 0;       // enable texture mapping
@@ -275,7 +321,7 @@ enum class PrimitiveType : uint8_t {
 
 struct Primitive {
   PrimitiveType type;
-  const VertexBuffer *vertexBuffer;
+  const VertexBuffer *vertexBuffer;      // either vertex form
   uint16_t indexCount;
   const uint16_t *indices;
   const Material *material;  // nullptr: use the material set by setMaterial()
@@ -296,6 +342,22 @@ struct Node  { const char *name; mat4f transform; const Mesh *mesh;
 struct Scene { const Node *const *roots; uint16_t rootCount; };
 class NodeVisitor { public: virtual bool onNode(const Node &, mat4f &local); };
 ```
+
+Vertex forms: a `VertexBuffer` holds either 36-byte `Vertex` or 16-byte
+`PackedVertex` data. A packed position is an integer scaled by the buffer's
+`scale` and offset by its `bias`, so its resolution is 1/65534 of the model's
+extent along each axis; uv is in 1/1024 texel-space units and the normal in
+1/127 units, which makes the decoded vector unit length to about 1%. Both errors
+are well below the resolution of the output formats. A packed vertex is decoded
+once per vertex and primitive (the vertex cache absorbs the cost), so the saving
+is in flash: `bin/gltf2cpp --vertex-format packed` emits this form.
+
+`VertexBuffer` itself carries the packed pointer and the scale and bias whichever
+form it points at, which makes it 36 bytes on a 32-bit target instead of the 8 a
+pointer and a count would need. A buffer of plain `Vertex` therefore pays 28
+bytes it did not before, while packing saves 20 bytes per vertex; packing wins
+from the second vertex of a primitive on, but a model split into many primitives
+of very few vertices each gains little.
 
 Translucency: a triangle is translucent when its material's blend mode is not
 `NONE` or when its texture is ARGB4444. Translucent spans do not remove spans behind
@@ -473,6 +535,9 @@ Without lights the vertex color is `diffuse`. For `BlendMode::ADD` the color is
 pre-multiplied by the opacity. Vertex colors are interpolated linearly across each
 span and modulate the texel when a texture is present.
 
+Without `SHAPOGFX3D_GOURAUD` the lit color of the first vertex of each primitive
+is used for all of it, so the interpolation above does not happen.
+
 Vertex normals must be unit length. When the upper 3x3 of the current matrix is a
 rotation times a uniform scale (the usual case), the light direction is transformed
 into model space once per primitive and `n . -L` is a single dot product per vertex;
@@ -503,6 +568,11 @@ and `ADD` multiply their opacity by `a4 / 15`. Texel alpha 0 skips the pixel.
 3. **Triangle buffer**: everything that remains, including 4 bytes per triangle for
    the sort order and link arrays (128 bytes per triangle on 32-bit targets, 116 at
    perspective level 0).
+
+`SHAPOGFX3D_STACK_DEPTH` and `SHAPOGFX3D_VCACHE_SIZE` size the fixed part (about
+1.1 KB and 2.8 KB at their defaults); the optional features size the other two
+(see the table above). A smaller vertex cache costs re-transformed vertices, not
+correctness.
 
 If the arena is too small for the fixed part, `init()` leaves the renderer
 uninitialized. Overflowing buffers drop the excess for the current frame.
@@ -593,14 +663,16 @@ module.
   pattern; `-k` makes a key color transparent; `--pot` resizes to a power of two.
   Pixels are quantized with rounding; the memory layout matches `pixel.hpp`
   (RGB565BE and RGB444 are emitted as bytes, ARGB4444 as `uint16_t`).
-- **gltf2cpp** `[--namespace NS] [--texformat auto|...] [--dither D] [--key-color C] [--max-texture-size N] [--no-resize-pot] input.gltf|glb output.hpp`
+- **gltf2cpp** `[--namespace NS] [--vertex-format float|packed] [--texformat auto|...] [--dither D] [--key-color C] [--max-texture-size N] [--no-resize-pot] input.gltf|glb output.hpp`
   (all glTF primitive modes are supported)
   emits, inside a namespace named after the file, `tex<i>` textures, `mat<i>` (and
   `mat<i>Vc` for primitives with vertex colors) materials, `mesh<i>Prim<j>Vertices` /
   `...Indices` / `mesh<i>`, `node_<name>` (or `node<i>`) nodes in child-first order,
   `scene<i>` and a `scene` alias for the default scene. Vertex attributes are
-  interleaved into `Vertex`; missing normals are generated by accumulating face
-  normals; COLOR_0 becomes `Vertex::color` and sets `VERTEX_COLOR` on a material copy;
+  interleaved into `Vertex`, or into the 16-byte `PackedVertex` with
+  `--vertex-format packed` (positions quantized over the primitive's bounding box,
+  texture coordinates outside -32..32 are clamped with a warning); missing normals
+  are generated by accumulating face normals; COLOR_0 becomes `Vertex::color` and sets `VERTEX_COLOR` on a material copy;
   node TRS is composed into the column-major matrix on the tool side. Textures are
   resized to a power of two (with a warning) unless `--no-resize-pot`; `auto` picks
   ARGB4444 when the image or the material's alpha mode needs alpha.
@@ -641,8 +713,11 @@ rendering, transparent clear, all texture formats on both output formats, texel
 alpha, the winding of every shape (culled and double-sided renders must match),
 vertex colors, the index range check, and points/lines (Bresenham coverage, end points,
 LINE_LOOP, hidden-line removal, point size, near-plane clipping, depth bias). `test/data` holds a procedural image and a
-small glTF model with the headers generated from them (`test/tools` regenerates
-them); the tests verify the generated textures against the source pixels and the
+small glTF model with the headers generated from them in both vertex forms
+(`test/tools` regenerates them); the tests verify the generated textures against
+the source pixels, that the packed model renders like the float one, and the
 generated scene graph (names, hierarchy, transforms, generated normals, traversal,
 visitor skipping and animation, deep-tree cut-off). The tests are meant to be run with AddressSanitizer and
-UndefinedBehaviorSanitizer on the native build.
+UndefinedBehaviorSanitizer on the native build. The CMake options of the renderer
+are passed to the tests as well, so a configuration with a feature compiled out
+skips the tests that need it and the rest must still pass.

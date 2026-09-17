@@ -17,6 +17,7 @@ transforms; scenes. Indices must fit in 16 bits.
 Example:
   gltf2cpp model.glb model.hpp
   gltf2cpp --texformat argb4444 --dither diffusion --namespace assets model.gltf model.hpp
+  gltf2cpp --vertex-format packed model.glb model.hpp   # 16-byte vertices
 """
 
 import argparse
@@ -44,6 +45,20 @@ TRIANGLE_MODES = (4, 5, 6)
 
 def warn(msg):
     print(f"warning: {msg}", file=sys.stderr)
+
+
+def quantize_positions(pos):
+    """int16 positions plus the per-axis scale and bias that restore them."""
+    lo, hi = pos.min(axis=0), pos.max(axis=0)
+    bias = (lo + hi) * 0.5
+    extent = hi - lo
+    scale = np.where(extent > 0.0, extent / 65534.0, 1.0)
+    q = np.rint((pos - bias) / scale)
+    return np.clip(q, -32767, 32767).astype(np.int64), scale, bias
+
+
+def clamp_int(v, lo, hi):
+    return int(max(lo, min(hi, v)))
 
 
 def fmt_float(f):
@@ -297,26 +312,59 @@ class Generator:
             pname = f"{name}Prim{pi}"
             self.w()
             self.w(f"// mesh {mesh_index} primitive {pi}: {count} vertices, {len(indices)} indices")
-            self.w(f"static const g3::Vertex {pname}Vertices[] = {{")
-            for i in range(count):
-                p = pos[i]
-                n = nrm[i]
-                t = uv[i] if uv is not None else (0.0, 0.0)
-                if colors is not None:
-                    c = colors[i]
-                    a = c[3] if len(c) > 3 else 1.0
-                    rgba = [int(round(max(0.0, min(1.0, v)) * 255)) for v in (a, c[0], c[1], c[2])]
-                    color = f"0x{rgba[0]:02X}{rgba[1]:02X}{rgba[2]:02X}{rgba[3]:02X}u"
-                else:
-                    color = "0xFFFFFFFFu"
+            packed = self.args.vertex_format == "packed"
+            vertex_bytes = 16 if packed else 36
+            if packed:
+                qpos, pscale, pbias = quantize_positions(pos)
+                uv_clamped = False
+                self.w(f"static const g3::PackedVertex {pname}Vertices[] = {{")
+                for i in range(count):
+                    q = qpos[i]
+                    n = [clamp_int(round(v * 127), -127, 127) for v in nrm[i]]
+                    t = uv[i] if uv is not None else (0.0, 0.0)
+                    tq = []
+                    for v in t[:2]:
+                        raw = round(v * 1024)
+                        uv_clamped = uv_clamped or not (-32768 <= raw <= 32767)
+                        tq.append(clamp_int(raw, -32768, 32767))
+                    if colors is not None:
+                        rgb = [int(round(max(0.0, min(1.0, v)) * 255)) for v in colors[i][:3]]
+                    else:
+                        rgb = [255, 255, 255]
+                    self.w(
+                        f"  {{{{{q[0]}, {q[1]}, {q[2]}}}, {{{tq[0]}, {tq[1]}}}, "
+                        + f"{{{n[0]}, {n[1]}, {n[2]}}}, {{{rgb[0]}, {rgb[1]}, {rgb[2]}}}}},"
+                    )
+                self.w("};")
+                if uv_clamped:
+                    warn(f"mesh {mesh_index} primitive {pi}: texture coordinates outside the "
+                         "packed range of -32..32 were clamped; use --vertex-format float")
+                self.w(f"static const g3::VertexBuffer {pname}Vb = {{{count}, nullptr, {pname}Vertices,")
                 self.w(
-                    "  {{"
-                    + f"{fmt_float(p[0])}, {fmt_float(p[1])}, {fmt_float(p[2])}}}, "
-                    + f"{{{fmt_float(n[0])}, {fmt_float(n[1])}, {fmt_float(n[2])}}}, "
-                    + f"{{{fmt_float(t[0])}, {fmt_float(t[1])}}}, {color}}},"
+                    f"    {{{fmt_float(pscale[0])}, {fmt_float(pscale[1])}, {fmt_float(pscale[2])}}},"
+                    + f" {{{fmt_float(pbias[0])}, {fmt_float(pbias[1])}, {fmt_float(pbias[2])}}}}};"
                 )
-            self.w("};")
-            self.w(f"static const g3::VertexBuffer {pname}Vb = {{{count}, {pname}Vertices}};")
+            else:
+                self.w(f"static const g3::Vertex {pname}Vertices[] = {{")
+                for i in range(count):
+                    p = pos[i]
+                    n = nrm[i]
+                    t = uv[i] if uv is not None else (0.0, 0.0)
+                    if colors is not None:
+                        c = colors[i]
+                        a = c[3] if len(c) > 3 else 1.0
+                        rgba = [int(round(max(0.0, min(1.0, v)) * 255)) for v in (a, c[0], c[1], c[2])]
+                        color = f"0x{rgba[0]:02X}{rgba[1]:02X}{rgba[2]:02X}{rgba[3]:02X}u"
+                    else:
+                        color = "0xFFFFFFFFu"
+                    self.w(
+                        "  {{"
+                        + f"{fmt_float(p[0])}, {fmt_float(p[1])}, {fmt_float(p[2])}}}, "
+                        + f"{{{fmt_float(n[0])}, {fmt_float(n[1])}, {fmt_float(n[2])}}}, "
+                        + f"{{{fmt_float(t[0])}, {fmt_float(t[1])}}}, {color}}},"
+                    )
+                self.w("};")
+                self.w(f"static const g3::VertexBuffer {pname}Vb = {{{count}, {pname}Vertices}};")
             self.w(f"static const uint16_t {pname}Indices[] = {{")
             for i in range(0, len(indices), 16):
                 self.w("  " + ", ".join(str(v) for v in indices[i : i + 16]) + ",")
@@ -327,7 +375,7 @@ class Generator:
             )
             self.stats["vertices"] += count
             self.stats["indices"] += len(indices)
-            self.stats["bytes"] += count * 36 + len(indices) * 2
+            self.stats["bytes"] += count * vertex_bytes + len(indices) * 2
         self.w()
         if prim_entries:
             self.w(f"static const g3::Primitive {name}Prims[] = {{")
@@ -429,6 +477,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input", help="input .gltf or .glb")
     ap.add_argument("output", help="output C++ header (.hpp)")
+    ap.add_argument("--vertex-format", choices=("float", "packed"), default="float",
+                    help="float: 36-byte g3::Vertex (default); "
+                         "packed: 16-byte g3::PackedVertex (quantized positions, "
+                         "uv in 1/1024 units, int8 normals, RGB888)")
     ap.add_argument("--namespace", default=None,
                     help="namespace of the generated objects (default: from the input file name)")
     ap.add_argument("--texformat", choices=("auto",) + conv.FORMATS, default="auto",

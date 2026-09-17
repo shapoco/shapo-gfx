@@ -5,6 +5,8 @@ primitive with vertex colors and a three-level node hierarchy with TRS transform
 
   python3 test/tools/make_test_gltf.py
   bin/gltf2cpp test/data/test_model.glb test/data/test_model.hpp
+  bin/gltf2cpp --vertex-format packed --namespace test_model_packed \
+      test/data/test_model.glb test/data/test_model_packed.hpp
 """
 
 import io

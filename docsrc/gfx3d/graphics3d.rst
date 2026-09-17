@@ -19,10 +19,35 @@ Vertex / VertexBuffer
    };
    constexpr gfx2d::Color VERTEX_WHITE = 0xFFFFFFFFu;
 
+   // 16 バイトの圧縮頂点。フラッシュ上のモデルデータを小さくする
+   struct PackedVertex {
+     int16_t position[3];  // VertexBuffer::scale 倍して bias を足した値が座標
+     int16_t uv[2];        // 1/1024 単位 (範囲 -32〜32)
+     int8_t normal[3];     // 1/127 単位
+     uint8_t color[3];     // R, G, B
+   };
+
    struct VertexBuffer {
      uint16_t vertexCount;
-     const Vertex *vertices;
+     const Vertex *vertices;                // nullptr なら packed を使う
+     const PackedVertex *packed = nullptr;  // 16 バイト頂点
+     vec3f scale = {1, 1, 1};               // packed の座標スケール
+     vec3f bias = {0, 0, 0};                // packed の座標オフセット
    };
+
+``VertexBuffer`` は 36 バイトの ``Vertex`` と 16 バイトの ``PackedVertex`` のどちらでも持てます。
+圧縮頂点の座標はプリミティブのバウンディングボックスを 65534 分割した精度、法線は約 1% の誤差で
+単位長になり、どちらも出力フォーマットの分解能より十分細かい値です。
+デコードは頂点ごとに 1 回だけ (頂点キャッシュが吸収する) なので、効くのはフラッシュ使用量です。
+``bin/gltf2cpp --vertex-format packed`` がこの形式を出力します
+(:doc:`../tools/gltf2cpp`)。
+
+``VertexBuffer`` はどちらの形式を指す場合でも ``packed`` とスケール・オフセットを持つため、
+32bit ターゲットで 36 バイトです (ポインタと個数だけなら 8 バイト)。
+``Vertex`` を使うバッファはこの 28 バイトを余分に払うことになり、
+圧縮頂点は 1 頂点あたり 20 バイトを節約します。
+プリミティブあたり 2 頂点以上あれば圧縮したほうが小さくなりますが、
+数頂点のプリミティブが多数あるモデルでは効果が小さくなります。
 
 Texture
 --------------------------------------------------------------------------------

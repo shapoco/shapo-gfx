@@ -23,6 +23,65 @@
 #define SHAPOGFX3D_PERSPECTIVE_STEP 16
 #endif
 
+// Optional features. Turning one off removes its code from the renderer and
+// shrinks the per-triangle and per-span working memory, so the same arena
+// holds more geometry. Like the perspective options above these are read by
+// this file only and change no public type, so translation units cannot
+// disagree about them.
+//
+//   SHAPOGFX3D_TEXTURE  0: no texture and no environment mapping.
+//                          Material::texture and the TEXTURE / ENV_MAP flags
+//                          are then ignored at run time, like a texture in a
+//                          disabled pixel format.
+//   SHAPOGFX3D_GOURAUD  0: flat shading. A triangle takes the color of its
+//                          first vertex instead of interpolating the three,
+//                          so smoothly shaded surfaces become faceted.
+//   SHAPOGFX3D_BLEND    0: no translucency. Everything is drawn opaque; the
+//                          material's blend mode and the alpha of an ARGB4444
+//                          texture are ignored.
+//   SHAPOGFX3D_LINES    0: LINES / LINE_STRIP / LINE_LOOP are ignored, so
+//                          putLine() and putWireCube() draw nothing.
+//   SHAPOGFX3D_POINTS   0: POINTS primitives are ignored.
+#ifndef SHAPOGFX3D_TEXTURE
+#define SHAPOGFX3D_TEXTURE 1
+#endif
+#ifndef SHAPOGFX3D_GOURAUD
+#define SHAPOGFX3D_GOURAUD 1
+#endif
+#ifndef SHAPOGFX3D_BLEND
+#define SHAPOGFX3D_BLEND 1
+#endif
+#ifndef SHAPOGFX3D_LINES
+#define SHAPOGFX3D_LINES 1
+#endif
+#ifndef SHAPOGFX3D_POINTS
+#define SHAPOGFX3D_POINTS 1
+#endif
+
+// Fixed part of the arena: the matrix stack of pushState() and the
+// direct-mapped cache of transformed vertices (a power of two; a smaller
+// cache costs re-transformed vertices, never correctness).
+#ifndef SHAPOGFX3D_STACK_DEPTH
+#define SHAPOGFX3D_STACK_DEPTH 16
+#endif
+#ifndef SHAPOGFX3D_VCACHE_SIZE
+#define SHAPOGFX3D_VCACHE_SIZE 64
+#endif
+
+// Perspective correction only exists where there are texture coordinates
+#if SHAPOGFX3D_TEXTURE
+#define SHAPOGFX3D_PERSPECTIVE SHAPOGFX3D_CORRECT_PERSPECTIVE
+#else
+#define SHAPOGFX3D_PERSPECTIVE 0
+#endif
+
+// Points and lines share their vertex stage and their span builder
+#if SHAPOGFX3D_LINES || SHAPOGFX3D_POINTS
+#define SHAPOGFX3D_UNLIT 1
+#else
+#define SHAPOGFX3D_UNLIT 0
+#endif
+
 // RP2040 / RP2350 (Pico SDK): fetch 16-bit texels through the SIO
 // interpolator (interp0 of the core that calls render()). Opt-in.
 #ifndef SHAPOGFX3D_RP2_INTERP
@@ -61,9 +120,11 @@ static_assert(PERSPECTIVE_STEP >= 2 &&
 
 // A vertex after lighting and projection
 struct ShadedVertex {
-  float sx, sy;   // screen coordinates
-  float zNdc;     // NDC depth (linear in screen space; smaller = nearer)
-  float u, v;     // texture coordinates in texels
+  float sx, sy;  // screen coordinates
+  float zNdc;    // NDC depth (linear in screen space; smaller = nearer)
+#if SHAPOGFX3D_TEXTURE
+  float u, v;  // texture coordinates in texels
+#endif
   float r, g, b;  // vertex color 0..255 (pre-multiplied by opacity for additive
                   // blending)
 };
@@ -78,10 +139,12 @@ struct Plane {
 // mode and the flat flag: rasterFn = tex * 6 + blend * 2 + flat
 enum class TexFmt : uint8_t {
   NONE = 0,
+#if SHAPOGFX3D_TEXTURE
   GRAY1,
   RGB444,
   ARGB4444,
   RGB565BE,
+#endif
   COUNT
 };
 static constexpr int RASTER_PER_TEX = 6;  // blend modes (3) x flat (2)
@@ -106,12 +169,18 @@ struct Triangle {
   // (0 for horizontal edges). Lines: [0] = 1/dx, [1] = 1/dy (0 when the
   // difference is 0). Points: [0] = size in pixels.
   float slope[3];
-  Plane z;        // NDC depth
+  Plane z;  // NDC depth
+#if SHAPOGFX3D_GOURAUD
   Plane r, g, b;  // vertex color 0..255
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
+#else
+  uint8_t r, g, b;  // flat shading: one color for the whole primitive (0..255)
+#endif
+#if SHAPOGFX3D_TEXTURE
+#if SHAPOGFX3D_PERSPECTIVE >= 1
   Plane uw, vw, iw;  // (u/w, v/w, 1/w)
 #else
   Plane u, v;  // texels
+#endif
 #endif
   const Material *mat;
   int32_t sortKey;     // ascending = farther first
@@ -125,16 +194,22 @@ struct Triangle {
 // A span on a scanline: attribute values at the leftmost pixel and per-pixel
 // increments
 struct Span {
-  int32_t x0, x1;   // pixel range [x0, x1)
-  int32_t z0, dz;   // NDC depth, 8.24 fixed point (used to resolve overlaps)
+  int32_t x0, x1;  // pixel range [x0, x1)
+  int32_t z0, dz;  // NDC depth, 8.24 fixed point (used to resolve overlaps)
+#if SHAPOGFX3D_GOURAUD
   int32_t r, g, b;  // 8.16 fixed point (0..255)
   int32_t dr, dg, db;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+#else
+  uint8_t r, g, b;  // constant over the span (0..255)
+#endif
+#if SHAPOGFX3D_TEXTURE
+#if SHAPOGFX3D_PERSPECTIVE == 2
   float uw, vw, iw;  // (u/w, v/w, 1/w)
   float duw, dvw, diw;
 #else
   int32_t u, v;  // texels, 16.16 fixed point
   int32_t du, dv;
+#endif
 #endif
   const Triangle *tri;
   Span *next;
@@ -174,11 +249,15 @@ struct PrimSetup {
                      // factor; valid when lit && !viewNormal
 };
 
-static constexpr int STACK_DEPTH = 16;
+static constexpr int STACK_DEPTH = SHAPOGFX3D_STACK_DEPTH;
 static constexpr int SPAN_CAPACITY_MIN = 32;
 static constexpr int SPAN_CAPACITY_MAX = 512;
-static constexpr int VCACHE_SIZE = 64;  // power of two
+static constexpr int VCACHE_SIZE = SHAPOGFX3D_VCACHE_SIZE;
 static constexpr uint16_t NONE = 0xFFFF;
+
+static_assert(STACK_DEPTH >= 1, "SHAPOGFX3D_STACK_DEPTH must be at least 1");
+static_assert(VCACHE_SIZE >= 1 && (VCACHE_SIZE & (VCACHE_SIZE - 1)) == 0,
+              "SHAPOGFX3D_VCACHE_SIZE must be a power of two");
 
 }  // namespace detail
 
@@ -231,6 +310,10 @@ static inline int32_t floatSortKey(float f) {
 
 // Texture format usable by the rasterizer; NONE for disabled formats
 static inline TexFmt texFmtOf(const Texture *tex) {
+#if !SHAPOGFX3D_TEXTURE
+  (void)tex;
+  return TexFmt::NONE;
+#else
   if (!tex || !tex->pixels) return TexFmt::NONE;
   switch (tex->format) {
 #if SHAPOGFX_FORMAT_GRAY1
@@ -247,15 +330,31 @@ static inline TexFmt texFmtOf(const Texture *tex) {
 #endif
     default: return TexFmt::NONE;
   }
+#endif
+}
+
+// True for a texture format with per-texel alpha (none, without texturing)
+static constexpr bool texFmtHasAlpha(TexFmt f) {
+#if SHAPOGFX3D_TEXTURE
+  return f == TexFmt::ARGB4444;
+#else
+  (void)f;
+  return false;
+#endif
 }
 
 // The texture actually used by a material (nullptr if unused or unsupported)
 static inline const Texture *materialTexture(const Material *mat) {
+#if !SHAPOGFX3D_TEXTURE
+  (void)mat;
+  return nullptr;
+#else
   const Texture *tex =
       (mat->flags & (MaterialFlags::TEXTURE | MaterialFlags::ENV_MAP))
           ? mat->texture
           : nullptr;
   return texFmtOf(tex) != TexFmt::NONE ? tex : nullptr;
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +589,7 @@ void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
     d = dot(in.normal, ps.lightModel);
   }
 
+#if SHAPOGFX3D_TEXTURE
   if (ps.tex) {
     vec2f uv;
     if (ps.envMap) {
@@ -503,6 +603,7 @@ void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
   } else {
     sv.u = sv.v = 0.0f;
   }
+#endif
 
   // Gouraud shading: lighting is evaluated per vertex
   float r, g, b;
@@ -547,9 +648,14 @@ void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
 // Triangle setup
 
 static inline uint8_t materialAlpha64(const Material *mat) {
+#if !SHAPOGFX3D_BLEND
+  (void)mat;
+  return 64;  // translucency compiled out: everything is opaque
+#else
   return (uint8_t)((mat->blendMode == BlendMode::NONE)
                        ? 64
                        : (int)(clamp01(mat->diffuse.a) * 64.0f + 0.5f));
+#endif
 }
 
 void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
@@ -606,23 +712,39 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   t.leftLong = (x0 + t.slope[2] * y10) < v1.sx;
 
   t.z = plane(v0.zNdc + depthBias_, v1.zNdc + depthBias_, v2.zNdc + depthBias_);
+
+  uint8_t flags = 0;
+#if SHAPOGFX3D_GOURAUD
   t.r = plane(v0.r, v1.r, v2.r);
   t.g = plane(v0.g, v1.g, v2.g);
   t.b = plane(v0.b, v1.b, v2.b);
-
-  uint8_t flags = 0;
   if (v0.r == v1.r && v0.r == v2.r && v0.g == v1.g && v0.g == v2.g &&
       v0.b == v1.b && v0.b == v2.b) {
     flags |= TriFlags::FLAT;
   }
-  // A texture with alpha makes the triangle translucent even in BlendMode::NONE
+#else
+  // Flat shading: the first vertex as passed in (before the y sort) provides
+  // the color of the whole triangle
+  t.r = (uint8_t)(int)(a.sv.r + 0.5f);
+  t.g = (uint8_t)(int)(a.sv.g + 0.5f);
+  t.b = (uint8_t)(int)(a.sv.b + 0.5f);
+  flags |= TriFlags::FLAT;
+#endif
+
   const TexFmt tf = texFmtOf(tex);
-  const bool texAlpha = (tf == TexFmt::ARGB4444);
+#if SHAPOGFX3D_BLEND
+  // A texture with alpha makes the triangle translucent even in BlendMode::NONE
+  const bool texAlpha = texFmtHasAlpha(tf);
   int blend = (int)mat->blendMode;
   if (texAlpha && mat->blendMode == BlendMode::NONE)
     blend = (int)BlendMode::ALPHA;
   if (mat->blendMode == BlendMode::NONE && !texAlpha) flags |= TriFlags::OPAQUE;
+#else
+  const int blend = (int)BlendMode::NONE;
+  flags |= TriFlags::OPAQUE;  // translucency compiled out
+#endif
 
+#if SHAPOGFX3D_TEXTURE
   if (tex) {
     flags |= TriFlags::TEX;
     float u[3] = {v0.u, v1.u, v2.u}, v[3] = {v0.v, v1.v, v2.v};
@@ -639,7 +761,7 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
       u[i] -= uOff;
       v[i] -= vOff;
     }
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
+#if SHAPOGFX3D_PERSPECTIVE >= 1
     for (int i = 0; i < 3; i++) {  // (u/w, v/w) are linear in screen space
       u[i] *= cv[i]->invW;
       v[i] *= cv[i]->invW;
@@ -652,6 +774,7 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
     t.v = plane(v[0], v[1], v[2]);
 #endif
   }
+#endif  // SHAPOGFX3D_TEXTURE
 
   t.mat = mat;
   t.sortKey = floatSortKey(a.viewZ + b.viewZ + c.viewZ);
@@ -670,6 +793,8 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 // They are unlit (diffuse x vertex color), never culled and clipped against
 // the near plane. Both are stored in the triangle buffer and become spans in
 // makeSpan(), so they are depth-resolved against everything else.
+
+#if SHAPOGFX3D_UNLIT
 
 void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
                              UnlitVertex &out) const {
@@ -690,15 +815,33 @@ void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
 }
 
 static inline uint8_t unlitRasterFn(const Material *mat, bool flat) {
-  return (uint8_t)((int)TexFmt::NONE * RASTER_PER_TEX +
-                   (int)mat->blendMode * 2 + (flat ? 1 : 0));
+#if SHAPOGFX3D_BLEND
+  const int blend = (int)mat->blendMode;
+#else
+  (void)mat;
+  const int blend = (int)BlendMode::NONE;
+#endif
+  return (uint8_t)((int)TexFmt::NONE * RASTER_PER_TEX + blend * 2 +
+                   (flat ? 1 : 0));
+}
+
+// OPAQUE unless the material really blends
+static inline uint8_t opaqueFlag(const Material *mat) {
+#if SHAPOGFX3D_BLEND
+  return (mat->blendMode == BlendMode::NONE) ? TriFlags::OPAQUE : 0;
+#else
+  (void)mat;
+  return TriFlags::OPAQUE;
+#endif
 }
 
 static inline Plane constPlane(float v) { return {v, 0.0f, 0.0f}; }
 
 // Texture planes of untextured primitives
 static inline void clearTexPlanes(Triangle &t) {
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE >= 1
+#if !SHAPOGFX3D_TEXTURE
+  (void)t;
+#elif SHAPOGFX3D_PERSPECTIVE >= 1
   t.uw = t.vw = constPlane(0.0f);
   t.iw = constPlane(1.0f);
 #else
@@ -759,15 +902,22 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
     return {p - k * ax, k, 0.0f};
   };
   t.z = linePlane(az, bz);
+#if SHAPOGFX3D_GOURAUD
   t.r = linePlane(a.r, b.r);
   t.g = linePlane(a.g, b.g);
   t.b = linePlane(a.b, b.b);
+  const bool flat = (a.r == b.r && a.g == b.g && a.b == b.b);
+#else
+  t.r = (uint8_t)(int)(a.r + 0.5f);  // flat shading: the first end point
+  t.g = (uint8_t)(int)(a.g + 0.5f);
+  t.b = (uint8_t)(int)(a.b + 0.5f);
+  const bool flat = true;
+#endif
   clearTexPlanes(t);
 
-  const bool flat = (a.r == b.r && a.g == b.g && a.b == b.b);
   uint8_t flags = TriFlags::LINE;
   if (flat) flags |= TriFlags::FLAT;
-  if (mat->blendMode == BlendMode::NONE) flags |= TriFlags::OPAQUE;
+  flags |= opaqueFlag(mat);
   t.mat = mat;
   t.sortKey = floatSortKey(a.view.z + b.view.z);
   t.yMin = (int16_t)yMin;
@@ -802,12 +952,18 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   t.slope[0] = (float)size;
   t.slope[1] = t.slope[2] = 0.0f;
   t.z = constPlane(z);
+#if SHAPOGFX3D_GOURAUD
   t.r = constPlane(a.r);
   t.g = constPlane(a.g);
   t.b = constPlane(a.b);
+#else
+  t.r = (uint8_t)(int)(a.r + 0.5f);
+  t.g = (uint8_t)(int)(a.g + 0.5f);
+  t.b = (uint8_t)(int)(a.b + 0.5f);
+#endif
   clearTexPlanes(t);
   uint8_t flags = TriFlags::POINT | TriFlags::FLAT;
-  if (mat->blendMode == BlendMode::NONE) flags |= TriFlags::OPAQUE;
+  flags |= opaqueFlag(mat);
   t.mat = mat;
   t.sortKey = floatSortKey(a.view.z);
   t.yMin = (int16_t)yMin;
@@ -819,17 +975,64 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   triCount_++;
 }
 
+#endif  // SHAPOGFX3D_UNLIT
+
+// One vertex of a buffer. A buffer of plain vertices is used in place; a
+// packed one is decoded into `tmp`, which the caller owns. The vertex cache
+// means this happens once per vertex and primitive.
+static inline const Vertex &vertexAt(const VertexBuffer &vb, uint16_t i,
+                                     Vertex &tmp) {
+  if (vb.vertices) return vb.vertices[i];
+  const PackedVertex &p = vb.packed[i];
+  tmp.position = {p.position[0] * vb.scale.x + vb.bias.x,
+                  p.position[1] * vb.scale.y + vb.bias.y,
+                  p.position[2] * vb.scale.z + vb.bias.z};
+  tmp.normal = {p.normal[0] * PACKED_NORMAL_SCALE,
+                p.normal[1] * PACKED_NORMAL_SCALE,
+                p.normal[2] * PACKED_NORMAL_SCALE};
+  tmp.uv = {p.uv[0] * PACKED_UV_SCALE, p.uv[1] * PACKED_UV_SCALE};
+  tmp.color = gfx2d::makeColor(p.color[0], p.color[1], p.color[2]);
+  return tmp;
+}
+
+const CachedVertex &Graphics3D::fetchVertex(const VertexBuffer &vb, uint16_t vi,
+                                            const PrimSetup &ps) {
+  static const CachedVertex INVALID = {};  // ok == false: drops the triangle
+  if (vi >= vb.vertexCount) {  // out-of-range index: the triangle is dropped
+    badIndices_++;
+    return INVALID;
+  }
+  CachedVertex &cv = vcache_[vi & (VCACHE_SIZE - 1)];
+  if (cv.tag != vi) {
+    Vertex tmp;
+    shadeVertex(vertexAt(vb, vi, tmp), ps, cv);
+    cv.tag = vi;
+  }
+  return cv;
+}
+
+#if SHAPOGFX3D_UNLIT
+bool Graphics3D::fetchUnlitVertex(const VertexBuffer &vb, uint16_t vi,
+                                  const Material *mat, UnlitVertex &out) {
+  if (vi >= vb.vertexCount) {
+    badIndices_++;
+    return false;
+  }
+  Vertex tmp;
+  unlitVertex(vertexAt(vb, vi, tmp), mat, out);
+  return true;
+}
+#endif
+
 void Graphics3D::putPrimitive(const Primitive &prim) {
   if (!tris_) return;
   const Material *mat = prim.material ? prim.material : curMat_;
   if (!mat) return;
-  if (!prim.vertexBuffer || !prim.vertexBuffer->vertices || !prim.indices)
-    return;
-  const Vertex *verts = prim.vertexBuffer->vertices;
-  const uint16_t vcount = prim.vertexBuffer->vertexCount;
+  if (!prim.vertexBuffer || !prim.indices) return;
+  const VertexBuffer &vb = *prim.vertexBuffer;
+  if (!vb.vertices && !vb.packed) return;
   const uint16_t *idx = prim.indices;
   int n = prim.indexCount;
-  static const CachedVertex INVALID = {};  // ok == false: drops the triangle
 
   // Per-primitive constants of the vertex stage
   PrimSetup ps;
@@ -849,16 +1052,7 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
   // (strips, fans, indexed meshes). Invalidated per primitive.
   for (int i = 0; i < VCACHE_SIZE; i++) vcache_[i].tag = NONE;
   auto fetch = [&](uint16_t vi) -> const CachedVertex & {
-    if (vi >= vcount) {  // out-of-range index: the triangle is dropped
-      badIndices_++;
-      return INVALID;
-    }
-    CachedVertex &cv = vcache_[vi & (VCACHE_SIZE - 1)];
-    if (cv.tag != vi) {
-      shadeVertex(verts[vi], ps, cv);
-      cv.tag = vi;
-    }
-    return cv;
+    return fetchVertex(vb, vi, ps);
   };
 
   switch (prim.type) {
@@ -889,35 +1083,39 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
     case PrimitiveType::LINES:
     case PrimitiveType::LINE_STRIP:
     case PrimitiveType::LINE_LOOP: {
+#if SHAPOGFX3D_UNLIT
       // Unlit vertices are cheap, so they are computed on the fly (no cache)
       auto fetchUnlit = [&](uint16_t vi, UnlitVertex &out) -> bool {
-        if (vi >= vcount) {
-          badIndices_++;
-          return false;
-        }
-        unlitVertex(verts[vi], mat, out);
-        return true;
+        return fetchUnlitVertex(vb, vi, mat, out);
       };
       UnlitVertex a, b;
+      (void)a, (void)b;
       if (prim.type == PrimitiveType::POINTS) {
+#if SHAPOGFX3D_POINTS
         for (int i = 0; i < n; i++) {
           if (fetchUnlit(idx[i], a)) emitPoint(a, mat);
         }
-      } else if (prim.type == PrimitiveType::LINES) {
-        for (int i = 0; i + 1 < n; i += 2) {
-          if (fetchUnlit(idx[i], a) && fetchUnlit(idx[i + 1], b))
-            emitLine(a, b, mat);
-        }
+#endif
       } else {
-        for (int i = 1; i < n; i++) {
-          if (fetchUnlit(idx[i - 1], a) && fetchUnlit(idx[i], b))
-            emitLine(a, b, mat);
+#if SHAPOGFX3D_LINES
+        if (prim.type == PrimitiveType::LINES) {
+          for (int i = 0; i + 1 < n; i += 2) {
+            if (fetchUnlit(idx[i], a) && fetchUnlit(idx[i + 1], b))
+              emitLine(a, b, mat);
+          }
+        } else {
+          for (int i = 1; i < n; i++) {
+            if (fetchUnlit(idx[i - 1], a) && fetchUnlit(idx[i], b))
+              emitLine(a, b, mat);
+          }
+          if (prim.type == PrimitiveType::LINE_LOOP && n > 2) {
+            if (fetchUnlit(idx[n - 1], a) && fetchUnlit(idx[0], b))
+              emitLine(a, b, mat);
+          }
         }
-        if (prim.type == PrimitiveType::LINE_LOOP && n > 2) {
-          if (fetchUnlit(idx[n - 1], a) && fetchUnlit(idx[0], b))
-            emitLine(a, b, mat);
-        }
+#endif
       }
+#endif  // SHAPOGFX3D_UNLIT
       break;
     }
   }
@@ -1021,16 +1219,20 @@ Span *Graphics3D::allocSpan() {
 static inline void spanAdvance(Span &sp, int n) {
   sp.x0 += n;
   sp.z0 += sp.dz * n;
+#if SHAPOGFX3D_GOURAUD
   sp.r += sp.dr * n;
   sp.g += sp.dg * n;
   sp.b += sp.db * n;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+#endif
+#if SHAPOGFX3D_TEXTURE
+#if SHAPOGFX3D_PERSPECTIVE == 2
   sp.uw += sp.duw * n;
   sp.vw += sp.dvw * n;
   sp.iw += sp.diw * n;
 #else
   sp.u += sp.du * n;
   sp.v += sp.dv * n;
+#endif
 #endif
 }
 
@@ -1076,6 +1278,8 @@ Span **Graphics3D::cutSpan(Span **pp, int ox0, int ox1) {
   }
 }
 
+#if SHAPOGFX3D_BLEND
+
 // Append (part of) a span [sp.x0, x1) to the translucent list
 void Graphics3D::appendTranslucent(const Span &sp, int x1) {
   Span *n = allocSpan();
@@ -1090,6 +1294,8 @@ void Graphics3D::appendTranslucent(const Span &sp, int x1) {
   }
   transTail_ = n;
 }
+
+#endif  // SHAPOGFX3D_BLEND
 
 // Insert an opaque span into the list sorted by x.
 // Overlaps with existing spans are resolved by comparing depth at the center of
@@ -1134,6 +1340,8 @@ void Graphics3D::insertOpaque(Span &frag) {
     }
   }
 }
+
+#if SHAPOGFX3D_BLEND
 
 // Add a translucent span to the translucent list, excluding the parts hidden by
 // nearer opaque spans
@@ -1185,6 +1393,8 @@ void Graphics3D::clipTranslucent(const Span &frag) {
   }
 }
 
+#endif  // SHAPOGFX3D_BLEND
+
 // Fill the depth and color of a span covering [x0, x1) from the planes of t,
 // evaluated at the center of the leftmost pixel (xc, yc)
 static inline void fillSpanBase(const Triangle &t, float xc, float yc, int x0,
@@ -1193,6 +1403,7 @@ static inline void fillSpanBase(const Triangle &t, float xc, float yc, int x0,
   out.x1 = x1;
   out.z0 = toZ(t.z.at(xc, yc));
   out.dz = toZDelta(t.z.dx);
+#if SHAPOGFX3D_GOURAUD
   // Color: the plane values at pixel centers inside the triangle lie within
   // 0..255 up to rounding; clamp the start value to guard the rounding.
   out.r = toFixColor(t.r.at(xc, yc));
@@ -1201,23 +1412,33 @@ static inline void fillSpanBase(const Triangle &t, float xc, float yc, int x0,
   out.dr = toFixDelta(t.r.dx);
   out.dg = toFixDelta(t.g.dx);
   out.db = toFixDelta(t.b.dx);
+#else
+  out.r = t.r;
+  out.g = t.g;
+  out.b = t.b;
+#endif
   out.tri = &t;
   out.next = nullptr;
 }
 
 // Span of an untextured primitive (points and lines)
+#if SHAPOGFX3D_UNLIT
 static inline void fillUnlitSpan(const Triangle &t, float xc, float yc, int x0,
                                  int x1, Span &out) {
   fillSpanBase(t, xc, yc, x0, x1, out);
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+#if SHAPOGFX3D_TEXTURE
+#if SHAPOGFX3D_PERSPECTIVE == 2
   out.uw = out.vw = out.duw = out.dvw = 0.0f;
   out.iw = 1.0f;
   out.diw = 0.0f;
 #else
   out.u = out.v = out.du = out.dv = 0;
 #endif
+#endif
 }
+#endif
 
+#if SHAPOGFX3D_LINES
 // Line segment a -> b on pixel row yi: one pixel per row for steep lines, one
 // pixel per column (a horizontal run) for shallow lines, so the coverage
 // matches a Bresenham line. Both end points are drawn.
@@ -1265,7 +1486,9 @@ static bool makeLineSpan(const Triangle &t, int yi, int rx0, int rx1,
   fillUnlitSpan(t, (float)c0 + 0.5f, (float)yi + 0.5f, c0, c1, out);
   return true;
 }
+#endif  // SHAPOGFX3D_LINES
 
+#if SHAPOGFX3D_POINTS
 // Point: a square with its top-left pixel at (sx[0], sy[0]), size slope[0]
 static bool makePointSpan(const Triangle &t, int yi, int rx0, int rx1,
                           Span &out) {
@@ -1276,6 +1499,7 @@ static bool makePointSpan(const Triangle &t, int yi, int rx0, int rx1,
   fillUnlitSpan(t, (float)c0 + 0.5f, (float)yi + 0.5f, c0, c1, out);
   return true;
 }
+#endif  // SHAPOGFX3D_POINTS
 
 // Build the span of triangle t on the scanline with center yc, limited to
 // the region [rx0, rx1). Returns false when the triangle covers no pixel
@@ -1302,14 +1526,15 @@ static bool makeTriSpan(const Triangle &t, float yc, int rx0, int rx1,
   const float xc = (float)xi0 + 0.5f;
   fillSpanBase(t, xc, yc, xi0, xi1, out);
 
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+#if SHAPOGFX3D_TEXTURE
+#if SHAPOGFX3D_PERSPECTIVE == 2
   out.uw = t.uw.at(xc, yc);
   out.vw = t.vw.at(xc, yc);
   out.iw = t.iw.at(xc, yc);
   out.duw = t.uw.dx;
   out.dvw = t.vw.dx;
   out.diw = t.iw.dx;
-#elif SHAPOGFX3D_CORRECT_PERSPECTIVE == 1
+#elif SHAPOGFX3D_PERSPECTIVE == 1
   if (t.flags & TriFlags::TEX) {
     // Vertical-only correction: (u, v) are exact at the span end points and
     // interpolated affinely in between. The three divides (1/w at both ends,
@@ -1335,13 +1560,18 @@ static bool makeTriSpan(const Triangle &t, float yc, int rx0, int rx1,
   out.du = toFixDelta(t.u.dx);
   out.dv = toFixDelta(t.v.dx);
 #endif
+#endif  // SHAPOGFX3D_TEXTURE
   return true;
 }
 
 static inline bool makeSpan(const Triangle &t, int yi, int rx0, int rx1,
                             Span &out) {
+#if SHAPOGFX3D_LINES
   if (t.flags & TriFlags::LINE) return makeLineSpan(t, yi, rx0, rx1, out);
+#endif
+#if SHAPOGFX3D_POINTS
   if (t.flags & TriFlags::POINT) return makePointSpan(t, yi, rx0, rx1, out);
+#endif
   return makeTriSpan(t, (float)yi + 0.5f, rx0, rx1, out);
 }
 
@@ -1365,6 +1595,8 @@ struct TexSampler<TexFmt::NONE> {  // never called (untextured spans skip the
     return 0;
   }
 };
+
+#if SHAPOGFX3D_TEXTURE
 
 #if SHAPOGFX_FORMAT_GRAY1
 template <>
@@ -1407,6 +1639,8 @@ struct TexSampler<TexFmt::RGB565BE> {
 };
 #endif
 
+#endif  // SHAPOGFX3D_TEXTURE
+
 // Texture coordinate walker: (u, v) in 16.16 texels, wrapped with bit masks
 // (width and height must be powers of two). fetchNext() returns the current
 // texel and advances to the next pixel.
@@ -1442,7 +1676,7 @@ struct SoftTex {
   }
 };
 
-#if SHAPOGFX3D_RP2_INTERP
+#if SHAPOGFX3D_RP2_INTERP && SHAPOGFX3D_TEXTURE
 // Same, through the SIO interpolator: lane 0 turns u into the byte offset of
 // the texel in its row, lane 1 turns v into the byte offset of the row, and
 // POP_FULL returns the texel address and steps both accumulators. Only for
@@ -1527,23 +1761,53 @@ struct OutTraits<PixelFormat::RGB444> {
 };
 #endif
 
+// Vertex color of a span: interpolated per pixel (Gouraud shading) or
+// constant over the span (flat shading)
+struct SpanColor {
+#if SHAPOGFX3D_GOURAUD
+  int32_t r, g, b;     // 8.16 fixed point
+  int32_t dr, dg, db;  // per-pixel step
+  void init(const Span &sp) {
+    r = sp.r, g = sp.g, b = sp.b;
+    dr = sp.dr, dg = sp.dg, db = sp.db;
+  }
+  void advance() { r += dr, g += dg, b += db; }
+  uint32_t r8() const { return (uint32_t)(r >> FIX_SHIFT) & 0xFFu; }
+  uint32_t g8() const { return (uint32_t)(g >> FIX_SHIFT) & 0xFFu; }
+  uint32_t b8() const { return (uint32_t)(b >> FIX_SHIFT) & 0xFFu; }
+  uint32_t r5() const { return (uint32_t)(r >> 19) & 31u; }
+  uint32_t g6() const { return (uint32_t)(g >> 18) & 63u; }
+  uint32_t b5() const { return (uint32_t)(b >> 19) & 31u; }
+#else
+  uint32_t r, g, b;  // 0..255, constant
+  void init(const Span &sp) { r = sp.r, g = sp.g, b = sp.b; }
+  void advance() {}
+  uint32_t r8() const { return r; }
+  uint32_t g8() const { return g; }
+  uint32_t b8() const { return b; }
+  uint32_t r5() const { return r >> 3; }
+  uint32_t g6() const { return g >> 2; }
+  uint32_t b5() const { return b >> 3; }
+#endif
+};
+
 // The pixel loop: n pixels of span sp through cursor cur, texels from tx
 template <BlendMode B, TexFmt T, bool FLAT, PixelFormat OUT, typename Tex>
 static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
                               const Span &sp, int n, Tex &tx) {
   using O = OutTraits<OUT>;
   constexpr bool TEX = (T != TexFmt::NONE);
-  constexpr bool TEXA = (T == TexFmt::ARGB4444);
+  constexpr bool TEXA = texFmtHasAlpha(T);
 
-  int32_t r = sp.r, g = sp.g, b = sp.b;
-  const int32_t dr = sp.dr, dg = sp.dg, db = sp.db;
+  SpanColor col;
+  col.init(sp);
   const uint32_t a64 = sp.tri->alpha64;
 
-  uint32_t sr = (uint32_t)(r >> 19) & 31u;
-  uint32_t sg = (uint32_t)(g >> 18) & 63u;
-  uint32_t sb = (uint32_t)(b >> 19) & 31u;
+  uint32_t sr = col.r5();
+  uint32_t sg = col.g6();
+  uint32_t sb = col.b5();
 
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+#if SHAPOGFX3D_PERSPECTIVE == 2
   // Sub-spans of PERSPECTIVE_STEP pixels: (u, v) are exact at the sub-span
   // ends and interpolated linearly inside. uAcc/vAcc mirror the walker's
   // accumulators at the sub-span start.
@@ -1560,7 +1824,7 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
   for (int i = 0; i < n; i++) {
     uint32_t a4 = 15;
     if constexpr (TEX) {
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+#if SHAPOGFX3D_PERSPECTIVE == 2
       if (left == 0) {
         uAcc += du * prevM;
         vAcc += dv * prevM;
@@ -1585,16 +1849,16 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
       const uint32_t texel = tx.fetchNext(a4);
       // Modulate the texel (5/6/5 bits) by the vertex color (0..255).
       // (c + 1) * t >> 8 preserves the maximum value.
-      const uint32_t cr = ((uint32_t)(r >> FIX_SHIFT) & 0xFFu) + 1;
-      const uint32_t cg = ((uint32_t)(g >> FIX_SHIFT) & 0xFFu) + 1;
-      const uint32_t cb = ((uint32_t)(b >> FIX_SHIFT) & 0xFFu) + 1;
+      const uint32_t cr = col.r8() + 1;
+      const uint32_t cg = col.g8() + 1;
+      const uint32_t cb = col.b8() + 1;
       sr = (cr * (texel >> 11)) >> 8;
       sg = (cg * ((texel >> 5) & 63u)) >> 8;
       sb = (cb * (texel & 31u)) >> 8;
     } else if constexpr (!FLAT) {
-      sr = (uint32_t)(r >> 19) & 31u;
-      sg = (uint32_t)(g >> 18) & 63u;
-      sb = (uint32_t)(b >> 19) & 31u;
+      sr = col.r5();
+      sg = col.g6();
+      sb = col.b5();
     }
 
     // a4 * 17 + (a4 >> 3) maps 0..15 to 0..256
@@ -1618,11 +1882,7 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
     }
     cur.next();
 
-    if constexpr (!FLAT) {
-      r += dr;
-      g += dg;
-      b += db;
-    }
+    if constexpr (!FLAT) col.advance();
   }
 }
 
@@ -1638,20 +1898,21 @@ static void rasterSpanT(uint8_t *line, int x, int n, const Span &sp) {
   // With equal vertex colors and no texture, the color is constant over the
   // span
   if constexpr (B == BlendMode::NONE && FLAT && !TEX) {
-    cur.fill(n,
-             O::pack((uint32_t)(sp.r >> 19) & 31u, (uint32_t)(sp.g >> 18) & 63u,
-                     (uint32_t)(sp.b >> 19) & 31u));
+    SpanColor col;
+    col.init(sp);
+    cur.fill(n, O::pack(col.r5(), col.g6(), col.b5()));
     return;
   }
 
   if constexpr (TEX) {
+#if SHAPOGFX3D_TEXTURE
     const Texture &tex = *sp.tri->mat->texture;
-#if SHAPOGFX3D_CORRECT_PERSPECTIVE == 2
+#if SHAPOGFX3D_PERSPECTIVE == 2
     const int32_t u0 = 0, v0 = 0, du0 = 0, dv0 = 0;  // set per sub-span
 #else
     const int32_t u0 = sp.u, v0 = sp.v, du0 = sp.du, dv0 = sp.dv;
 #endif
-#if SHAPOGFX3D_RP2_INTERP
+#if SHAPOGFX3D_RP2_INTERP && SHAPOGFX3D_TEXTURE
     if constexpr (T == TexFmt::RGB565BE || T == TexFmt::ARGB4444) {
       if (InterpTex<T>::usable(tex)) {
         InterpTex<T> tx;
@@ -1664,6 +1925,7 @@ static void rasterSpanT(uint8_t *line, int x, int n, const Span &sp) {
     SoftTex<T> tx;
     tx.init(tex, u0, v0, du0, dv0);
     rasterLoop<B, T, FLAT, OUT>(cur, sp, n, tx);
+#endif
   } else {
     SoftTex<TexFmt::NONE> tx;
     rasterLoop<B, T, FLAT, OUT>(cur, sp, n, tx);
@@ -1680,15 +1942,27 @@ static void fillLineT(uint8_t *line, int x, int n, uint32_t native) {
   cur.fill(n, native);
 }
 
-// Rasterizer table for one output format, indexed by Triangle::rasterFn.
-// Rows of disabled texture formats are null (never selected, see texFmtOf()).
-#define SHAPOGFX3D_RASTER_ROW(OUT, T)               \
-  rasterSpanT<BlendMode::NONE, T, false, OUT>,      \
-      rasterSpanT<BlendMode::NONE, T, true, OUT>,   \
-      rasterSpanT<BlendMode::ALPHA, T, false, OUT>, \
-      rasterSpanT<BlendMode::ALPHA, T, true, OUT>,  \
-      rasterSpanT<BlendMode::ADD, T, false, OUT>,   \
-      rasterSpanT<BlendMode::ADD, T, true, OUT>
+// Rasterizer table for one output format, indexed by Triangle::rasterFn
+// (texture format x blend mode x flat). Entries this configuration never
+// selects are null and their function is not instantiated: rows of disabled
+// texture formats (see texFmtOf()), the interpolated variants without
+// SHAPOGFX3D_GOURAUD and the blending ones without SHAPOGFX3D_BLEND.
+#if SHAPOGFX3D_GOURAUD
+#define SHAPOGFX3D_RASTER_SMOOTH(B, T, OUT) rasterSpanT<B, T, false, OUT>
+#else
+#define SHAPOGFX3D_RASTER_SMOOTH(B, T, OUT) nullptr
+#endif
+#if SHAPOGFX3D_BLEND
+#define SHAPOGFX3D_RASTER_PAIR(B, T, OUT) \
+  SHAPOGFX3D_RASTER_SMOOTH(B, T, OUT), rasterSpanT<B, T, true, OUT>
+#else
+#define SHAPOGFX3D_RASTER_PAIR(B, T, OUT) nullptr, nullptr
+#endif
+#define SHAPOGFX3D_RASTER_ROW(OUT, T)                   \
+  SHAPOGFX3D_RASTER_SMOOTH(BlendMode::NONE, T, OUT),    \
+      rasterSpanT<BlendMode::NONE, T, true, OUT>,       \
+      SHAPOGFX3D_RASTER_PAIR(BlendMode::ALPHA, T, OUT), \
+      SHAPOGFX3D_RASTER_PAIR(BlendMode::ADD, T, OUT)
 #define SHAPOGFX3D_RASTER_NULL_ROW \
   nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
 #if SHAPOGFX_FORMAT_GRAY1
@@ -1715,6 +1989,7 @@ static void fillLineT(uint8_t *line, int x, int n, uint32_t native) {
 #else
 #define SHAPOGFX3D_RASTER_ROW_RGB565BE(OUT) SHAPOGFX3D_RASTER_NULL_ROW
 #endif
+#if SHAPOGFX3D_TEXTURE
 #define SHAPOGFX3D_RASTER_TABLE(OUT)                                         \
   {                                                                          \
     SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::NONE),                                \
@@ -1722,6 +1997,10 @@ static void fillLineT(uint8_t *line, int x, int n, uint32_t native) {
         SHAPOGFX3D_RASTER_ROW_ARGB4444(OUT),                                 \
         SHAPOGFX3D_RASTER_ROW_RGB565BE(OUT),                                 \
   }
+#else
+#define SHAPOGFX3D_RASTER_TABLE(OUT) \
+  { SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::NONE) }
+#endif
 
 static constexpr int RASTER_TABLE_SIZE = (int)TexFmt::COUNT * RASTER_PER_TEX;
 
@@ -1841,12 +2120,16 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
       }
       Span sp;
       if (makeSpan(t, yi, rx0, rx1, sp)) {
+#if SHAPOGFX3D_BLEND
         if (t.flags & TriFlags::OPAQUE) {
           clipTranslucent(sp);
           insertOpaque(sp);
         } else {
           insertTranslucent(sp);
         }
+#else
+        insertOpaque(sp);  // every primitive is opaque
+#endif
       }
       pp = &link[p];
     }
@@ -1867,9 +2150,11 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
     if (clearEnabled_ && cursor < rx1) {
       fillFn(line, xBase + cursor, rx1 - cursor, clearNative);
     }
+#if SHAPOGFX3D_BLEND
     for (const Span *e = transHead_; e; e = e->next) {
       table[e->tri->rasterFn](line, xBase + e->x0, e->x1 - e->x0, *e);
     }
+#endif
   }
 
 #if SHAPOGFX3D_RP2_INTERP

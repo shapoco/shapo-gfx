@@ -11,6 +11,7 @@
 #include "data/test_image_rgb444.hpp"
 #include "data/test_image_rgb565be.hpp"
 #include "data/test_model.hpp"
+#include "data/test_model_packed.hpp"
 #include "shapoco/gfx2d/surface_alloc.hpp"
 #include "shapoco/gfx3d/gfx3d.hpp"
 
@@ -84,19 +85,62 @@ class TestVisitor : public g3::NodeVisitor {
   }
 };
 
-static int renderScene(g3::Graphics3D &r, const g2::Surface &s,
-                       g3::NodeVisitor *v) {
+static int renderSceneOf(g3::Graphics3D &r, const g2::Surface &s,
+                         const g3::Scene &scene, g3::NodeVisitor *v) {
   r.setPerspectiveProjection(1.0f, (float)s.width / s.height, 0.3f, 50.0f);
   r.beginScene();
   r.lookAt({2.5f, 2.0f, 3.0f}, {0, 0.3f, 0});
   r.enableParallelLight({-0.5f, -1, -0.4f}, {1, 1, 1, 1});
   r.enableEnvironmentLight({0.3f, 0.3f, 0.3f, 1});
-  r.putScene(test_model::scene, v);
+  r.putScene(scene, v);
   r.endScene();
   r.beginRender();
   r.render(0, 0, s.width, s.height, s);
   r.endRender();
   return r.getStats().triCount;
+}
+
+static int renderScene(g3::Graphics3D &r, const g2::Surface &s,
+                       g3::NodeVisitor *v) {
+  return renderSceneOf(r, s, test_model::scene, v);
+}
+
+// The packed (16-byte) vertex form of the same model must draw the same
+// picture: positions are quantized to 1/65534 of the model's extent and
+// normals to 1/127, both far below the resolution of the output format.
+static void testPackedVertices() {
+  CHECK_EQ(sizeof(g3::PackedVertex), 16u);
+  const g3::VertexBuffer &vb =
+      *test_model_packed::node_Cube.mesh->primitives[0].vertexBuffer;
+  CHECK(vb.vertices == nullptr);
+  CHECK(vb.packed != nullptr);
+  CHECK_EQ(vb.vertexCount,
+           test_model::node_Cube.mesh->primitives[0].vertexBuffer->vertexCount);
+
+  static constexpr int W = 96, H = 64;
+  g3::Graphics3D r;
+  r.init(W, H, arena, sizeof(arena));
+  g2::OwnedSurface a = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface b = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  const int triA = renderSceneOf(r, a, test_model::scene, nullptr);
+  const int triB = renderSceneOf(r, b, test_model_packed::scene, nullptr);
+  CHECK_EQ(triA, triB);
+  CHECK(triA > 0);
+
+  // Compare per channel; a quantized vertex may move a silhouette pixel
+  int differing = 0;
+  const uint16_t *pa = (const uint16_t *)a.pixels();
+  const uint16_t *pb = (const uint16_t *)b.pixels();
+  for (int i = 0; i < W * H; i++) {
+    g2::Color ca = g2::rgb565ToColor(g2::bswap16(pa[i]));
+    g2::Color cb = g2::rgb565ToColor(g2::bswap16(pb[i]));
+    if (absDiff(g2::colorR(ca), g2::colorR(cb)) > 24 ||
+        absDiff(g2::colorG(ca), g2::colorG(cb)) > 24 ||
+        absDiff(g2::colorB(ca), g2::colorB(cb)) > 24) {
+      differing++;
+    }
+  }
+  CHECK(differing <= W * H / 100);
 }
 
 static void testGltf2cpp() {
@@ -194,5 +238,6 @@ static void testDeepTree() {
 void testTools() {
   testImg2cpp();
   testGltf2cpp();
+  testPackedVertices();
   testDeepTree();
 }

@@ -199,6 +199,7 @@ static void testOutputFormats() {
   CHECK_EQ(((uint8_t *)gray.pixels())[0], 0xFF);
 }
 
+#if SHAPOGFX3D_TEXTURE && SHAPOGFX3D_BLEND
 static void testTextureAlpha() {
   // Holes in an ARGB4444 texture show the background
   g3::Graphics3D r;
@@ -225,6 +226,7 @@ static void testTextureAlpha() {
   }
   CHECK(green > 0 && other > 0);
 }
+#endif  // SHAPOGFX3D_TEXTURE && SHAPOGFX3D_BLEND
 
 // Every shape must render identically with and without back-face culling:
 // otherwise its winding is wrong (the culled version would show the inside).
@@ -351,6 +353,7 @@ static void testVertexColorAndIndices() {
   }
 }
 
+#if SHAPOGFX3D_LINES && SHAPOGFX3D_POINTS
 // Points and lines: Bresenham-like coverage, end points, hidden-line removal,
 // point size, near-plane clipping, depth bias
 static void testPointsAndLines() {
@@ -514,13 +517,18 @@ static void testPointsAndLines() {
   }
   CHECK_EQ(r.getStats().badIndices, 0);
 }
+#endif  // SHAPOGFX3D_LINES && SHAPOGFX3D_POINTS
 
 void testGfx3D() {
   genTextures();
+#if SHAPOGFX3D_LINES && SHAPOGFX3D_POINTS
   testPointsAndLines();
+#endif
   testShapeWinding();
   testVertexColorAndIndices();
   testBandsAndClear();
   testOutputFormats();
+#if SHAPOGFX3D_TEXTURE && SHAPOGFX3D_BLEND
   testTextureAlpha();
+#endif
 }

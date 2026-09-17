@@ -17,6 +17,7 @@ gltf2cpp: glTF モデルを C++ コードに変換する
    :header: "オプション", "既定値", "説明"
 
    "``--namespace``", "入力ファイル名", "生成物を囲む名前空間"
+   "``--vertex-format``", "``float``", "``float``: 36 バイトの ``g3::Vertex``。``packed``: 16 バイトの ``g3::PackedVertex`` (座標を量子化、uv は 1/1024 単位、法線は int8、色は RGB888)"
    "``--texformat``", "``auto``", "テクスチャの形式。``auto`` は画像やマテリアルが α を使うなら ``argb4444``、それ以外は ``rgb565be``"
    "``--dither``", "``none``", "テクスチャのディザ (``none`` / ``diffusion`` / ``pattern``)"
    "``--key-color``", "なし", "テクスチャで透明にする色"

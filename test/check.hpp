@@ -5,6 +5,25 @@
 
 #include <cstdio>
 
+// Optional features of the 3D renderer (see src/gfx3d/gfx3d.cpp). The build
+// system passes the same values to the library and to the tests, so a test can
+// skip what the current configuration cannot draw.
+#ifndef SHAPOGFX3D_TEXTURE
+#define SHAPOGFX3D_TEXTURE 1
+#endif
+#ifndef SHAPOGFX3D_GOURAUD
+#define SHAPOGFX3D_GOURAUD 1
+#endif
+#ifndef SHAPOGFX3D_BLEND
+#define SHAPOGFX3D_BLEND 1
+#endif
+#ifndef SHAPOGFX3D_LINES
+#define SHAPOGFX3D_LINES 1
+#endif
+#ifndef SHAPOGFX3D_POINTS
+#define SHAPOGFX3D_POINTS 1
+#endif
+
 extern int g_checkFailures;
 
 #define CHECK(cond)                                                 \

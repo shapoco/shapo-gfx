@@ -1,12 +1,41 @@
 cmake_minimum_required(VERSION 3.13)
 project(shapogfx LANGUAGES CXX)
 
-# Perspective correction of texture coordinates: 0 = off (affine),
-# 1 = vertical only (two divides per span), 2 = full (per-pixel divide).
-# Leave empty to use the library default (1).
+# Options of the 3D renderer. Each is read by src/gfx3d/*.cpp only and changes
+# no public type, so leaving one empty simply keeps the library default.
+# Turning a feature off removes its code and shrinks the per-triangle and
+# per-span working memory, so the same arena holds more geometry.
 set(SHAPOGFX3D_CORRECT_PERSPECTIVE "" CACHE STRING
     "Perspective correction level: 0, 1 or 2 (empty = library default)")
 set_property(CACHE SHAPOGFX3D_CORRECT_PERSPECTIVE PROPERTY STRINGS "" 0 1 2)
+set(SHAPOGFX3D_PERSPECTIVE_STEP "" CACHE STRING
+    "Level 2: pixels between exact texture coordinates (power of two)")
+set(SHAPOGFX3D_TEXTURE "" CACHE STRING "Texture and environment mapping (0/1)")
+set_property(CACHE SHAPOGFX3D_TEXTURE PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX3D_GOURAUD "" CACHE STRING
+    "Gouraud shading; 0 selects flat shading (0/1)")
+set_property(CACHE SHAPOGFX3D_GOURAUD PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX3D_BLEND "" CACHE STRING "Translucency (0/1)")
+set_property(CACHE SHAPOGFX3D_BLEND PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX3D_LINES "" CACHE STRING "LINES / LINE_STRIP / LINE_LOOP (0/1)")
+set_property(CACHE SHAPOGFX3D_LINES PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX3D_POINTS "" CACHE STRING "POINTS primitives (0/1)")
+set_property(CACHE SHAPOGFX3D_POINTS PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX3D_STACK_DEPTH "" CACHE STRING "Levels of the matrix stack")
+set(SHAPOGFX3D_VCACHE_SIZE "" CACHE STRING
+    "Entries of the vertex cache (power of two)")
+
+set(SHAPOGFX3D_OPTIONS
+    SHAPOGFX3D_CORRECT_PERSPECTIVE SHAPOGFX3D_PERSPECTIVE_STEP
+    SHAPOGFX3D_TEXTURE SHAPOGFX3D_GOURAUD SHAPOGFX3D_BLEND
+    SHAPOGFX3D_LINES SHAPOGFX3D_POINTS
+    SHAPOGFX3D_STACK_DEPTH SHAPOGFX3D_VCACHE_SIZE)
+set(SHAPOGFX_FEATURE_DEFS "")
+foreach(opt IN LISTS SHAPOGFX3D_OPTIONS)
+    if(NOT "${${opt}}" STREQUAL "")
+        list(APPEND SHAPOGFX_FEATURE_DEFS ${opt}=${${opt}})
+    endif()
+endforeach()
 
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     set(SHAPOGFX_TOP_LEVEL ON)
@@ -24,9 +53,8 @@ add_library(shapogfx STATIC ${SHAPOGFX_SOURCES})
 add_library(shapoco::gfx ALIAS shapogfx)
 target_include_directories(shapogfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(shapogfx PUBLIC cxx_std_17)
-if(NOT SHAPOGFX3D_CORRECT_PERSPECTIVE STREQUAL "")
-    target_compile_definitions(shapogfx PRIVATE
-        SHAPOGFX3D_CORRECT_PERSPECTIVE=${SHAPOGFX3D_CORRECT_PERSPECTIVE})
+if(SHAPOGFX_FEATURE_DEFS)
+    target_compile_definitions(shapogfx PRIVATE ${SHAPOGFX_FEATURE_DEFS})
 endif()
 
 if(SHAPOGFX_BUILD_EXAMPLES AND NOT EMSCRIPTEN)

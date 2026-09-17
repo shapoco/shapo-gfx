@@ -87,6 +87,16 @@ CMake も PlatformIO も使わない
    "``SHAPOGFX3D_CORRECT_PERSPECTIVE``", "1", "テクスチャ座標の透視補正レベル (``gfx3d.cpp`` のコンパイルにのみ影響)"
    "``SHAPOGFX3D_PERSPECTIVE_STEP``", "16", "レベル 2 でテクスチャ座標を正確に求める間隔 (ピクセル、2 の冪。``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_RP2_INTERP``", "0", "RP2040 / RP2350 (Pico SDK) で 16 ビットテクセルの参照に SIO interpolator (``interp0``) を使う。``hardware_interp`` のリンクが必要 (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX3D_TEXTURE``", "1", "0 でテクスチャ/環境マッピングを除去 (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX3D_GOURAUD``", "1", "0 でフラットシェーディングになる (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX3D_BLEND``", "1", "0 で半透明を除去し、全て不透明に描く (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX3D_LINES`` / ``SHAPOGFX3D_POINTS``", "1", "0 で線分 / 点のプリミティブを除去 (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX3D_STACK_DEPTH``", "16", "行列スタックの段数 (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX3D_VCACHE_SIZE``", "64", "頂点キャッシュのエントリ数 (2 の冪。``gfx3d.cpp`` のみ)"
+
+``gfx3d.cpp`` のみに影響するマクロは公開型を変えないので、翻訳単位ごとに食い違っても壊れません。
+機能を無効にするとそのコードと作業メモリが減り、同じアリーナにより多くの形状を保持できます
+(:doc:`../gfx3d/concepts` の「省略できる機能」参照)。
 
 フォーマットのマクロは、ヘッダを含む全ての翻訳単位で同じ値にしてください。
 
