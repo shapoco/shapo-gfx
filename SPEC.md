@@ -45,6 +45,7 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX3D_POINTS` | 1 | `POINTS` primitives |
 | `SHAPOGFX3D_STACK_DEPTH` | 16 | Levels of the matrix stack (`pushState()`) |
 | `SHAPOGFX3D_VCACHE_SIZE` | 64 | Entries of the vertex cache (power of two) |
+| `SHAPOGFX3D_LAYER_MAX` | 8 | Layers a scene can hold (1..128) |
 
 Every macro below `SHAPOGFX3D_` is read by `src/gfx3d/*.cpp` only and changes no
 public type, so translation units cannot disagree about them. With
@@ -67,15 +68,24 @@ scene data written for the full renderer still compiles and draws.
 | `SHAPOGFX3D_LINES` | Line primitives draw nothing, and so do `putLine()` and `putWireCube()` |
 | `SHAPOGFX3D_POINTS` | Point primitives draw nothing |
 
-Bytes per triangle (including the 4 bytes of sort order and link) and per span on
-a 32-bit target, at the default perspective level:
+A primitive is stored in the record layout it needs, so turning a feature off is
+not the only way to shrink it: a flat or untextured primitive of a full build
+costs no more than one of a build without the feature. Bytes per record on a
+32-bit target at the default perspective level, including the 4 bytes of entry
+(record offset and scanline link):
 
-| Configuration | Triangle | Span | Triangles in a 128 KB arena at 480x320 |
-|---|---|---|---|
-| default | 132 | 64 | 674 |
-| `SHAPOGFX3D_TEXTURE=0` | 96 | 48 | 904 |
-| `SHAPOGFX3D_GOURAUD=0` | 100 | 44 | 899 |
-| both | 64 | 28 | 1392 |
+| Record | Bytes | Selected by |
+|---|---|---|
+| header only | 48 | — |
+| + depth plane | 60 | a layer without `LayerFlags::NO_DEPTH` |
+| + interpolated color | 96 | three differing vertex colors (`SHAPOGFX3D_GOURAUD`) |
+| + texture coordinates | 100 | a textured material (`SHAPOGFX3D_TEXTURE`) |
+| all of them | 132 | |
+
+Turning a feature off removes the corresponding layouts and their code. A span
+is 68 bytes whatever the record is (48 without `SHAPOGFX3D_TEXTURE`, 44 without
+`SHAPOGFX3D_GOURAUD`, 28 without both, 76 at perspective level 2); the pool holds
+`Config::spanCapacity` of them.
 
 Disabling a format removes its code from both renderers: the pixel cursors, the 2D
 per-format row operations, the 3D texture samplers and (for output formats) the 3D
@@ -327,9 +337,22 @@ struct Primitive {
   const Material *material;  // nullptr: use the material set by setMaterial()
 };
 
+struct Config {                  // from defaultConfig(), adjusted as needed
+  int16_t screenWidth = 0, screenHeight = 0;
+  void *arena = nullptr; size_t arenaSize = 0;
+  int spanCapacity = 0;         // 0: a quarter of the arena left, clamped to 32..512
+};
+Config defaultConfig(int16_t w, int16_t h, void *arena, size_t arenaSize);
+
+namespace LayerFlags {
+constexpr uint32_t NO_DEPTH = 1u << 0;  // ordered by insertion, no depth plane stored
+}
+
 struct Stats {
   size_t arenaSize, arenaUsed;
-  int triCapacity, triCount, triDropped;
+  size_t triBytes, triBytesTotal;  // triangle buffer in use / available
+  int triCount, triDropped;
+  int layerCount, layersDropped;
   int spanCapacity, spanPeak, spanDropped;
   int badIndices;    // triangles dropped because an index was >= vertexCount
   int nodesDropped;  // nodes skipped because the state stack was full
@@ -372,10 +395,12 @@ after `deinit()`) are no-ops.
 ```c++
 class Graphics3D {
  public:
-  void init(int16_t w, int16_t h, void *arena, size_t arenaSize);
+  void init(const Config &);
+  void init(int16_t w, int16_t h, void *arena, size_t arenaSize);  // default Config
   void deinit();
 
   void beginScene(); void endScene();
+  void beginLayer(uint32_t flags = 0); void endLayer();   // see Layers
   void loadIdentity();
   void translate(const vec3f &); void translate(float x, float y, float z);
   void rotate(float angle, const vec3f &axis); void rotate(float angle, float x, float y, float z);
@@ -435,9 +460,32 @@ stay valid until `endRender()`.
 
 ## Scene construction
 
-1. `beginScene()` resets the triangle buffer, the matrix stack and the current matrix.
+1. `beginScene()` resets the triangle buffer, the layers, the matrix stack and the
+   current matrix.
 2. Set up the camera and lights with the matrix functions, then add primitives.
 3. `endScene()`.
+
+### Layers
+
+A scene is a sequence of layers, and **every layer is drawn in front of the layers
+opened before it**; the application guarantees this by adding its geometry back to
+front. Inside a layer the usual depth resolution applies. A scene that never calls
+`beginLayer()` is a single layer and behaves exactly as one that predates them.
+
+- `beginLayer(flags)` closes the current layer and opens a new one. The layer is
+  created when its first primitive arrives, so an empty one costs nothing. When
+  `SHAPOGFX3D_LAYER_MAX` layers are already in use the call is ignored and counted
+  in `Stats::layersDropped`; the primitives stay in the current layer.
+- `endLayer()` closes the current layer. What follows goes into a new layer with
+  the default flags, still in front of everything before it.
+- `LayerFlags::NO_DEPTH`: the layer carries no depth at all. Its primitives are
+  drawn in the order they were added (the later one wins), its records hold no
+  depth plane (12 bytes less each) and it is not sorted. Use it for geometry that
+  is already ordered back to front; `setDepthBias()` has no effect in it.
+
+Layer order is resolved where spans meet (see `render()`), so it also settles cases
+the depth comparison cannot, such as a polygon that spans a large depth range
+crossing another one.
 
 `putPrimitive()` decomposes the primitive into triangles and performs per-vertex
 lighting (Gouraud shading), transformation and projection immediately. The results
@@ -449,8 +497,8 @@ a direct-mapped vertex cache (64 entries) invalidated at the start of each primi
 
 Triangles are discarded at this stage when they cross or lie in front of the near
 plane (no clipping), when back-face culling applies, when they cover no scanline, when
-the triangle buffer is full (`Stats::triDropped`), or when one of their indices is
-outside the vertex buffer (`Stats::badIndices`). The index check makes it safe to draw
+the triangle buffer has no room left for their record (`Stats::triDropped`), or when
+one of their indices is outside the vertex buffer (`Stats::badIndices`). The index check makes it safe to draw
 data of unverified origin.
 
 ### Shapes
@@ -479,8 +527,8 @@ texturing or culling: the vertex color is `diffuse` (times `Vertex::color` with
 `VERTEX_COLOR`, pre-multiplied by the opacity for `ADD`). Lines are clipped against the
 near plane in view space (a segment with one end behind the plane is shortened; the
 color is interpolated at the cut); points behind it are dropped. Both are stored in the
-triangle buffer (one entry each, counted in `Stats::triCount`) and turned into spans by
-`render()`:
+triangle buffer (one record each, counted in `Stats::triCount`; never textured, so
+they use one of the smaller layouts) and turned into spans by `render()`:
 
 - A line covers, on each pixel row it crosses, either the single pixel at the row center
   (steep lines) or the run of columns whose centers map into that row (shallow lines), so
@@ -496,7 +544,8 @@ other primitive. Line width is fixed at one pixel.
 ### Depth bias
 
 `setDepthBias(bias)` adds `bias` to the NDC depth (range -1..1) of every primitive emitted
-afterwards; negative values bring them nearer. Its purpose is drawing wireframes or
+afterwards; negative values bring them nearer. A layer with `LayerFlags::NO_DEPTH`
+stores no depth, so the bias does nothing there. Its purpose is drawing wireframes or
 markers on top of coplanar polygons without z-fighting (e.g. `-0.002`). It applies to
 triangles as well.
 
@@ -561,18 +610,27 @@ and `ADD` multiply their opacity by `a4 / 15`. Texel alpha 0 skips the pixel.
 
 `init()` aligns the arena to 8 bytes and carves it as follows:
 
-1. **Fixed part**: line buckets (2 x screen height x `uint16_t`), matrix stack
-   (16 entries), vertex cache (64 entries).
-2. **Span pool**: a quarter of the remaining space, clamped to 32..512 spans
-   (64 bytes per span on 32-bit targets, 72 at perspective level 2).
-3. **Triangle buffer**: everything that remains, including 4 bytes per triangle for
-   the sort order and link arrays (128 bytes per triangle on 32-bit targets, 116 at
-   perspective level 0).
+1. **Fixed part**: line buckets (2 x screen height x `uint16_t`), layer table
+   (`SHAPOGFX3D_LAYER_MAX` entries of 8 bytes), matrix stack (16 entries), vertex
+   cache (64 entries).
+2. **Span pool**: `Config::spanCapacity` spans, or a quarter of the remaining space
+   clamped to 32..512 spans when it is 0. Spans beyond the capacity are dropped,
+   which leaves holes in the picture, so a tuned value is one that keeps
+   `Stats::spanPeak` below it with margin for the worst frame; whatever it saves
+   goes to the triangle buffer.
+3. **Triangle buffer**: everything that remains.
+
+The triangle buffer holds records of different sizes (see the table above), so it
+is a byte budget rather than a triangle count: the records are packed downwards
+from the end of the region while the 4-byte entries (record offset and scanline
+link) grow upwards from its start, and the buffer is full when the two meet.
+`Stats::triBytes` and `Stats::triBytesTotal` report both ends of it. Records are
+addressed by a 4-byte-unit offset, which caps the region at 256 KB; a larger arena
+leaves the excess unused.
 
 `SHAPOGFX3D_STACK_DEPTH` and `SHAPOGFX3D_VCACHE_SIZE` size the fixed part (about
-1.1 KB and 2.8 KB at their defaults); the optional features size the other two
-(see the table above). A smaller vertex cache costs re-transformed vertices, not
-correctness.
+1.1 KB and 2.8 KB at their defaults). A smaller vertex cache costs re-transformed
+vertices, not correctness.
 
 If the arena is too small for the fixed part, `init()` leaves the renderer
 uninitialized. Overflowing buffers drop the excess for the current frame.
@@ -581,10 +639,12 @@ uninitialized. Overflowing buffers drop the excess for the current frame.
 
 ### `beginRender()`
 
-Sorts the triangle indices (not the triangles) farthest first by the sum of their
-view-space z (as an integer key with the ordering of the float). Depth order between opaque spans is resolved by depth comparison in
-`render()`, so this sort primarily determines the compositing order of translucent
-triangles.
+Sorts the entries of each layer (never the records) farthest first by the sum of the
+view-space z of the primitive's vertices, as an integer key with the ordering of the
+float; equal keys keep the order the primitives were added in. Layers with
+`LayerFlags::NO_DEPTH` are left in the order they were added. Depth order between
+opaque spans of one layer is resolved by depth comparison in `render()`, so this sort
+primarily determines the compositing order of translucent primitives.
 
 ### `render()`
 
@@ -593,24 +653,32 @@ RGB565BE and RGB444 are supported (others return without drawing). The region is
 clipped to the screen and to the destination surface.
 
 For every scanline of the region, a list of the triangles that start intersecting on
-that line is built (in depth order). For each scanline this list is merged into the
-active list, triangles that have been passed are removed, and then:
+that line is built (in depth order, layer by layer). For each scanline this list is
+merged into the active list, triangles that have been passed are removed, and then:
 
 1. The span lists are cleared.
 2. For each active triangle, farthest first:
-    1. The two edges crossing the scanline give the span's pixel range; its
+    1. The record layout is recovered from the header (layer, flat and textured
+       flags) and selects the span builder, so a primitive costs only the
+       attributes it has.
+    2. The two edges crossing the scanline give the span's pixel range; its
        attributes are evaluated at the center of the leftmost pixel from the
-       triangle's attribute planes (each attribute is stored as `c + dx * x + dy *
-       y` in screen space, set up once per triangle), with the plane's `dx` as the
+       primitive's attribute planes (each attribute is stored as `c + dx * x + dy *
+       y` in screen space, set up once per primitive), with the plane's `dx` as the
        per-pixel increment (depth as 8.24 fixed point; color and texture coordinates
-       as 16.16 fixed point).
-    2. The span is inserted. Opaque spans are kept in a list sorted by x that never
-       overlaps; translucent spans in a separate list in insertion order. On overlap,
-       the NDC depth is compared at the center of the overlapping interval. If the new
-       span is nearer and opaque, the overlapping part of the farther span is removed
-       whether it is opaque or translucent; if a translucent span is nearer, both are
-       kept. This does not rely on the per-triangle sort order alone, so large and
-       small polygons are ordered correctly.
+       as 16.16 fixed point). A flat primitive stores one color instead of three
+       planes, so its span takes it as a constant.
+    3. The span is inserted. Opaque spans are kept in a list sorted by x that never
+       overlaps; translucent spans in a separate list in insertion order. Which of
+       two overlapping spans is nearer is decided in this order: spans reach the
+       list in layer order, so one from another layer is the one added later and
+       therefore in front; inside a layer without depth the later span wins for the
+       same reason; otherwise the NDC depths are compared at the center of the
+       overlapping interval. If the new span is nearer and opaque, the overlapping
+       part of the farther span is removed whether it is opaque or translucent; if a
+       translucent span is nearer, both are kept. Within a layer this does not rely
+       on the per-primitive sort order alone, so large and small polygons are ordered
+       correctly.
 3. The opaque spans are rasterized in x order. The gaps are filled with the clear
    color when clearing is enabled and left untouched otherwise. Then the translucent
    spans are composited in list order according to their blend mode.
@@ -631,7 +699,7 @@ coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
   space, are planes of the triangle; at the two end points of each span they are
   divided to obtain exact `(u, v)`, and the span interior is interpolated affinely in
   fixed point. The three divides (both `1/w` and `1/width`) are folded into one
-  `float` divide per span; costs 12 bytes per triangle. Along a
+  `float` divide per span; costs 12 bytes per textured record. Along a
   scanline, a horizontal surface seen by a camera without roll has constant depth, so
   this level renders such surfaces without distortion; surfaces whose depth varies
   along the scanline keep affine distortion inside each span, while span end points
@@ -639,7 +707,7 @@ coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
 - **2**: full correction. `(u/w, v/w, 1/w)` are interpolated across the span in `float`
   and divided every `SHAPOGFX3D_PERSPECTIVE_STEP` pixels (default 16); `(u, v)` are
   interpolated linearly in fixed point in between. Costs one divide per 16 textured
-  pixels, 12 bytes per triangle and 8 bytes per span.
+  pixels, 12 bytes per textured record and 8 bytes per span.
 
 With `SHAPOGFX3D_RP2_INTERP` (RP2040/RP2350), RGB565BE and ARGB4444 texels of
 textures with a power-of-two stride are addressed by the SIO interpolator: lane 0

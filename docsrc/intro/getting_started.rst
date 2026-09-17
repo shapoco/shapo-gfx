@@ -93,6 +93,7 @@ CMake も PlatformIO も使わない
    "``SHAPOGFX3D_LINES`` / ``SHAPOGFX3D_POINTS``", "1", "0 で線分 / 点のプリミティブを除去 (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_STACK_DEPTH``", "16", "行列スタックの段数 (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_VCACHE_SIZE``", "64", "頂点キャッシュのエントリ数 (2 の冪。``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX3D_LAYER_MAX``", "8", "1 シーンに持てるレイヤ数 (1〜128。``gfx3d.cpp`` のみ)"
 
 ``gfx3d.cpp`` のみに影響するマクロは公開型を変えないので、翻訳単位ごとに食い違っても壊れません。
 機能を無効にするとそのコードと作業メモリが減り、同じアリーナにより多くの形状を保持できます

@@ -104,22 +104,45 @@ Primitive
      const Material *material;  // nullptr なら setMaterial() で設定したマテリアル
    };
 
+Config / LayerFlags
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   struct Config {
+     int16_t screenWidth = 0, screenHeight = 0;
+     void *arena = nullptr;   // 作業メモリ
+     size_t arenaSize = 0;
+     int spanCapacity = 0;    // 1 ラインに持てる線分数。0 なら既定値
+   };
+   Config defaultConfig(int16_t w, int16_t h, void *arena, size_t arenaSize);
+
+   namespace LayerFlags {
+   constexpr uint32_t NO_DEPTH = 1u << 0;   // 深度を持たず、投入順で前後が決まる
+   }
+
+既定値は ``defaultConfig()`` で受け取り、変えたいメンバだけ書き換えて ``init()`` に渡します。
+メンバは後方互換な既定値付きで追加されることがあります。
+
 Stats
 --------------------------------------------------------------------------------
 
 .. code-block:: cpp
 
    struct Stats {
-     size_t arenaSize;   // init() に渡したアリーナのサイズ
-     size_t arenaUsed;   // 直近フレームで実際に使った量 (固定分 + 三角形 + 線分ピーク)
-     int triCapacity;    // 三角形バッファの容量
-     int triCount;       // 現在のシーンの三角形数 (カリング後)
-     int triDropped;     // バッファあふれで破棄した数 (beginScene() でリセット)
-     int spanCapacity;   // 線分プールの容量
-     int spanPeak;       // 1 ラインで同時に使った線分数の最大 (beginRender() でリセット)
-     int spanDropped;    // プールあふれで破棄した数 (beginRender() でリセット)
-     int badIndices;     // 添字範囲外で破棄した三角形数 (beginScene() でリセット)
-     int nodesDropped;   // スタック満杯で飛ばしたノード数 (beginScene() でリセット)
+     size_t arenaSize;      // init() に渡したアリーナのサイズ
+     size_t arenaUsed;      // 直近フレームで実際に使った量 (固定分 + 三角形 + 線分ピーク)
+     size_t triBytes;       // 三角形バッファの使用量 (レコード + エントリ 4 バイト/個)
+     size_t triBytesTotal;  // 三角形バッファに使える量
+     int triCount;          // 現在のシーンの三角形数 (カリング後)
+     int triDropped;        // バッファあふれで破棄した数 (beginScene() でリセット)
+     int layerCount;        // 現在のシーンのレイヤ数 (beginScene() でリセット)
+     int layersDropped;     // 空きがなく無視した beginLayer() の数 (beginScene() でリセット)
+     int spanCapacity;      // 線分プールの容量
+     int spanPeak;          // 1 ラインで同時に使った線分数の最大 (beginRender() でリセット)
+     int spanDropped;       // プールあふれで破棄した数 (beginRender() でリセット)
+     int badIndices;        // 添字範囲外で破棄した三角形数 (beginScene() でリセット)
+     int nodesDropped;      // スタック満杯で飛ばしたノード数 (beginScene() でリセット)
    };
 
 初期化
@@ -128,7 +151,8 @@ Stats
 .. csv-table::
    :header: "メンバー", "説明"
 
-   "``void init(int16_t w, int16_t h, void *arena, size_t arenaSize)``", "画面サイズと作業メモリを設定する。アリーナが小さすぎる場合は未初期化のまま"
+   "``void init(const Config &)``", "初期化パラメータを与える。アリーナが小さすぎる場合は未初期化のまま"
+   "``void init(int16_t w, int16_t h, void *arena, size_t arenaSize)``", "``init(defaultConfig(w, h, arena, arenaSize))`` と同じ"
    "``void deinit()``", "アリーナを手放す。以降の描画呼び出しは何もしない"
    "``bool isInitialized() const``", "初期化済みか"
    "``int16_t screenWidth() const`` / ``screenHeight() const``", "画面サイズ"
@@ -139,8 +163,10 @@ Stats
 .. csv-table::
    :header: "メンバー", "説明"
 
-   "``void beginScene()``", "三角形バッファ、スタック、現在の行列をリセットして構築を始める"
+   "``void beginScene()``", "三角形バッファ、レイヤ、スタック、現在の行列をリセットして構築を始める"
    "``void endScene()``", "構築を終える"
+   "``void beginLayer(uint32_t flags = 0)``", "新しいレイヤを開く。以降のプリミティブはそれまでの全てより手前に描かれる。空きがなければ無視される"
+   "``void endLayer()``", "現在のレイヤを閉じる。以降のプリミティブは既定フラグの新しいレイヤに入る"
    "``void loadIdentity()``", "現在の行列を単位行列にする"
    "``void translate(const vec3f &)`` / ``translate(x, y, z)``", "平行移動を右から乗じる"
    "``void rotate(float angle, const vec3f &axis)`` / ``rotate(angle, x, y, z)``", "回転 (ラジアン、軸は正規化不要)"

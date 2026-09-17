@@ -128,8 +128,8 @@ int main(int argc, char **argv) {
   g3::Stats st = g3d.getStats();
   std::printf("wrote %s (%dx%d)\n", path, SCREEN_W, SCREEN_H);
   std::printf("arena: %zu / %zu bytes used\n", st.arenaUsed, st.arenaSize);
-  std::printf("triangles: %d / %d (dropped %d)\n", st.triCount, st.triCapacity,
-              st.triDropped);
+  std::printf("triangles: %d in %zu / %zu bytes (dropped %d)\n", st.triCount,
+              st.triBytes, st.triBytesTotal, st.triDropped);
   std::printf("spans: peak %d / %d (dropped %d)\n", st.spanPeak,
               st.spanCapacity, st.spanDropped);
   return 0;

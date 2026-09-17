@@ -66,4 +66,4 @@ UV は正距円筒図法で、面が経度 0 の継ぎ目をまたぐ場合は u
    "putCylinder / putCone(segments, heightDivs, caps)", "2 x segments x heightDivs + 蓋 2 x segments"
    "putTorus(major, minor)", "2 x major x minor"
 
-アリーナの三角形容量 (``Stats::triCapacity``) を超えないように分割数を選んでください。
+三角形バッファ (``Stats::triBytes`` / ``triBytesTotal``) を超えないように分割数を選んでください。

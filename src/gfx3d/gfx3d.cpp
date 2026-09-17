@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <new>
+#include <type_traits>
 
 // Perspective correction of texture coordinates:
 //   0: none (affine interpolation everywhere)
@@ -58,14 +60,17 @@
 #define SHAPOGFX3D_POINTS 1
 #endif
 
-// Fixed part of the arena: the matrix stack of pushState() and the
-// direct-mapped cache of transformed vertices (a power of two; a smaller
-// cache costs re-transformed vertices, never correctness).
+// Fixed part of the arena: the matrix stack of pushState(), the direct-mapped
+// cache of transformed vertices (a power of two; a smaller cache costs
+// re-transformed vertices, never correctness) and the layer table.
 #ifndef SHAPOGFX3D_STACK_DEPTH
 #define SHAPOGFX3D_STACK_DEPTH 16
 #endif
 #ifndef SHAPOGFX3D_VCACHE_SIZE
 #define SHAPOGFX3D_VCACHE_SIZE 64
+#endif
+#ifndef SHAPOGFX3D_LAYER_MAX
+#define SHAPOGFX3D_LAYER_MAX 8
 #endif
 
 // Perspective correction only exists where there are texture coordinates
@@ -157,10 +162,28 @@ constexpr uint8_t OPAQUE = 1u << 2;  // opaque (BlendMode::NONE)
 constexpr uint8_t LINE = 1u << 3;  // line segment [0] -> [1] (see makeLineSpan)
 constexpr uint8_t POINT =
     1u << 4;  // point: sx/sy[0] = top-left pixel, slope[0] = size
+constexpr uint8_t LEFT_LONG =
+    1u << 5;  // triangles: the long edge (top->bottom) is on the left
 }  // namespace TriFlags
 
+// Layer of a primitive, as stored in its record and in its spans: the index of
+// the layer, or'ed with NO_DEPTH when the layer carries no depth plane.
+// Spans are built in layer order, so a span whose layer byte differs from
+// another one's belongs to a later layer and is therefore the nearer one.
+namespace LayerId {
+constexpr uint8_t INDEX = 0x7F;
+constexpr uint8_t NO_DEPTH = 0x80;
+}  // namespace LayerId
+
 // A triangle, line or point after setup.
-struct Triangle {
+//
+// Only the attributes a primitive actually has are stored, so a record is 48
+// to 128 bytes instead of always 128 (32-bit target, perspective level 1).
+// Every record starts with the same header, which is all the sort, the
+// scanline buckets and the rasterizers need; the optional parts follow in a
+// fixed order and are reached through the record type, which makeSpan()
+// recovers from the header.
+struct TriHead {
   // Triangles: the vertices sorted by sy; [0] = top, [1] = middle (the bottom
   // vertex is only needed through the edge slopes). Lines: [0] = a, [1] = b.
   // Points: [0] = top-left pixel.
@@ -169,26 +192,74 @@ struct Triangle {
   // (0 for horizontal edges). Lines: [0] = 1/dx, [1] = 1/dy (0 when the
   // difference is 0). Points: [0] = size in pixels.
   float slope[3];
-  Plane z;  // NDC depth
-#if SHAPOGFX3D_GOURAUD
-  Plane r, g, b;  // vertex color 0..255
-#else
-  uint8_t r, g, b;  // flat shading: one color for the whole primitive (0..255)
-#endif
-#if SHAPOGFX3D_TEXTURE
-#if SHAPOGFX3D_PERSPECTIVE >= 1
-  Plane uw, vw, iw;  // (u/w, v/w, 1/w)
-#else
-  Plane u, v;  // texels
-#endif
-#endif
   const Material *mat;
   int32_t sortKey;     // ascending = farther first
   int16_t yMin, yMax;  // range of scanlines crossed (inclusive)
   uint8_t flags;       // TriFlags
   uint8_t alpha64;     // opacity (0..64)
   uint8_t rasterFn;    // index of the rasterizer (tex * 6 + blend * 2 + flat)
-  bool leftLong;       // triangles: the long edge (top->bottom) is on the left
+  uint8_t layer;       // LayerId
+};
+
+// Optional parts of a record, in this order. The two "absent" types differ so
+// that a record can leave out both.
+struct PartNoZ {};
+struct PartNoTex {};
+struct PartZ {
+  Plane z;  // NDC depth
+};
+struct PartSmooth {
+  Plane r, g, b;  // vertex color 0..255
+};
+struct PartFlat {
+  uint8_t r, g, b;  // one color for the whole primitive (0..255)
+};
+struct PartTex {
+#if SHAPOGFX3D_PERSPECTIVE >= 1
+  Plane uw, vw, iw;  // (u/w, v/w, 1/w)
+#else
+  Plane u, v;  // texels
+#endif
+};
+
+// D: the layer has a depth plane, G: interpolated (Gouraud) color, T: textured
+template <bool D, bool G, bool T>
+struct TriRec : TriHead,
+                std::conditional_t<D, PartZ, PartNoZ>,
+                std::conditional_t<G, PartSmooth, PartFlat>,
+                std::conditional_t<T, PartTex, PartNoTex> {
+  static constexpr bool HAS_DEPTH = D;
+  static constexpr bool SMOOTH = G;
+  static constexpr bool TEXTURED = T;
+};
+
+// Records are addressed by a 4-byte-unit offset from the start of the region,
+// which is what limits the triangle buffer to 256 KB.
+static constexpr size_t REC_ALIGN = alignof(TriHead) > 4 ? alignof(TriHead) : 4;
+static constexpr size_t REC_UNIT = 4;
+static constexpr size_t REC_REGION_MAX = 0xFFFFu * REC_UNIT;
+
+// Size of each record layout, indexed by recIndex()
+static constexpr size_t TRI_REC_SIZE[8] = {
+    sizeof(TriRec<false, false, false>), sizeof(TriRec<false, false, true>),
+    sizeof(TriRec<false, true, false>),  sizeof(TriRec<false, true, true>),
+    sizeof(TriRec<true, false, false>),  sizeof(TriRec<true, false, true>),
+    sizeof(TriRec<true, true, false>),   sizeof(TriRec<true, true, true>),
+};
+static inline int recIndex(bool depth, bool smooth, bool tex) {
+  return (depth ? 4 : 0) | (smooth ? 2 : 0) | (tex ? 1 : 0);
+}
+
+// One entry per primitive: where its record is and the scanline list link.
+// beginRender() sorts the entries of each layer by depth.
+struct TriEntry {
+  uint16_t rec;   // record offset from the start of the region, in 4 bytes
+  uint16_t link;  // next entry of the scanline list (NONE: end)
+};
+
+struct LayerDesc {
+  int32_t first;  // index of the first entry of the layer
+  uint8_t id;     // LayerId byte stored in the records and spans
 };
 
 // A span on a scanline: attribute values at the leftmost pixel and per-pixel
@@ -202,6 +273,7 @@ struct Span {
 #else
   uint8_t r, g, b;  // constant over the span (0..255)
 #endif
+  uint8_t lay;  // LayerId of the primitive (see fragNearer())
 #if SHAPOGFX3D_TEXTURE
 #if SHAPOGFX3D_PERSPECTIVE == 2
   float uw, vw, iw;  // (u/w, v/w, 1/w)
@@ -211,7 +283,7 @@ struct Span {
   int32_t du, dv;
 #endif
 #endif
-  const Triangle *tri;
+  const TriHead *tri;
   Span *next;
 };
 
@@ -250,12 +322,15 @@ struct PrimSetup {
 };
 
 static constexpr int STACK_DEPTH = SHAPOGFX3D_STACK_DEPTH;
+static constexpr int LAYER_MAX = SHAPOGFX3D_LAYER_MAX;
 static constexpr int SPAN_CAPACITY_MIN = 32;
 static constexpr int SPAN_CAPACITY_MAX = 512;
 static constexpr int VCACHE_SIZE = SHAPOGFX3D_VCACHE_SIZE;
 static constexpr uint16_t NONE = 0xFFFF;
 
 static_assert(STACK_DEPTH >= 1, "SHAPOGFX3D_STACK_DEPTH must be at least 1");
+static_assert(LAYER_MAX >= 1 && LAYER_MAX <= (int)LayerId::INDEX + 1,
+              "SHAPOGFX3D_LAYER_MAX must be between 1 and 128");
 static_assert(VCACHE_SIZE >= 1 && (VCACHE_SIZE & (VCACHE_SIZE - 1)) == 0,
               "SHAPOGFX3D_VCACHE_SIZE must be a power of two");
 
@@ -360,54 +435,66 @@ static inline const Texture *materialTexture(const Material *mat) {
 // ---------------------------------------------------------------------------
 // Initialization
 
-void Graphics3D::init(int16_t w, int16_t h, void *arena, size_t arenaSize) {
+void Graphics3D::init(const Config &cfg) {
   *this = Graphics3D();
+  const int16_t w = cfg.screenWidth, h = cfg.screenHeight;
   screenW_ = w;
   screenH_ = h;
-  arenaSize_ = arenaSize;
+  arenaSize_ = cfg.arenaSize;
+  if (w <= 0 || h <= 0 || !cfg.arena) {
+    *this = Graphics3D();
+    return;
+  }
 
-  uintptr_t p = (uintptr_t)arena;
-  const uintptr_t end = p + arenaSize;
+  uintptr_t p = (uintptr_t)cfg.arena;
+  const uintptr_t end = p + cfg.arenaSize;
   p = alignUp8(p);
   auto avail = [&]() -> size_t { return (end > p) ? (size_t)(end - p) : 0; };
 
-  // Fixed allocations: line buckets (screenH x 2), matrix stack, vertex cache
+  // Fixed allocations: line buckets (screenH x 2), layer table, matrix stack,
+  // vertex cache
   const size_t bucketBytes = alignUp8((size_t)h * 2 * sizeof(uint16_t));
+  const size_t layerBytes = alignUp8((size_t)LAYER_MAX * sizeof(LayerDesc));
   const size_t stackBytes = alignUp8((size_t)STACK_DEPTH * sizeof(StackEntry));
   const size_t vcacheBytes =
       alignUp8((size_t)VCACHE_SIZE * sizeof(CachedVertex));
-  if (avail() < bucketBytes + stackBytes + vcacheBytes) {
+  if (avail() < bucketBytes + layerBytes + stackBytes + vcacheBytes) {
     *this = Graphics3D();
     return;
   }
   bucketHead_ = (uint16_t *)p;
   bucketTail_ = bucketHead_ + h;
   p += bucketBytes;
+  layers_ = (LayerDesc *)p;
+  p += layerBytes;
   stack_ = (StackEntry *)p;
   p += stackBytes;
   vcache_ = (CachedVertex *)p;
   p += vcacheBytes;
-  arenaFixed_ = (size_t)(p - (uintptr_t)arena);
+  arenaFixed_ = (size_t)(p - (uintptr_t)cfg.arena);
 
-  // Span pool: a quarter of the remaining space
-  int spanCap = (int)((avail() / 4) / sizeof(Span));
-  spanCap = std::max(SPAN_CAPACITY_MIN, std::min(SPAN_CAPACITY_MAX, spanCap));
+  // Span pool: as requested, or a quarter of the remaining space
+  int spanCap = cfg.spanCapacity;
+  if (spanCap <= 0) {
+    spanCap = (int)((avail() / 4) / sizeof(Span));
+    spanCap = std::max(SPAN_CAPACITY_MIN, std::min(SPAN_CAPACITY_MAX, spanCap));
+  }
+  spanCap = std::min(spanCap, (int)(avail() / sizeof(Span)));
   spanPool_ = (Span *)p;
   spanCapacity_ = spanCap;
   p += (size_t)spanCap * sizeof(Span);
   p = alignUp8(p);
 
-  // Triangle buffer + order/link (4 bytes per triangle): everything that
-  // remains
-  int triCap = (int)(avail() / (sizeof(Triangle) + 2 * sizeof(uint16_t)));
-  triCap = std::min(triCap, (int)NONE - 1);
-  order_ = (uint16_t *)p;
-  link_ = order_ + triCap;
-  p += (size_t)triCap * 2 * sizeof(uint16_t);
-  p = alignUp8(p);
-  triCapacity_ = std::min(triCap, (int)(avail() / sizeof(Triangle)));
-  tris_ = (Triangle *)p;
-  if (triCapacity_ <= 0 || spanCap <= 0) {
+  // Triangle buffer: everything that remains, entries growing up from its
+  // start and records down from its end
+  size_t region = avail();
+  if (region > REC_REGION_MAX) region = REC_REGION_MAX;
+  region &= ~(size_t)(REC_ALIGN - 1);
+  recBase_ = (uint8_t *)p;
+  entries_ = (TriEntry *)p;
+  recEnd_ = recBase_ + region;
+  recTop_ = recEnd_;
+  if (spanCap <= 0 || region < sizeof(TriEntry) + TRI_REC_SIZE[7]) {
     *this = Graphics3D();
     return;
   }
@@ -424,10 +511,59 @@ void Graphics3D::beginScene() {
   badIndices_ = 0;
   nodesDropped_ = 0;
   stackTop_ = 0;
+  recTop_ = recEnd_;
+  layerCount_ = 0;
+  layersDropped_ = 0;
+  layerFlags_ = 0;
+  layerOpen_ = false;
   cur_ = mat4f::identity();
 }
 
-void Graphics3D::endScene() {}
+void Graphics3D::endScene() { layerOpen_ = false; }
+
+void Graphics3D::beginLayer(uint32_t flags) {
+  if (layerCount_ >= LAYER_MAX) {
+    layersDropped_++;  // no free layer: what follows stays in the current one
+    return;
+  }
+  layerOpen_ = false;  // opened by the next primitive
+  layerFlags_ = flags;
+}
+
+void Graphics3D::endLayer() {
+  layerOpen_ = false;
+  layerFlags_ = 0;
+}
+
+// Layer byte of the primitive being emitted; opens a layer when none is
+uint8_t Graphics3D::layerByte() {
+  if (!layerOpen_) {
+    if (layerCount_ < LAYER_MAX) {
+      LayerDesc &l = layers_[layerCount_];
+      l.first = triCount_;
+      l.id = (uint8_t)(layerCount_ |
+                       ((layerFlags_ & LayerFlags::NO_DEPTH) ? LayerId::NO_DEPTH
+                                                             : 0));
+      layerCount_++;
+    }
+    layerOpen_ = true;
+  }
+  return layers_[layerCount_ - 1].id;
+}
+
+// Reserve a record and register its entry. Records are packed downwards from
+// the end of the region and the entries upwards from its start, so the buffer
+// is full when the two meet.
+uint8_t *Graphics3D::allocRecord(size_t size) {
+  if (!recBase_ || triCount_ >= (int)NONE) return nullptr;
+  uint8_t *rec = recTop_ - size;
+  if (rec < recBase_ + (size_t)(triCount_ + 1) * sizeof(TriEntry)) {
+    return nullptr;
+  }
+  recTop_ = rec;
+  entries_[triCount_].rec = (uint16_t)((size_t)(rec - recBase_) / REC_UNIT);
+  return rec;
+}
 
 void Graphics3D::loadIdentity() { cur_ = mat4f::identity(); }
 
@@ -658,6 +794,44 @@ static inline uint8_t materialAlpha64(const Material *mat) {
 #endif
 }
 
+// Construct the record layout selected by `depth`, `smooth` and `tex` in the
+// reserved memory, copy the header into it and let `fill` write the optional
+// attributes. `fill` is a generic lambda: the record type reaches it as the
+// type of its argument, so it can pick the attributes this layout has with
+// `if constexpr`. Layouts the configuration never selects are not compiled.
+template <bool D, bool G, bool T, typename F>
+static inline void makeRec(uint8_t *rec, const TriHead &h, const F &fill) {
+  TriRec<D, G, T> &t = *::new (rec) TriRec<D, G, T>;
+  static_cast<TriHead &>(t) = h;
+  fill(t);
+}
+template <bool D, bool G, typename F>
+static inline void makeRecT(uint8_t *rec, const TriHead &h, bool tex,
+                            const F &fill) {
+#if SHAPOGFX3D_TEXTURE
+  if (tex) return makeRec<D, G, true>(rec, h, fill);
+#else
+  (void)tex;
+#endif
+  makeRec<D, G, false>(rec, h, fill);
+}
+template <bool D, typename F>
+static inline void makeRecG(uint8_t *rec, const TriHead &h, bool smooth,
+                            bool tex, const F &fill) {
+#if SHAPOGFX3D_GOURAUD
+  if (smooth) return makeRecT<D, true>(rec, h, tex, fill);
+#else
+  (void)smooth;
+#endif
+  makeRecT<D, false>(rec, h, tex, fill);
+}
+template <typename F>
+static inline void makeRecord(uint8_t *rec, const TriHead &h, bool depth,
+                              bool smooth, bool tex, const F &fill) {
+  if (depth) return makeRecG<true>(rec, h, smooth, tex, fill);
+  makeRecG<false>(rec, h, smooth, tex, fill);
+}
+
 void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
                               const CachedVertex &c, const Material *mat,
                               const Texture *tex) {
@@ -682,12 +856,6 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   yMax = std::min(yMax, (int)screenH_ - 1);
   if (yMin > yMax) return;
 
-  if (triCount_ >= triCapacity_) {  // buffer overflow: drop for this frame
-    triDropped_++;
-    return;
-  }
-  Triangle &t = tris_[triCount_];
-
   // Attribute planes (Cramer's rule on the sorted vertices)
   const float x0 = v0.sx, y0 = v0.sy;
   const float x10 = v1.sx - x0, y10 = v1.sy - y0;
@@ -700,38 +868,33 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
     return {a0 - dx * x0 - dy * y0, dx, dy};
   };
 
-  t.sx[0] = x0;
-  t.sy[0] = y0;
-  t.sx[1] = v1.sx;
-  t.sy[1] = v1.sy;
+  TriHead h;
+  h.sx[0] = x0;
+  h.sy[0] = y0;
+  h.sx[1] = v1.sx;
+  h.sy[1] = v1.sy;
   const float y21 = v2.sy - v1.sy;
-  t.slope[0] = (y10 != 0.0f) ? x10 / y10 : 0.0f;
-  t.slope[1] = (y21 != 0.0f) ? (v2.sx - v1.sx) / y21 : 0.0f;
-  t.slope[2] = x20 / y20;  // y20 > 0, otherwise area2 == 0
-  // The long edge is on the left when the middle vertex lies to its right
-  t.leftLong = (x0 + t.slope[2] * y10) < v1.sx;
-
-  t.z = plane(v0.zNdc + depthBias_, v1.zNdc + depthBias_, v2.zNdc + depthBias_);
+  h.slope[0] = (y10 != 0.0f) ? x10 / y10 : 0.0f;
+  h.slope[1] = (y21 != 0.0f) ? (v2.sx - v1.sx) / y21 : 0.0f;
+  h.slope[2] = x20 / y20;  // y20 > 0, otherwise area2 == 0
 
   uint8_t flags = 0;
+  // The long edge is on the left when the middle vertex lies to its right
+  if ((x0 + h.slope[2] * y10) < v1.sx) flags |= TriFlags::LEFT_LONG;
+
+    // Interpolated color only where the three vertex colors differ; the record
+    // of a flat triangle holds one color instead of three planes
 #if SHAPOGFX3D_GOURAUD
-  t.r = plane(v0.r, v1.r, v2.r);
-  t.g = plane(v0.g, v1.g, v2.g);
-  t.b = plane(v0.b, v1.b, v2.b);
-  if (v0.r == v1.r && v0.r == v2.r && v0.g == v1.g && v0.g == v2.g &&
-      v0.b == v1.b && v0.b == v2.b) {
-    flags |= TriFlags::FLAT;
-  }
+  const bool smooth = !(v0.r == v1.r && v0.r == v2.r && v0.g == v1.g &&
+                        v0.g == v2.g && v0.b == v1.b && v0.b == v2.b);
 #else
-  // Flat shading: the first vertex as passed in (before the y sort) provides
-  // the color of the whole triangle
-  t.r = (uint8_t)(int)(a.sv.r + 0.5f);
-  t.g = (uint8_t)(int)(a.sv.g + 0.5f);
-  t.b = (uint8_t)(int)(a.sv.b + 0.5f);
-  flags |= TriFlags::FLAT;
+  const bool smooth = false;  // flat shading: the first vertex as passed in
 #endif
+  if (!smooth) flags |= TriFlags::FLAT;
 
   const TexFmt tf = texFmtOf(tex);
+  const bool textured = (tf != TexFmt::NONE);
+  if (textured) flags |= TriFlags::TEX;
 #if SHAPOGFX3D_BLEND
   // A texture with alpha makes the triangle translucent even in BlendMode::NONE
   const bool texAlpha = texFmtHasAlpha(tf);
@@ -744,46 +907,69 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   flags |= TriFlags::OPAQUE;  // translucency compiled out
 #endif
 
-#if SHAPOGFX3D_TEXTURE
-  if (tex) {
-    flags |= TriFlags::TEX;
-    float u[3] = {v0.u, v1.u, v2.u}, v[3] = {v0.v, v1.v, v2.v};
-    // Wrap texture coordinates per triangle to avoid fixed-point overflow
-    // (subtract the texture period below the minimum from all three
-    // vertices; relative values are unchanged). Sizes are powers of two.
-    const int wPot = 1 << gfx2d::log2Floor(tex->width);
-    const int hPot = 1 << gfx2d::log2Floor(tex->height);
-    const float uMin = clampf(std::min({u[0], u[1], u[2]}), -1e6f, 1e6f);
-    const float vMin = clampf(std::min({v[0], v[1], v[2]}), -1e6f, 1e6f);
-    const float uOff = (float)((int)std::floor(uMin) & ~(wPot - 1));
-    const float vOff = (float)((int)std::floor(vMin) & ~(hPot - 1));
-    for (int i = 0; i < 3; i++) {
-      u[i] -= uOff;
-      v[i] -= vOff;
-    }
-#if SHAPOGFX3D_PERSPECTIVE >= 1
-    for (int i = 0; i < 3; i++) {  // (u/w, v/w) are linear in screen space
-      u[i] *= cv[i]->invW;
-      v[i] *= cv[i]->invW;
-    }
-    t.uw = plane(u[0], u[1], u[2]);
-    t.vw = plane(v[0], v[1], v[2]);
-    t.iw = plane(cv[0]->invW, cv[1]->invW, cv[2]->invW);
-#else
-    t.u = plane(u[0], u[1], u[2]);
-    t.v = plane(v[0], v[1], v[2]);
-#endif
-  }
-#endif  // SHAPOGFX3D_TEXTURE
+  h.mat = mat;
+  h.sortKey = floatSortKey(a.viewZ + b.viewZ + c.viewZ);
+  h.yMin = (int16_t)yMin;
+  h.yMax = (int16_t)yMax;
+  h.flags = flags;
+  h.alpha64 = materialAlpha64(mat);
+  h.rasterFn =
+      (uint8_t)((int)tf * RASTER_PER_TEX + blend * 2 + (smooth ? 0 : 1));
+  h.layer = layerByte();
 
-  t.mat = mat;
-  t.sortKey = floatSortKey(a.viewZ + b.viewZ + c.viewZ);
-  t.yMin = (int16_t)yMin;
-  t.yMax = (int16_t)yMax;
-  t.flags = flags;
-  t.alpha64 = materialAlpha64(mat);
-  t.rasterFn = (uint8_t)((int)tf * RASTER_PER_TEX + blend * 2 +
-                         ((flags & TriFlags::FLAT) ? 1 : 0));
+  const bool depth = !(h.layer & LayerId::NO_DEPTH);
+  uint8_t *rec = allocRecord(TRI_REC_SIZE[recIndex(depth, smooth, textured)]);
+  if (!rec) {  // buffer overflow: drop for this frame
+    triDropped_++;
+    return;
+  }
+  makeRecord(rec, h, depth, smooth, textured, [&](auto &t) {
+    using R = std::remove_reference_t<decltype(t)>;
+    if constexpr (R::HAS_DEPTH) {
+      t.z = plane(v0.zNdc + depthBias_, v1.zNdc + depthBias_,
+                  v2.zNdc + depthBias_);
+    }
+    if constexpr (R::SMOOTH) {
+      t.r = plane(v0.r, v1.r, v2.r);
+      t.g = plane(v0.g, v1.g, v2.g);
+      t.b = plane(v0.b, v1.b, v2.b);
+    } else {
+      // Flat: the color of the first vertex as passed in (before the y sort)
+      t.r = (uint8_t)(int)(a.sv.r + 0.5f);
+      t.g = (uint8_t)(int)(a.sv.g + 0.5f);
+      t.b = (uint8_t)(int)(a.sv.b + 0.5f);
+    }
+    if constexpr (R::TEXTURED) {
+#if SHAPOGFX3D_TEXTURE
+      float u[3] = {v0.u, v1.u, v2.u}, v[3] = {v0.v, v1.v, v2.v};
+      // Wrap texture coordinates per triangle to avoid fixed-point overflow
+      // (subtract the texture period below the minimum from all three
+      // vertices; relative values are unchanged). Sizes are powers of two.
+      const int wPot = 1 << gfx2d::log2Floor(tex->width);
+      const int hPot = 1 << gfx2d::log2Floor(tex->height);
+      const float uMin = clampf(std::min({u[0], u[1], u[2]}), -1e6f, 1e6f);
+      const float vMin = clampf(std::min({v[0], v[1], v[2]}), -1e6f, 1e6f);
+      const float uOff = (float)((int)std::floor(uMin) & ~(wPot - 1));
+      const float vOff = (float)((int)std::floor(vMin) & ~(hPot - 1));
+      for (int i = 0; i < 3; i++) {
+        u[i] -= uOff;
+        v[i] -= vOff;
+      }
+#if SHAPOGFX3D_PERSPECTIVE >= 1
+      for (int i = 0; i < 3; i++) {  // (u/w, v/w) are linear in screen space
+        u[i] *= cv[i]->invW;
+        v[i] *= cv[i]->invW;
+      }
+      t.uw = plane(u[0], u[1], u[2]);
+      t.vw = plane(v[0], v[1], v[2]);
+      t.iw = plane(cv[0]->invW, cv[1]->invW, cv[2]->invW);
+#else
+      t.u = plane(u[0], u[1], u[2]);
+      t.v = plane(v[0], v[1], v[2]);
+#endif
+#endif  // SHAPOGFX3D_TEXTURE
+    }
+  });
   triCount_++;
 }
 
@@ -837,18 +1023,6 @@ static inline uint8_t opaqueFlag(const Material *mat) {
 
 static inline Plane constPlane(float v) { return {v, 0.0f, 0.0f}; }
 
-// Texture planes of untextured primitives
-static inline void clearTexPlanes(Triangle &t) {
-#if !SHAPOGFX3D_TEXTURE
-  (void)t;
-#elif SHAPOGFX3D_PERSPECTIVE >= 1
-  t.uw = t.vw = constPlane(0.0f);
-  t.iw = constPlane(1.0f);
-#else
-  t.u = t.v = constPlane(0.0f);
-#endif
-}
-
 void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
   // Clip against the near plane (visible: z <= -zNear)
   const float zn = -zNear_;
@@ -877,55 +1051,65 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
   if (yMin > yMax) return;
   if (std::max(ax, bx) < 0.0f || std::min(ax, bx) >= (float)screenW_) return;
 
-  if (triCount_ >= triCapacity_) {
-    triDropped_++;
-    return;
-  }
-  Triangle &t = tris_[triCount_];
-  t.sx[0] = ax;
-  t.sy[0] = ay;
-  t.sx[1] = bx;
-  t.sy[1] = by;
+  TriHead h;
+  h.sx[0] = ax;
+  h.sy[0] = ay;
+  h.sx[1] = bx;
+  h.sy[1] = by;
   const float dx = bx - ax, dy = by - ay;
-  t.slope[0] = (dx != 0.0f) ? 1.0f / dx : 0.0f;  // 1/dx
-  t.slope[1] = (dy != 0.0f) ? 1.0f / dy : 0.0f;  // 1/dy
-  t.slope[2] = 0.0f;
+  const float invDx = (dx != 0.0f) ? 1.0f / dx : 0.0f;
+  const float invDy = (dy != 0.0f) ? 1.0f / dy : 0.0f;
+  h.slope[0] = invDx;
+  h.slope[1] = invDy;
+  h.slope[2] = 0.0f;
   // Attributes vary along the major axis: per row for steep lines, per
   // column for shallow ones (see makeLineSpan)
   const bool steep = std::fabs(dy) >= std::fabs(dx);
   auto linePlane = [&](float p, float q) -> Plane {
     if (steep) {
-      const float k = (q - p) * t.slope[1];
+      const float k = (q - p) * invDy;
       return {p - k * ay, 0.0f, k};
     }
-    const float k = (q - p) * t.slope[0];
+    const float k = (q - p) * invDx;
     return {p - k * ax, k, 0.0f};
   };
-  t.z = linePlane(az, bz);
 #if SHAPOGFX3D_GOURAUD
-  t.r = linePlane(a.r, b.r);
-  t.g = linePlane(a.g, b.g);
-  t.b = linePlane(a.b, b.b);
-  const bool flat = (a.r == b.r && a.g == b.g && a.b == b.b);
+  const bool smooth = !(a.r == b.r && a.g == b.g && a.b == b.b);
 #else
-  t.r = (uint8_t)(int)(a.r + 0.5f);  // flat shading: the first end point
-  t.g = (uint8_t)(int)(a.g + 0.5f);
-  t.b = (uint8_t)(int)(a.b + 0.5f);
-  const bool flat = true;
+  const bool smooth = false;  // flat shading: the first end point
 #endif
-  clearTexPlanes(t);
 
   uint8_t flags = TriFlags::LINE;
-  if (flat) flags |= TriFlags::FLAT;
+  if (!smooth) flags |= TriFlags::FLAT;
   flags |= opaqueFlag(mat);
-  t.mat = mat;
-  t.sortKey = floatSortKey(a.view.z + b.view.z);
-  t.yMin = (int16_t)yMin;
-  t.yMax = (int16_t)yMax;
-  t.flags = flags;
-  t.alpha64 = materialAlpha64(mat);
-  t.rasterFn = unlitRasterFn(mat, flat);
-  t.leftLong = false;
+  h.mat = mat;
+  h.sortKey = floatSortKey(a.view.z + b.view.z);
+  h.yMin = (int16_t)yMin;
+  h.yMax = (int16_t)yMax;
+  h.flags = flags;
+  h.alpha64 = materialAlpha64(mat);
+  h.rasterFn = unlitRasterFn(mat, !smooth);
+  h.layer = layerByte();
+
+  const bool depth = !(h.layer & LayerId::NO_DEPTH);
+  uint8_t *rec = allocRecord(TRI_REC_SIZE[recIndex(depth, smooth, false)]);
+  if (!rec) {
+    triDropped_++;
+    return;
+  }
+  makeRecord(rec, h, depth, smooth, false, [&](auto &t) {
+    using R = std::remove_reference_t<decltype(t)>;
+    if constexpr (R::HAS_DEPTH) t.z = linePlane(az, bz);
+    if constexpr (R::SMOOTH) {
+      t.r = linePlane(a.r, b.r);
+      t.g = linePlane(a.g, b.g);
+      t.b = linePlane(a.b, b.b);
+    } else {
+      t.r = (uint8_t)(int)(a.r + 0.5f);
+      t.g = (uint8_t)(int)(a.g + 0.5f);
+      t.b = (uint8_t)(int)(a.b + 0.5f);
+    }
+  });
   triCount_++;
 }
 
@@ -942,36 +1126,41 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   int yMin = std::max(y0, 0), yMax = std::min(y0 + size - 1, (int)screenH_ - 1);
   if (yMin > yMax) return;
 
-  if (triCount_ >= triCapacity_) {
+  TriHead h;
+  h.sx[0] = h.sx[1] = (float)x0;
+  h.sy[0] = h.sy[1] = (float)y0;
+  h.slope[0] = (float)size;
+  h.slope[1] = h.slope[2] = 0.0f;
+  uint8_t flags = TriFlags::POINT | TriFlags::FLAT;
+  flags |= opaqueFlag(mat);
+  h.mat = mat;
+  h.sortKey = floatSortKey(a.view.z);
+  h.yMin = (int16_t)yMin;
+  h.yMax = (int16_t)yMax;
+  h.flags = flags;
+  h.alpha64 = materialAlpha64(mat);
+  h.rasterFn = unlitRasterFn(mat, true);
+  h.layer = layerByte();
+
+  const bool depth = !(h.layer & LayerId::NO_DEPTH);
+  uint8_t *rec = allocRecord(TRI_REC_SIZE[recIndex(depth, false, false)]);
+  if (!rec) {
     triDropped_++;
     return;
   }
-  Triangle &t = tris_[triCount_];
-  t.sx[0] = t.sx[1] = (float)x0;
-  t.sy[0] = t.sy[1] = (float)y0;
-  t.slope[0] = (float)size;
-  t.slope[1] = t.slope[2] = 0.0f;
-  t.z = constPlane(z);
-#if SHAPOGFX3D_GOURAUD
-  t.r = constPlane(a.r);
-  t.g = constPlane(a.g);
-  t.b = constPlane(a.b);
-#else
-  t.r = (uint8_t)(int)(a.r + 0.5f);
-  t.g = (uint8_t)(int)(a.g + 0.5f);
-  t.b = (uint8_t)(int)(a.b + 0.5f);
-#endif
-  clearTexPlanes(t);
-  uint8_t flags = TriFlags::POINT | TriFlags::FLAT;
-  flags |= opaqueFlag(mat);
-  t.mat = mat;
-  t.sortKey = floatSortKey(a.view.z);
-  t.yMin = (int16_t)yMin;
-  t.yMax = (int16_t)yMax;
-  t.flags = flags;
-  t.alpha64 = materialAlpha64(mat);
-  t.rasterFn = unlitRasterFn(mat, true);
-  t.leftLong = false;
+  makeRecord(rec, h, depth, false, false, [&](auto &t) {
+    using R = std::remove_reference_t<decltype(t)>;
+    if constexpr (R::HAS_DEPTH) t.z = constPlane(z);
+    if constexpr (R::SMOOTH) {  // never selected: a point is always flat
+      t.r = constPlane(a.r);
+      t.g = constPlane(a.g);
+      t.b = constPlane(a.b);
+    } else {
+      t.r = (uint8_t)(int)(a.r + 0.5f);
+      t.g = (uint8_t)(int)(a.g + 0.5f);
+      t.b = (uint8_t)(int)(a.b + 0.5f);
+    }
+  });
   triCount_++;
 }
 
@@ -1025,7 +1214,7 @@ bool Graphics3D::fetchUnlitVertex(const VertexBuffer &vb, uint16_t vi,
 #endif
 
 void Graphics3D::putPrimitive(const Primitive &prim) {
-  if (!tris_) return;
+  if (!recBase_) return;
   const Material *mat = prim.material ? prim.material : curMat_;
   if (!mat) return;
   if (!prim.vertexBuffer || !prim.indices) return;
@@ -1189,19 +1378,36 @@ void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
 // ---------------------------------------------------------------------------
 // Rendering
 
+// Header of the record an entry points to
+static inline const TriHead *recOf(const uint8_t *base, const TriEntry &e) {
+  return (const TriHead *)(base + (size_t)e.rec * REC_UNIT);
+}
+
 void Graphics3D::beginRender() {
-  // Sort farthest first (ascending view-space z: more negative comes first).
-  // Depth order between opaque spans is resolved by the depth test at span
-  // insertion, so this sort mainly determines the compositing order of
-  // translucent triangles. Only the index array is permuted.
+  // Sort each layer farthest first (ascending view-space z: more negative
+  // comes first). Depth order between opaque spans of the same layer is
+  // resolved by the depth test at span insertion, so this sort mainly
+  // determines the compositing order of translucent primitives; between
+  // layers the order the layers were opened in decides. Only the entries are
+  // permuted, never the records.
   spanPeak_ = 0;
   spanDropped_ = 0;
-  if (!tris_) return;
-  for (int i = 0; i < triCount_; i++) order_[i] = (uint16_t)i;
-  const Triangle *tris = tris_;
-  std::sort(order_, order_ + triCount_, [tris](uint16_t a, uint16_t b) {
-    return tris[a].sortKey < tris[b].sortKey;
-  });
+  if (!recBase_) return;
+  const uint8_t *base = recBase_;
+  for (int i = 0; i < layerCount_; i++) {
+    if (layers_[i].id & LayerId::NO_DEPTH) continue;  // kept in the order added
+    const int first = layers_[i].first;
+    const int last = (i + 1 < layerCount_) ? layers_[i + 1].first : triCount_;
+    std::sort(entries_ + first, entries_ + last,
+              [base](const TriEntry &a, const TriEntry &b) {
+                const int32_t ka = recOf(base, a)->sortKey;
+                const int32_t kb = recOf(base, b)->sortKey;
+                // Equal depth keeps the order the primitives were added in:
+                // records grow downwards, so the earlier one sits higher.
+                if (ka != kb) return ka < kb;
+                return a.rec > b.rec;
+              });
+  }
 }
 
 void Graphics3D::endRender() {}
@@ -1236,10 +1442,17 @@ static inline void spanAdvance(Span &sp, int n) {
 #endif
 }
 
-// Is frag nearer than e at the center of the overlap [ox0, ox1)? Depths are
-// compared doubled so that the half-pixel center stays integer.
+// Is frag nearer than e at the center of the overlap [ox0, ox1)?
+//
+// Spans reach the list in layer order, so a span whose layer differs from
+// another one's belongs to a later layer and is by definition the nearer one;
+// inside a layer without depth the later span wins for the same reason. Only
+// within a layer that has depth are the two depths compared, doubled so that
+// the half-pixel center stays integer.
 static inline bool fragNearer(const Span &frag, const Span &e, int ox0,
                               int ox1) {
+  if (frag.lay != e.lay) return true;
+  if (frag.lay & LayerId::NO_DEPTH) return true;
   const int k = ox0 + ox1 - 1;  // 2 * center
   const int64_t zf =
       2 * (int64_t)frag.z0 + (int64_t)frag.dz * (k - 2 * frag.x0);
@@ -1395,38 +1608,12 @@ void Graphics3D::clipTranslucent(const Span &frag) {
 
 #endif  // SHAPOGFX3D_BLEND
 
-// Fill the depth and color of a span covering [x0, x1) from the planes of t,
-// evaluated at the center of the leftmost pixel (xc, yc)
-static inline void fillSpanBase(const Triangle &t, float xc, float yc, int x0,
-                                int x1, Span &out) {
-  out.x0 = x0;
-  out.x1 = x1;
-  out.z0 = toZ(t.z.at(xc, yc));
-  out.dz = toZDelta(t.z.dx);
-#if SHAPOGFX3D_GOURAUD
-  // Color: the plane values at pixel centers inside the triangle lie within
-  // 0..255 up to rounding; clamp the start value to guard the rounding.
-  out.r = toFixColor(t.r.at(xc, yc));
-  out.g = toFixColor(t.g.at(xc, yc));
-  out.b = toFixColor(t.b.at(xc, yc));
-  out.dr = toFixDelta(t.r.dx);
-  out.dg = toFixDelta(t.g.dx);
-  out.db = toFixDelta(t.b.dx);
+// Texture attributes of a span that samples no texture. They are never read
+// by its rasterizer, but spanAdvance() steps them like any other span.
+static inline void clearSpanTex(Span &out) {
+#if !SHAPOGFX3D_TEXTURE
+  (void)out;
 #else
-  out.r = t.r;
-  out.g = t.g;
-  out.b = t.b;
-#endif
-  out.tri = &t;
-  out.next = nullptr;
-}
-
-// Span of an untextured primitive (points and lines)
-#if SHAPOGFX3D_UNLIT
-static inline void fillUnlitSpan(const Triangle &t, float xc, float yc, int x0,
-                                 int x1, Span &out) {
-  fillSpanBase(t, xc, yc, x0, x1, out);
-#if SHAPOGFX3D_TEXTURE
 #if SHAPOGFX3D_PERSPECTIVE == 2
   out.uw = out.vw = out.duw = out.dvw = 0.0f;
   out.iw = 1.0f;
@@ -1436,14 +1623,64 @@ static inline void fillUnlitSpan(const Triangle &t, float xc, float yc, int x0,
 #endif
 #endif
 }
+
+// Fill the depth and color of a span covering [x0, x1) from the planes of t,
+// evaluated at the center of the leftmost pixel (xc, yc). A record without an
+// attribute costs neither the evaluation nor the storage of its plane.
+template <typename REC>
+static inline void fillSpanBase(const REC &t, float xc, float yc, int x0,
+                                int x1, Span &out) {
+  out.x0 = x0;
+  out.x1 = x1;
+  if constexpr (REC::HAS_DEPTH) {
+    out.z0 = toZ(t.z.at(xc, yc));
+    out.dz = toZDelta(t.z.dx);
+  } else {
+    out.z0 = 0;  // a layer without depth never compares them (fragNearer())
+    out.dz = 0;
+  }
+#if SHAPOGFX3D_GOURAUD
+  if constexpr (REC::SMOOTH) {
+    // Color: the plane values at pixel centers inside the triangle lie within
+    // 0..255 up to rounding; clamp the start value to guard the rounding.
+    out.r = toFixColor(t.r.at(xc, yc));
+    out.g = toFixColor(t.g.at(xc, yc));
+    out.b = toFixColor(t.b.at(xc, yc));
+    out.dr = toFixDelta(t.r.dx);
+    out.dg = toFixDelta(t.g.dx);
+    out.db = toFixDelta(t.b.dx);
+  } else {
+    out.r = (int32_t)t.r << FIX_SHIFT;
+    out.g = (int32_t)t.g << FIX_SHIFT;
+    out.b = (int32_t)t.b << FIX_SHIFT;
+    out.dr = out.dg = out.db = 0;
+  }
+#else
+  out.r = t.r;
+  out.g = t.g;
+  out.b = t.b;
+#endif
+  out.lay = t.layer;
+  out.tri = &t;
+  out.next = nullptr;
+}
+
+// Span of an untextured primitive (points and lines)
+#if SHAPOGFX3D_UNLIT
+template <typename REC>
+static inline void fillUnlitSpan(const REC &t, float xc, float yc, int x0,
+                                 int x1, Span &out) {
+  fillSpanBase(t, xc, yc, x0, x1, out);
+  clearSpanTex(out);
+}
 #endif
 
 #if SHAPOGFX3D_LINES
 // Line segment a -> b on pixel row yi: one pixel per row for steep lines, one
 // pixel per column (a horizontal run) for shallow lines, so the coverage
 // matches a Bresenham line. Both end points are drawn.
-static bool makeLineSpan(const Triangle &t, int yi, int rx0, int rx1,
-                         Span &out) {
+template <typename REC>
+static bool makeLineSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
   const float ax = t.sx[0], ay = t.sy[0], bx = t.sx[1], by = t.sy[1];
   const float dx = bx - ax, dy = by - ay;
   const float invDy = t.slope[1];
@@ -1490,8 +1727,8 @@ static bool makeLineSpan(const Triangle &t, int yi, int rx0, int rx1,
 
 #if SHAPOGFX3D_POINTS
 // Point: a square with its top-left pixel at (sx[0], sy[0]), size slope[0]
-static bool makePointSpan(const Triangle &t, int yi, int rx0, int rx1,
-                          Span &out) {
+template <typename REC>
+static bool makePointSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
   const int size = (int)t.slope[0];
   int c0 = std::max((int)t.sx[0], rx0);
   int c1 = std::min((int)t.sx[0] + size, rx1);
@@ -1504,15 +1741,16 @@ static bool makePointSpan(const Triangle &t, int yi, int rx0, int rx1,
 // Build the span of triangle t on the scanline with center yc, limited to
 // the region [rx0, rx1). Returns false when the triangle covers no pixel
 // center there.
-static bool makeTriSpan(const Triangle &t, float yc, int rx0, int rx1,
-                        Span &out) {
+template <typename REC>
+static bool makeTriSpan(const REC &t, float yc, int rx0, int rx1, Span &out) {
   // Edge x at yc: the long edge, and the short edge covering this row (the
   // top->middle edge covers [sy0, sy1), middle->bottom covers [sy1, sy2))
   const float xLong = t.sx[0] + t.slope[2] * (yc - t.sy[0]);
   const float xShort = (yc < t.sy[1]) ? t.sx[0] + t.slope[0] * (yc - t.sy[0])
                                       : t.sx[1] + t.slope[1] * (yc - t.sy[1]);
-  const float xl = t.leftLong ? xLong : xShort;
-  const float xr = t.leftLong ? xShort : xLong;
+  const bool leftLong = (t.flags & TriFlags::LEFT_LONG) != 0;
+  const float xl = leftLong ? xLong : xShort;
+  const float xr = leftLong ? xShort : xLong;
   const float width = xr - xl;
   if (width <= 0.0f) return false;
 
@@ -1526,16 +1764,18 @@ static bool makeTriSpan(const Triangle &t, float yc, int rx0, int rx1,
   const float xc = (float)xi0 + 0.5f;
   fillSpanBase(t, xc, yc, xi0, xi1, out);
 
+  if constexpr (!REC::TEXTURED) {
+    clearSpanTex(out);
+  } else {
 #if SHAPOGFX3D_TEXTURE
 #if SHAPOGFX3D_PERSPECTIVE == 2
-  out.uw = t.uw.at(xc, yc);
-  out.vw = t.vw.at(xc, yc);
-  out.iw = t.iw.at(xc, yc);
-  out.duw = t.uw.dx;
-  out.dvw = t.vw.dx;
-  out.diw = t.iw.dx;
+    out.uw = t.uw.at(xc, yc);
+    out.vw = t.vw.at(xc, yc);
+    out.iw = t.iw.at(xc, yc);
+    out.duw = t.uw.dx;
+    out.dvw = t.vw.dx;
+    out.diw = t.iw.dx;
 #elif SHAPOGFX3D_PERSPECTIVE == 1
-  if (t.flags & TriFlags::TEX) {
     // Vertical-only correction: (u, v) are exact at the span end points and
     // interpolated affinely in between. The three divides (1/w at both ends,
     // 1/width) are folded into one.
@@ -1551,28 +1791,59 @@ static bool makeTriSpan(const Triangle &t, float yc, int rx0, int rx1,
     out.v = toFixTex(vwL * kL + dv * t0);
     out.du = toFixDelta(du);
     out.dv = toFixDelta(dv);
-  } else {
-    out.u = out.v = out.du = out.dv = 0;
-  }
 #else
-  out.u = toFixTex(t.u.at(xc, yc));
-  out.v = toFixTex(t.v.at(xc, yc));
-  out.du = toFixDelta(t.u.dx);
-  out.dv = toFixDelta(t.v.dx);
+    out.u = toFixTex(t.u.at(xc, yc));
+    out.v = toFixTex(t.v.at(xc, yc));
+    out.du = toFixDelta(t.u.dx);
+    out.dv = toFixDelta(t.v.dx);
 #endif
 #endif  // SHAPOGFX3D_TEXTURE
+  }
   return true;
 }
 
-static inline bool makeSpan(const Triangle &t, int yi, int rx0, int rx1,
-                            Span &out) {
+// Span of a primitive of a known record layout. Lines and points are never
+// textured, so their span builders are only compiled into the untextured
+// layouts.
+template <bool D, bool G, bool T>
+static inline bool makeSpanRec(const TriHead &h, int yi, int rx0, int rx1,
+                               Span &out) {
+  const TriRec<D, G, T> &t = static_cast<const TriRec<D, G, T> &>(h);
+  if constexpr (!T) {
 #if SHAPOGFX3D_LINES
-  if (t.flags & TriFlags::LINE) return makeLineSpan(t, yi, rx0, rx1, out);
+    if (h.flags & TriFlags::LINE) return makeLineSpan(t, yi, rx0, rx1, out);
 #endif
 #if SHAPOGFX3D_POINTS
-  if (t.flags & TriFlags::POINT) return makePointSpan(t, yi, rx0, rx1, out);
+    if (h.flags & TriFlags::POINT) return makePointSpan(t, yi, rx0, rx1, out);
 #endif
+  }
   return makeTriSpan(t, (float)yi + 0.5f, rx0, rx1, out);
+}
+
+// Recover the record layout from the header and build the span
+template <bool D, bool G>
+static inline bool makeSpanT(const TriHead &h, int yi, int rx0, int rx1,
+                             Span &out) {
+#if SHAPOGFX3D_TEXTURE
+  if (h.flags & TriFlags::TEX)
+    return makeSpanRec<D, G, true>(h, yi, rx0, rx1, out);
+#endif
+  return makeSpanRec<D, G, false>(h, yi, rx0, rx1, out);
+}
+template <bool D>
+static inline bool makeSpanG(const TriHead &h, int yi, int rx0, int rx1,
+                             Span &out) {
+#if SHAPOGFX3D_GOURAUD
+  if (!(h.flags & TriFlags::FLAT))
+    return makeSpanT<D, true>(h, yi, rx0, rx1, out);
+#endif
+  return makeSpanT<D, false>(h, yi, rx0, rx1, out);
+}
+static inline bool makeSpan(const TriHead &h, int yi, int rx0, int rx1,
+                            Span &out) {
+  if (h.layer & LayerId::NO_DEPTH)
+    return makeSpanG<false>(h, yi, rx0, rx1, out);
+  return makeSpanG<true>(h, yi, rx0, rx1, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -2013,20 +2284,20 @@ static const RasterFn RASTER_FNS_RGB444[RASTER_TABLE_SIZE] =
     SHAPOGFX3D_RASTER_TABLE(PixelFormat::RGB444);
 #endif
 
-// Merge two ascending lists (links are stored in link_)
+// Merge two ascending lists (links are stored in the entries)
 uint16_t Graphics3D::mergeLists(uint16_t a, uint16_t b) {
-  uint16_t *link = link_;
+  TriEntry *const ent = entries_;
   uint16_t head = NONE;
   uint16_t *pp = &head;
   while (a != NONE && b != NONE) {
     if (a < b) {
       *pp = a;
-      pp = &link[a];
-      a = link[a];
+      pp = &ent[a].link;
+      a = ent[a].link;
     } else {
       *pp = b;
-      pp = &link[b];
-      b = link[b];
+      pp = &ent[b].link;
+      b = ent[b].link;
     }
   }
   *pp = (a != NONE) ? a : b;
@@ -2035,7 +2306,7 @@ uint16_t Graphics3D::mergeLists(uint16_t a, uint16_t b) {
 
 void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
                         const Surface &dst, int16_t dstX, int16_t dstY) {
-  if (!tris_ || !spanPool_ || !dst.pixels) return;
+  if (!recBase_ || !spanPool_ || !dst.pixels) return;
 
   // Output format
   const RasterFn *table = nullptr;
@@ -2078,7 +2349,8 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
   const int y0 = std::max(ry, 0);
   const int y1 = std::min(ry + rh, (int)screenH_);
   if (y0 >= y1 || rx0 >= rx1) return;
-  uint16_t *const link = link_;
+  TriEntry *const ent = entries_;
+  const uint8_t *const base = recBase_;
 
 #if SHAPOGFX3D_RP2_INTERP
   interp_hw_save_t interpSave;
@@ -2086,15 +2358,15 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
 #endif
 
   // For each scanline of the region, build the list of triangles that start
-  // intersecting at that line (linked by position in order_, i.e. by depth)
+  // intersecting at that line (linked by entry position, i.e. by depth)
   for (int i = y0; i < y1; i++) bucketHead_[i] = bucketTail_[i] = NONE;
   for (int p = 0; p < triCount_; p++) {
-    const Triangle &t = tris_[order_[p]];
+    const TriHead &t = *recOf(base, ent[p]);
     if (t.yMax < y0 || t.yMin >= y1) continue;
     int line = std::max((int)t.yMin, y0);
-    link[p] = NONE;
+    ent[p].link = NONE;
     if (bucketTail_[line] != NONE) {
-      link[bucketTail_[line]] = (uint16_t)p;
+      ent[bucketTail_[line]].link = (uint16_t)p;
     } else {
       bucketHead_[line] = (uint16_t)p;
     }
@@ -2113,9 +2385,9 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
     uint16_t *pp = &active;
     while (*pp != NONE) {
       const uint16_t p = *pp;
-      const Triangle &t = tris_[order_[p]];
+      const TriHead &t = *recOf(base, ent[p]);
       if (yi > t.yMax) {
-        *pp = link[p];  // passed: remove from the active list
+        *pp = ent[p].link;  // passed: remove from the active list
         continue;
       }
       Span sp;
@@ -2131,7 +2403,7 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
         insertOpaque(sp);  // every primitive is opaque
 #endif
       }
-      pp = &link[p];
+      pp = &ent[p].link;
     }
     if (spanCount_ > spanPeak_) spanPeak_ = spanCount_;
 
@@ -2168,12 +2440,14 @@ void Graphics3D::render(int16_t x, int16_t y, int16_t w, int16_t h,
 Stats Graphics3D::getStats() const {
   Stats st;
   st.arenaSize = arenaSize_;
-  st.arenaUsed = arenaFixed_ +
-                 (size_t)triCount_ * (sizeof(Triangle) + 2 * sizeof(uint16_t)) +
-                 (size_t)spanPeak_ * sizeof(Span);
-  st.triCapacity = triCapacity_;
+  st.triBytes =
+      (size_t)(recEnd_ - recTop_) + (size_t)triCount_ * sizeof(TriEntry);
+  st.triBytesTotal = (size_t)(recEnd_ - recBase_);
+  st.arenaUsed = arenaFixed_ + st.triBytes + (size_t)spanPeak_ * sizeof(Span);
   st.triCount = triCount_;
   st.triDropped = triDropped_;
+  st.layerCount = layerCount_;
+  st.layersDropped = layersDropped_;
   st.spanCapacity = spanCapacity_;
   st.spanPeak = spanPeak_;
   st.spanDropped = spanDropped_;

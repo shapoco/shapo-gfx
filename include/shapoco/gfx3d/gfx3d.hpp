@@ -115,11 +115,18 @@ struct Stats {
   size_t arenaSize;  // size of the arena passed to init()
   size_t arenaUsed;  // bytes actually used in the last frame (fixed part +
                      // triangles + span peak)
-  int triCapacity;   // capacity of the triangle buffer
-  int triCount;      // triangles in the current scene (after culling)
+  size_t triBytes;   // bytes of the triangle buffer holding the current scene
+                     // (records plus 4 bytes of sort order and link each)
+  size_t triBytesTotal;  // bytes available for the triangle buffer. Records
+                         // vary in size, so this is a byte budget rather than
+                         // a triangle count.
+  int triCount;          // triangles in the current scene (after culling)
   int triDropped;  // triangles dropped because the buffer overflowed (reset by
                    // beginScene())
-  int spanCapacity;  // capacity of the span pool
+  int layerCount;  // layers used by the current scene (reset by beginScene())
+  int layersDropped;  // beginLayer() calls ignored because there was no free
+                      // layer (reset by beginScene())
+  int spanCapacity;   // capacity of the span pool
   int spanPeak;  // maximum number of spans used on a single scanline (reset by
                  // beginRender())
   int spanDropped;  // spans dropped because the pool overflowed (reset by
@@ -163,9 +170,58 @@ class NodeVisitor {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Layers
+//
+// A layer is a range of the scene that is depth-sorted on its own. Layers are
+// opened with beginLayer() and every layer is drawn in front of the layers
+// opened before it, which the application guarantees by building the scene
+// back to front; within a layer the usual depth resolution applies. The scene
+// of an application that never calls beginLayer() is a single layer and
+// behaves exactly as before.
+namespace LayerFlags {
+// The layer carries no depth: its primitives are drawn in the order they were
+// added (the later one wins), and their records hold no depth plane, which
+// makes them 12 bytes smaller. Use it for geometry that is already ordered
+// back to front, such as a background.
+constexpr uint32_t NO_DEPTH = 1u << 0;
+}  // namespace LayerFlags
+
+// ---------------------------------------------------------------------------
+// Initialization parameters
+//
+// Obtain the defaults from defaultConfig(), adjust what needs adjusting and
+// pass the result to Graphics3D::init(). New members may be added later with
+// a default that preserves the current behavior.
+struct Config {
+  int16_t screenWidth = 0;
+  int16_t screenHeight = 0;
+  void *arena = nullptr;  // working memory (8-byte aligned internally)
+  size_t arenaSize = 0;   // size of the arena in bytes
+  int spanCapacity = 0;   // spans held per scanline; 0 selects the default
+                          // (a quarter of the arena left after the fixed
+                          // part, clamped to 32..512). Spans beyond the
+                          // capacity are dropped, which leaves holes in the
+                          // picture; Stats::spanPeak tells how many a scene
+                          // really needs, so a tuned value gives the rest of
+                          // the arena to the triangle buffer.
+};
+
+inline Config defaultConfig(int16_t w, int16_t h, void *arena,
+                            size_t arenaSize) {
+  Config cfg;
+  cfg.screenWidth = w;
+  cfg.screenHeight = h;
+  cfg.arena = arena;
+  cfg.arenaSize = arenaSize;
+  return cfg;
+}
+
 // Internal structures (defined in gfx3d.cpp)
 namespace detail {
-struct Triangle;
+struct TriHead;
+struct TriEntry;
+struct LayerDesc;
 struct Span;
 struct StackEntry;
 struct CachedVertex;
@@ -188,13 +244,28 @@ class Graphics3D {
   Graphics3D(Graphics3D &&) = default;
   Graphics3D &operator=(Graphics3D &&) = default;
 
-  // Initialize (w, h: screen size; arena, arenaSize: working memory).
-  void init(int16_t w, int16_t h, void *arena, size_t arenaSize);
+  // Initialize from a Config (see defaultConfig()).
+  void init(const Config &cfg);
+  // Initialize with the default parameters (w, h: screen size; arena,
+  // arenaSize: working memory).
+  void init(int16_t w, int16_t h, void *arena, size_t arenaSize) {
+    init(defaultConfig(w, h, arena, arenaSize));
+  }
   void
   deinit();  // release the arena (the renderer becomes unusable until init())
 
   void beginScene();  // start building a scene
   void endScene();    // finish building a scene
+
+  // Open a new layer (see LayerFlags). Everything added afterwards is drawn in
+  // front of everything added before, so layers must be opened back to front.
+  // The layer is closed by the next beginLayer(), by endLayer() or by
+  // endScene(); beginScene() opens the first layer implicitly. Ignored (and
+  // counted in Stats::layersDropped) when all layers are in use.
+  void beginLayer(uint32_t flags = 0);
+  // Close the current layer. What follows goes into a new layer with the
+  // default flags, still in front of everything before it.
+  void endLayer();
 
   void loadIdentity();             // reset the current matrix to identity
   void translate(const vec3f &v);  // apply a translation to the current matrix
@@ -310,20 +381,29 @@ class Graphics3D {
 
   int16_t screenWidth() const { return screenW_; }
   int16_t screenHeight() const { return screenH_; }
-  bool isInitialized() const { return tris_ != nullptr; }
+  bool isInitialized() const { return recBase_ != nullptr; }
 
  private:
   int16_t screenW_ = 0, screenH_ = 0;
 
-  detail::Triangle *tris_ = nullptr;
-  int triCapacity_ = 0;
+  // Triangle buffer. Primitive records vary in size (see gfx3d.cpp), so they
+  // are packed downwards from the end of the region while the entry array
+  // (record offset + scanline link, 4 bytes each) grows upwards from its
+  // start; the scene is complete as long as the two have not met.
+  uint8_t *recBase_ = nullptr;           // start of the region (entry array)
+  uint8_t *recTop_ = nullptr;            // lowest record stored so far
+  uint8_t *recEnd_ = nullptr;            // end of the region
+  detail::TriEntry *entries_ = nullptr;  // == recBase_, sorted by beginRender()
   int triCount_ = 0;
-  uint16_t *order_ =
-      nullptr;  // triangle indices sorted by depth (farthest first)
-  uint16_t *link_ = nullptr;  // per-position links (line buckets / active list)
   uint16_t *bucketHead_ =
       nullptr;  // per-scanline triangle lists (used inside render())
   uint16_t *bucketTail_ = nullptr;
+
+  detail::LayerDesc *layers_ = nullptr;
+  int layerCount_ = 0;
+  int layersDropped_ = 0;
+  uint32_t layerFlags_ = 0;  // flags of the layer opened by the next primitive
+  bool layerOpen_ = false;   // a layer is receiving primitives
 
   detail::Span *spanPool_ = nullptr;
   int spanCapacity_ = 0;
@@ -359,8 +439,8 @@ class Graphics3D {
   colorf clearColor_ = {0, 0, 0, 1};
 
   size_t arenaSize_ = 0;
-  size_t arenaFixed_ =
-      0;  // bytes always in use (line buckets, stack, vertex cache)
+  size_t arenaFixed_ = 0;  // bytes always in use (line buckets, layer table,
+                           // matrix stack, vertex cache)
   int triDropped_ = 0;
   int spanPeak_ = 0;
   int spanDropped_ = 0;
@@ -384,6 +464,11 @@ class Graphics3D {
                     const detail::CachedVertex &b,
                     const detail::CachedVertex &c, const Material *mat,
                     const Texture *tex);
+  // Reserve `size` bytes for a primitive record and register its entry;
+  // nullptr when the triangle buffer is full. openLayer() is called first, so
+  // the record belongs to the current layer.
+  uint8_t *allocRecord(size_t size);
+  uint8_t layerByte();  // id of the current layer, opening one if needed
   void unlitVertex(const Vertex &in, const Material *mat,
                    detail::UnlitVertex &out) const;
   void emitLine(detail::UnlitVertex a, detail::UnlitVertex b,

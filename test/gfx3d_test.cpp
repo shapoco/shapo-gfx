@@ -11,6 +11,10 @@
 namespace g2 = shapoco::gfx2d;
 namespace g3 = shapoco::gfx3d;
 
+#ifndef SHAPOGFX3D_LAYER_MAX  // mirrors the library default
+#define SHAPOGFX3D_LAYER_MAX 8
+#endif
+
 static constexpr int W = 96, H = 64;
 static uint8_t arena[256 * 1024];
 
@@ -519,6 +523,127 @@ static void testPointsAndLines() {
 }
 #endif  // SHAPOGFX3D_LINES && SHAPOGFX3D_POINTS
 
+// Layers, the record layouts and the configurable span pool
+static void testLayersAndConfig() {
+  static const g3::Material M_BLUE = {{0.1f, 0.2f, 0.9f, 1},
+                                      {0.1f, 0.2f, 0.9f, 1},
+                                      nullptr,
+                                      g3::BlendMode::NONE,
+                                      0};
+  g3::Graphics3D r;
+  g3::Config cfg = g3::defaultConfig(W, H, arena, sizeof(arena));
+  cfg.spanCapacity = 48;
+  r.init(cfg);
+  CHECK(r.isInitialized());
+  CHECK_EQ(r.getStats().spanCapacity, 48);
+
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  r.setClearColor({0, 0, 0, 1});
+  const float ay = (float)H / W;
+  // near: a small blue cube, far: a large red one behind it
+  enum Which { FAR_ONLY, NEAR_ONLY, BOTH, BOTH_LAYERED, BOTH_NO_DEPTH };
+  auto build = [&](Which which) {
+    r.setOrthographicProjection(-1, 1, -ay, ay, 0.1f, 10);
+    r.beginScene();
+    r.disableParallelLight();
+    r.enableEnvironmentLight({1, 1, 1, 1});
+    if (which == BOTH_NO_DEPTH) r.beginLayer(g3::LayerFlags::NO_DEPTH);
+    if (which != FAR_ONLY) {
+      r.setMaterial(M_BLUE);
+      r.putCube({0, 0, -2}, {0.5f, 0.5f, 0.5f});
+    }
+    if (which == BOTH_LAYERED) r.beginLayer();
+    if (which != NEAR_ONLY) {
+      r.setMaterial(M_RED);
+      r.putCube({0, 0, -3}, {1.0f, 1.0f, 1.0f});
+    }
+    r.endScene();
+  };
+  auto center = [&]() {
+    r.beginRender();
+    r.render(0, 0, W, H, s);
+    r.endRender();
+    return pixelAt(s, W / 2, H / 2);
+  };
+
+  build(FAR_ONLY);
+  const g2::Color colFar = center();
+  build(NEAR_ONLY);
+  const g2::Color colNear = center();
+  CHECK(colFar != colNear);
+  CHECK(colFar != g2::Colors::BLACK && colNear != g2::Colors::BLACK);
+
+  // One layer: the depth test puts the near cube in front
+  build(BOTH);
+  CHECK_EQ(center(), colNear);
+  CHECK_EQ(r.getStats().layerCount, 1);
+  CHECK_EQ(r.getStats().triDropped, 0);
+  CHECK_EQ(r.getStats().spanDropped, 0);
+  const size_t bytesWithDepth = r.getStats().triBytes;
+
+#if SHAPOGFX3D_LAYER_MAX >= 2
+  // The far cube in a later layer is drawn in front of the near one
+  build(BOTH_LAYERED);
+  CHECK_EQ(center(), colFar);
+  CHECK_EQ(r.getStats().layerCount, 2);
+#endif
+
+  // Without depth the primitive added later wins, and its records are smaller
+  build(BOTH_NO_DEPTH);
+  CHECK_EQ(center(), colFar);
+  CHECK_EQ(r.getStats().layerCount, 1);
+  const g3::Stats stNoDepth = r.getStats();
+  CHECK(stNoDepth.triBytes < bytesWithDepth);
+  // 12 bytes of depth plane per primitive (more where the alignment of a
+  // 64-bit host rounds the records up)
+  const size_t saved = bytesWithDepth - stNoDepth.triBytes;
+  CHECK(saved >= 8u * (size_t)stNoDepth.triCount);
+  CHECK_EQ(saved % (size_t)stNoDepth.triCount, 0u);
+
+  // beginScene() opens a layer implicitly; beyond the table the calls are
+  // counted and the primitives stay in the current layer
+  r.beginScene();
+  for (int i = 0; i < 200; i++) {
+    r.beginLayer();
+    r.setMaterial(M_RED);
+    r.putCube({0, 0, -3}, {0.2f, 0.2f, 0.2f});
+  }
+  r.endScene();
+  const g3::Stats stMany = r.getStats();
+  CHECK(stMany.layerCount >= 1);
+  CHECK_EQ(stMany.layersDropped, 200 - stMany.layerCount);
+  CHECK_EQ(stMany.triDropped, 0);
+
+  // A flat untextured primitive needs a smaller record than a textured one
+  auto bytesPerTri = [&](const g3::Material &m) {
+    r.setOrthographicProjection(-1, 1, -ay, ay, 0.1f, 10);
+    r.beginScene();
+    r.disableParallelLight();
+    r.enableEnvironmentLight({1, 1, 1, 1});
+    r.setMaterial(m);
+    r.putCube({0, 0, -3}, {1.0f, 1.0f, 1.0f});
+    r.endScene();
+    const g3::Stats st = r.getStats();
+    CHECK(st.triCount > 0);
+    return (double)st.triBytes / st.triCount;
+  };
+  const double plain = bytesPerTri(M_RED);
+#if SHAPOGFX3D_TEXTURE
+  CHECK(bytesPerTri(M_TEX565) > plain);
+#endif
+  CHECK(plain < (double)(sizeof(float) * 32));
+
+  // A span pool too small for the scene drops spans instead of overflowing
+  cfg.spanCapacity = 1;
+  r.init(cfg);
+  r.setClearColor({0, 0, 0, 1});
+  build(BOTH);
+  r.beginRender();
+  r.render(0, 0, W, H, s);
+  r.endRender();
+  CHECK(r.getStats().spanDropped > 0);
+}
+
 void testGfx3D() {
   genTextures();
 #if SHAPOGFX3D_LINES && SHAPOGFX3D_POINTS
@@ -528,6 +653,7 @@ void testGfx3D() {
   testVertexColorAndIndices();
   testBandsAndClear();
   testOutputFormats();
+  testLayersAndConfig();
 #if SHAPOGFX3D_TEXTURE && SHAPOGFX3D_BLEND
   testTextureAlpha();
 #endif
