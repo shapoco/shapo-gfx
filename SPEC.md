@@ -369,8 +369,11 @@ struct Scene { const Node *const *roots; uint16_t rootCount; };
 class NodeVisitor { public: virtual bool onNode(const Node &, mat4f &local); };
 ```
 
-Vertex forms: a `VertexBuffer` holds either 36-byte `Vertex` or 16-byte
-`PackedVertex` data. A packed position is an integer scaled by the buffer's
+Vertex forms: a `VertexBuffer` holds 36-byte `Vertex`, 16-byte `PackedVertex`
+or 24-byte `FixedVertex` data (position 16.16, normal Q15, uv in 1/1024 units,
+color). The fixed form is what the fixed-point vertex stage reads with no
+conversion at all, for an application that already computes its geometry in
+integers; the float stage converts it, so a scene may use it on every target. A packed position is an integer scaled by the buffer's
 `scale` and offset by its `bias`, so its resolution is 1/65534 of the model's
 extent along each axis; uv is in 1/1024 texel-space units and the normal in
 1/127 units, which makes the decoded vector unit length to about 1%. Both errors

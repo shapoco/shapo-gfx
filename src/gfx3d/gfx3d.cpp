@@ -406,6 +406,17 @@ struct UnlitVertex {
 #endif
 };
 
+#if SHAPOGFX3D_FIXED_POINT
+// A vertex as the fixed-point stage reads it, from any of the three input
+// forms (vertexAtQ())
+struct VertexQ {
+  int32_t p[3];  // model units, 16.16
+  int32_t n[3];  // Q15
+  int32_t u, v;  // texture-space units, 16.16 (texels after x texture size)
+  gfx2d::Color color;
+};
+#endif
+
 // Per-primitive constants of the vertex stage
 struct PrimSetup {
   const Material *mat;
@@ -984,12 +995,10 @@ bool Graphics3D::projectQ(int32_t vx, int32_t vy, int32_t vz, ShadedVertex &sv,
   }
 }
 
-// The current matrix (Q18 / 16.16) on a float position -> view space 16.16
-static inline void transformQ(const MatQ &m, const vec3f &pos, int32_t &vx,
+// The current matrix (Q18 / 16.16) on a 16.16 position -> view space 16.16
+static inline void transformQ(const MatQ &m, const int32_t p[3], int32_t &vx,
                               int32_t &vy, int32_t &vz) {
-  const int32_t px = fToFix(pos.x, FP_SHIFT, INT32_MAX);
-  const int32_t py = fToFix(pos.y, FP_SHIFT, INT32_MAX);
-  const int32_t pz = fToFix(pos.z, FP_SHIFT, INT32_MAX);
+  const int32_t px = p[0], py = p[1], pz = p[2];
   vx = (int32_t)((((int64_t)m.r[0] * px + (int64_t)m.r[3] * py +
                    (int64_t)m.r[6] * pz) >>
                   MAT_SHIFT) +
@@ -1080,19 +1089,17 @@ static bool lightToModelSpace(const mat4f &m, const vec3f &lightDirView,
 }
 
 #if SHAPOGFX3D_FIXED_POINT
-void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
-                             CachedVertex &out) const {
+void Graphics3D::shadeVertexQ(const VertexQ &in, const PrimSetup &ps,
+                              CachedVertex &out) const {
   out.ok = false;
   int32_t vx, vy, vz;
-  transformQ(curQ_, in.position, vx, vy, vz);
+  transformQ(curQ_, in.p, vx, vy, vz);
   // Triangles crossing or in front of the near plane are dropped
   if (vz > -projQ_.zNear) return;
   ShadedVertex &sv = out.sv;
   if (!projectQ(vx, vy, vz, sv, out.invW)) return;
 
-  const int32_t nq[3] = {fToFix(in.normal.x, NORMAL_SHIFT, 1 << 18),
-                         fToFix(in.normal.y, NORMAL_SHIFT, 1 << 18),
-                         fToFix(in.normal.z, NORMAL_SHIFT, 1 << 18)};
+  const int32_t *nq = in.n;
   int32_t d = 0;  // diffuse factor, Q15
   int32_t n[3] = {0, 0, 0};
   if (ps.viewNormal) {
@@ -1130,10 +1137,8 @@ void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
       sv.v = clampFix((int64_t)((1 << NORMAL_SHIFT) - n[1]) * ps.texHq,
                       TEX_MAX_FP);
     } else {
-      sv.u = clampFix((int64_t)fToFix(in.uv.x, FP_SHIFT, 1 << 30) * ps.texWq,
-                      TEX_MAX_FP);
-      sv.v = clampFix((int64_t)fToFix(in.uv.y, FP_SHIFT, 1 << 30) * ps.texHq,
-                      TEX_MAX_FP);
+      sv.u = clampFix((int64_t)in.u * ps.texWq, TEX_MAX_FP);
+      sv.v = clampFix((int64_t)in.v * ps.texHq, TEX_MAX_FP);
     }
   } else {
     sv.u = sv.v = 0;
@@ -1611,9 +1616,9 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 #if SHAPOGFX3D_UNLIT
 
 #if SHAPOGFX3D_FIXED_POINT
-void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
-                             UnlitVertex &out) const {
-  transformQ(curQ_, in.position, out.vx, out.vy, out.vz);
+void Graphics3D::unlitVertexQ(const VertexQ &in, const Material *mat,
+                              UnlitVertex &out) const {
+  transformQ(curQ_, in.p, out.vx, out.vy, out.vz);
   const bool useVertex = (mat->flags & MaterialFlags::VERTEX_COLOR) != 0;
   const bool add = mat->blendMode == BlendMode::ADD;
   const int32_t alpha256 = fToFix(clamp01(mat->diffuse.a), 8, 256);
@@ -1975,6 +1980,16 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
 static inline const Vertex &vertexAt(const VertexBuffer &vb, uint16_t i,
                                      Vertex &tmp) {
   if (vb.vertices) return vb.vertices[i];
+  if (vb.fixed) {
+    const FixedVertex &f = vb.fixed[i];
+    constexpr float POS = 1.0f / 65536.0f, NRM = 1.0f / 32768.0f;
+    tmp.position = {f.position[0] * POS, f.position[1] * POS,
+                    f.position[2] * POS};
+    tmp.normal = {f.normal[0] * NRM, f.normal[1] * NRM, f.normal[2] * NRM};
+    tmp.uv = {f.uv[0] * PACKED_UV_SCALE, f.uv[1] * PACKED_UV_SCALE};
+    tmp.color = f.color;
+    return tmp;
+  }
   const PackedVertex &p = vb.packed[i];
   tmp.position = {p.position[0] * vb.scale.x + vb.bias.x,
                   p.position[1] * vb.scale.y + vb.bias.y,
@@ -1987,6 +2002,38 @@ static inline const Vertex &vertexAt(const VertexBuffer &vb, uint16_t i,
   return tmp;
 }
 
+#if SHAPOGFX3D_FIXED_POINT
+// The fixed-point stage's input, from any of the three forms. A FixedVertex
+// is copied; the float forms are converted here, once per vertex and
+// primitive.
+static inline const VertexQ &vertexAtQ(const VertexBuffer &vb, uint16_t i,
+                                       VertexQ &tmp) {
+  if (vb.fixed) {
+    const FixedVertex &f = vb.fixed[i];
+    for (int k = 0; k < 3; k++) {
+      tmp.p[k] = f.position[k];
+      tmp.n[k] = f.normal[k];
+    }
+    tmp.u = (int32_t)f.uv[0] << 6;  // 1/1024 -> 16.16
+    tmp.v = (int32_t)f.uv[1] << 6;
+    tmp.color = f.color;
+    return tmp;
+  }
+  Vertex ftmp;
+  const Vertex &v = vertexAt(vb, i, ftmp);
+  tmp.p[0] = fToFix(v.position.x, FP_SHIFT, INT32_MAX);
+  tmp.p[1] = fToFix(v.position.y, FP_SHIFT, INT32_MAX);
+  tmp.p[2] = fToFix(v.position.z, FP_SHIFT, INT32_MAX);
+  tmp.n[0] = fToFix(v.normal.x, NORMAL_SHIFT, 1 << 18);
+  tmp.n[1] = fToFix(v.normal.y, NORMAL_SHIFT, 1 << 18);
+  tmp.n[2] = fToFix(v.normal.z, NORMAL_SHIFT, 1 << 18);
+  tmp.u = fToFix(v.uv.x, FP_SHIFT, 1 << 30);
+  tmp.v = fToFix(v.uv.y, FP_SHIFT, 1 << 30);
+  tmp.color = v.color;
+  return tmp;
+}
+#endif
+
 const CachedVertex &Graphics3D::fetchVertex(const VertexBuffer &vb, uint16_t vi,
                                             const PrimSetup &ps) {
   static const CachedVertex INVALID = {};  // ok == false: drops the triangle
@@ -1996,8 +2043,13 @@ const CachedVertex &Graphics3D::fetchVertex(const VertexBuffer &vb, uint16_t vi,
   }
   CachedVertex &cv = vcache_[vi & (VCACHE_SIZE - 1)];
   if (cv.tag != vi) {
+#if SHAPOGFX3D_FIXED_POINT
+    VertexQ tmp;
+    shadeVertexQ(vertexAtQ(vb, vi, tmp), ps, cv);
+#else
     Vertex tmp;
     shadeVertex(vertexAt(vb, vi, tmp), ps, cv);
+#endif
     cv.tag = vi;
   }
   return cv;
@@ -2010,8 +2062,13 @@ bool Graphics3D::fetchUnlitVertex(const VertexBuffer &vb, uint16_t vi,
     badIndices_++;
     return false;
   }
+#if SHAPOGFX3D_FIXED_POINT
+  VertexQ tmp;
+  unlitVertexQ(vertexAtQ(vb, vi, tmp), mat, out);
+#else
   Vertex tmp;
   unlitVertex(vertexAt(vb, vi, tmp), mat, out);
+#endif
   return true;
 }
 #endif
@@ -2022,7 +2079,7 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
   if (!mat) return;
   if (!prim.vertexBuffer || !prim.indices) return;
   const VertexBuffer &vb = *prim.vertexBuffer;
-  if (!vb.vertices && !vb.packed) return;
+  if (!vb.vertices && !vb.packed && !vb.fixed) return;
   const uint16_t *idx = prim.indices;
   int n = prim.indexCount;
 
@@ -3325,13 +3382,14 @@ static SHAPOGFX3D_HOT_ATTR void fillLineT(uint8_t *line, int x, int n,
 #else
 #define SHAPOGFX3D_HOT_ROW_RGB565BE(OUT)
 #endif
-#define SHAPOGFX3D_HOT_TABLE(OUT)                                        \
-  SHAPOGFX3D_HOT_ROW(OUT, TexFmt::NONE)                                  \
-  SHAPOGFX3D_HOT_ROW_GRAY1(OUT)                                          \
-  SHAPOGFX3D_HOT_ROW_RGB444(OUT)                                         \
-  SHAPOGFX3D_HOT_ROW_ARGB4444(OUT)                                       \
-      SHAPOGFX3D_HOT_ROW_RGB565BE(OUT) template SHAPOGFX3D_HOT_ATTR void \
-      fillLineT<OUT>(uint8_t *, int, int, uint32_t);
+#define SHAPOGFX3D_HOT_TABLE(OUT)                                       \
+  SHAPOGFX3D_HOT_ROW(OUT, TexFmt::NONE)                                 \
+  SHAPOGFX3D_HOT_ROW_GRAY1(OUT)                                         \
+  SHAPOGFX3D_HOT_ROW_RGB444(OUT)                                        \
+  SHAPOGFX3D_HOT_ROW_ARGB4444(OUT)                                      \
+  SHAPOGFX3D_HOT_ROW_RGB565BE(OUT)                                      \
+  template SHAPOGFX3D_HOT_ATTR void fillLineT<OUT>(uint8_t *, int, int, \
+                                                   uint32_t);
 #if SHAPOGFX_FORMAT_RGB565BE
 SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB565BE)
 #endif

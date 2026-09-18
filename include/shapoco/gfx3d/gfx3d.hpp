@@ -53,10 +53,22 @@ constexpr float PACKED_NORMAL_SCALE = 1.0f / 127.0f;
 // Vertices of a primitive, in either form. `scale` and `bias` apply to packed
 // positions only; the remaining members may be left at their defaults for a
 // buffer of plain `Vertex` (`VertexBuffer vb = {count, vertices};`).
+// A vertex in fixed point: what the fixed-point vertex stage
+// (SHAPOGFX3D_FIXED_POINT) takes as it is, with no conversion at all. The
+// float stage converts it, so a scene may use this form on every target.
+// For an application that already computes its geometry in integers.
+struct FixedVertex {
+  int32_t position[3];  // model units, 16.16
+  int16_t normal[3];    // Q15 (unit length)
+  int16_t uv[2];        // 1/1024 texel-space units (range -32..32)
+  gfx2d::Color color;   // ARGB8888, used with MaterialFlags::VERTEX_COLOR
+};
+
 struct VertexBuffer {
   uint16_t vertexCount;
   const Vertex *vertices;                // nullptr: the buffer is packed
   const PackedVertex *packed = nullptr;  // used when `vertices` is nullptr
+  const FixedVertex *fixed = nullptr;    // used when both above are nullptr
   vec3f scale = {1, 1, 1};               // packed position scale
   vec3f bias = {0, 0, 0};                // packed position offset
 };
@@ -244,6 +256,7 @@ struct LightQ {
   int32_t env[3];  // 8.8
 };
 struct ShadedVertex;
+struct VertexQ;
 struct TriHead;
 struct TriEntry;
 struct LayerDesc;
@@ -494,6 +507,11 @@ class Graphics3D {
                         const Material *mat, detail::UnlitVertex &out);
   void shadeVertex(const Vertex &in, const detail::PrimSetup &ps,
                    detail::CachedVertex &out) const;
+  // The fixed-point stage's forms of shadeVertex() and unlitVertex()
+  void shadeVertexQ(const detail::VertexQ &in, const detail::PrimSetup &ps,
+                    detail::CachedVertex &out) const;
+  void unlitVertexQ(const detail::VertexQ &in, const Material *mat,
+                    detail::UnlitVertex &out) const;
   void emitTriangle(const detail::CachedVertex &a,
                     const detail::CachedVertex &b,
                     const detail::CachedVertex &c, const Material *mat,
