@@ -219,6 +219,31 @@ inline Config defaultConfig(int16_t w, int16_t h, void *arena,
 
 // Internal structures (defined in gfx3d.cpp)
 namespace detail {
+// Fixed-point copies of the current matrix (rotation / scale Q18,
+// translation 16.16), the projection and the lights, kept by the
+// fixed-point vertex stage (SHAPOGFX3D_FIXED_POINT) and refreshed when the
+// float originals change. Present, but unused, in the float build.
+struct MatQ {
+  int32_t r[9];  // column-major, r[col * 3 + row]
+  int32_t t[3];
+};
+struct ProjQ {
+  uint8_t kind;              // ProjKind
+  int32_t zNear;             // 16.16
+  int32_t fx, fy;            // perspective: focal length, 8.8 px
+  int32_t cx, cy;            // screen center, 16.16 px
+  int32_t zA, zB;            // perspective: z = zA (8.24) + zB (16.16) / w
+  int32_t sxScale, syScale;  // orthographic: px per unit, Q16
+  int32_t sxOff, syOff;      // orthographic: 16.16 px
+  int32_t zScale, zOff;      // orthographic: Q24 per unit, 8.24
+  int32_t m[16];             // generic: the projection matrix, Q18
+};
+struct LightQ {
+  int32_t dir[3];  // view space, towards the scene, Q15
+  int32_t col[3];  // 8.8
+  int32_t env[3];  // 8.8
+};
+struct ShadedVertex;
 struct TriHead;
 struct TriEntry;
 struct LayerDesc;
@@ -449,6 +474,15 @@ class Graphics3D {
 
   int pointSize_ = 1;
   float depthBias_ = 0.0f;
+  // Fixed-point stage (SHAPOGFX3D_FIXED_POINT): see detail::MatQ
+  detail::MatQ curQ_ = {};
+  detail::ProjQ projQ_ = {};
+  detail::LightQ lightQ_ = {};
+  bool curQDirty_ = true;
+  bool projQDirty_ = true;
+  void refreshFixed();  // bring curQ_ / projQ_ up to date with cur_ / proj_
+  bool projectQ(int32_t vx, int32_t vy, int32_t vz, detail::ShadedVertex &sv,
+                int32_t &invW) const;
 
   bool projectPoint(const vec3f &view, float &sx, float &sy, float &zNdc,
                     float &invW) const;

@@ -40,6 +40,7 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX3D_RP2_INTERP` | 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise) |
+| `SHAPOGFX3D_FIXED_POINT` | 0 | Vertex stage, primitive setup and span builders in fixed point, for cores without an FPU (see "Fixed-point vertex stage") |
 | `SHAPOGFX3D_TEXTURE` | 1 | Texture and environment mapping |
 | `SHAPOGFX3D_GOURAUD` | 1 | Gouraud shading; 0 selects flat shading |
 | `SHAPOGFX3D_BLEND` | 1 | Translucency |
@@ -636,6 +637,52 @@ vertices, not correctness.
 
 If the arena is too small for the fixed part, `init()` leaves the renderer
 uninitialized. Overflowing buffers drop the excess for the current frame.
+
+### Fixed-point vertex stage (`SHAPOGFX3D_FIXED_POINT`)
+
+The pipeline from a vertex to a span record is float by default: the current
+matrix and the projection, lighting, the perspective divide, and the plane
+setup of every triangle, line and point (Cramer's rule), plus the evaluation of
+those planes and edge slopes for every span in `render()`. On a Cortex-M0+ or
+another core without an FPU every one of those operations is a library call of
+50 to 100 cycles, and a kite of two triangles was measured at 60 us.
+
+With `SHAPOGFX3D_FIXED_POINT=1` all of it is integer. The public API does not
+change: positions, matrices and materials stay float, and existing scenes
+compile and draw as they are. What changes is where the conversion happens --
+once, at the boundary:
+
+- The current matrix is converted to fixed point (rotation and scale Q18,
+  translation 16.16) when it changes, not per vertex (`refreshFixed()`; every
+  matrix call marks it dirty). The projection likewise, as the few numbers the
+  perspective or orthographic mapping needs (a focal length in 8.8 px, the
+  screen center, `m[10]` and `m[14]`); a matrix set any other way goes through
+  a Q18 4x4 path. Lights are converted when enabled, material colors once per
+  primitive.
+- A vertex is converted when it is fetched (three float-to-int conversions),
+  transformed with 32x32 -> 64 multiplies into 16.16 view space, and projected
+  with one division: 1/w comes from a normalized reciprocal (a 32-bit hardware
+  division for 16 bits, then Newton steps), which also serves the plane setup,
+  where the determinant's reciprocal is shared by every gradient of the
+  triangle. Screen coordinates are 16.16 px, depth 8.24, colors 8.8.
+- Records hold integer coordinates and planes. A plane is stored as its value
+  at the primitive's reference point (the top vertex, or a line's first end)
+  plus its two per-pixel gradients, and a span evaluates it with two 64-bit
+  products; the constant-at-origin form of the float path would not fit an
+  integer for off-screen vertices.
+- Texture coordinates follow: `(u/w, v/w)` in Q12, `1/w` in Q26, divided per
+  span end (perspective level 1) or per sub-span (level 2) with the same
+  reciprocal.
+
+Limits the float path does not have: view-space coordinates within +-32767
+model units; rotation and scale entries within +-2048; screen coordinates are
+clamped to +-8191 px (a triangle with a vertex far off screen bends slightly
+where it crosses the edge; the float path allows 1e8); texture coordinates
+within +-30000 texels. The picture is not pixel-identical to the float path.
+Measured on the same scenes, one 240x240 frame of a game differs in 90 pixels
+on average (worst 811) and a lit, textured, translucent test scene in 7% of its
+pixels, almost all by one shading step; both look the same. The test suite
+passes in either build.
 
 ## Rendering pipeline
 

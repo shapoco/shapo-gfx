@@ -87,6 +87,27 @@
 #define SHAPOGFX3D_UNLIT 0
 #endif
 
+// Fixed-point vertex stage and primitive setup, for cores without an FPU.
+// The public API is unchanged -- positions, matrices and materials stay
+// float -- but the current matrix and the projection are converted to fixed
+// point once when they change, a vertex once when it is fetched, and
+// everything from there to the span records is integer arithmetic: 32x32
+// -> 64 multiplies and a normalized-reciprocal division (one 32-bit
+// hardware division plus Newton steps). The per-pixel loops were integer
+// already. The records change layout (integer coordinates and planes), so
+// the span builders follow.
+//
+// Limits that the float path does not have: view-space coordinates within
+// +-32767 model units, rotation and scale entries of the current matrix
+// within +-2048, screen coordinates clamped to +-8191 pixels (a triangle
+// with a vertex far off screen bends slightly at the screen edge; the float
+// path allows 1e8), texture coordinates within +-30000 texels. Pictures are
+// not pixel-identical to the float path: expect a few pixels per thousand
+// to differ along edges.
+#ifndef SHAPOGFX3D_FIXED_POINT
+#define SHAPOGFX3D_FIXED_POINT 0
+#endif
+
 // RP2040 / RP2350 (Pico SDK): fetch 16-bit texels through the SIO
 // interpolator (interp0 of the core that calls render()). Opt-in.
 #ifndef SHAPOGFX3D_RP2_INTERP
@@ -135,6 +156,48 @@ static_assert(PERSPECTIVE_STEP >= 2 &&
                   (PERSPECTIVE_STEP & (PERSPECTIVE_STEP - 1)) == 0,
               "SHAPOGFX3D_PERSPECTIVE_STEP must be a power of two");
 
+#if SHAPOGFX3D_FIXED_POINT
+// Formats of the fixed-point stage: screen and view-space coordinates 16.16
+// (pixels, model units), vertex colors 8.8 (0..255), 1/w Q26, u/w and v/w
+// Q12 (texels per unit), depth 8.24 as the spans want it, matrix entries
+// Q18, normals Q15, the light direction in model space Q24.
+static constexpr int FP_SHIFT = 16;
+static constexpr int32_t FP_HALF = 1 << 15;
+static constexpr int32_t SCREEN_MAX = 8191 << FP_SHIFT;
+static constexpr int COLOR_SHIFT = 8;
+static constexpr int32_t COLOR_MAX = 255 << COLOR_SHIFT;
+static constexpr int IW_SHIFT = 26;
+static constexpr int UW_SHIFT = 12;
+static constexpr int MAT_SHIFT = 18;
+static constexpr int NORMAL_SHIFT = 15;
+static constexpr int LIGHT_SHIFT = 24;
+static constexpr int32_t GRAD_MAX = 1 << 30;   // |plane gradient|, any format
+static constexpr int32_t SLOPE_MAX = 1 << 30;  // |edge slope|, 16.16 px per px
+static constexpr int32_t TEX_MAX_FP = 30000 << FP_SHIFT;
+static constexpr int32_t Z_MAX_FP = 120 << 24;
+static constexpr int32_t Z_DELTA_MAX_FP = 64 << 24;
+static constexpr int32_t COLOR_GRAD_MAX = 16000 << FP_SHIFT;
+
+// A vertex after lighting and projection
+struct ShadedVertex {
+  int32_t sx, sy;  // screen, 16.16 px
+  int32_t z;       // NDC depth, 8.24 (smaller = nearer)
+#if SHAPOGFX3D_TEXTURE
+  int32_t u, v;  // texels, 16.16
+#endif
+  int32_t r, g, b;  // 0..255 in 8.8 (pre-multiplied by opacity for additive
+                    // blending)
+};
+// Linear function of the screen position, held as its value at the record's
+// reference point (TriHead::sx[0], sy[0]) and its per-pixel gradients, all in
+// the attribute's own format. Offsets from the reference point are 16.16 px.
+struct Plane {
+  int32_t a0, dx, dy;
+  int32_t at(int32_t ox, int32_t oy) const {
+    return a0 + (int32_t)(((int64_t)dx * ox + (int64_t)dy * oy) >> FP_SHIFT);
+  }
+};
+#else
 // A vertex after lighting and projection
 struct ShadedVertex {
   float sx, sy;  // screen coordinates
@@ -151,6 +214,7 @@ struct Plane {
   float c, dx, dy;
   float at(float x, float y) const { return c + dx * x + dy * y; }
 };
+#endif
 
 // Texture format of a triangle; selects the rasterizer together with the blend
 // mode and the flat flag: rasterFn = tex * 6 + blend * 2 + flat
@@ -199,11 +263,19 @@ struct TriHead {
   // Triangles: the vertices sorted by sy; [0] = top, [1] = middle (the bottom
   // vertex is only needed through the edge slopes). Lines: [0] = a, [1] = b.
   // Points: [0] = top-left pixel.
+#if SHAPOGFX3D_FIXED_POINT
+  int32_t sx[2], sy[2];  // 16.16 px (points: whole pixels << 16)
+  // Triangles: dx/dy of the edges top->middle, middle->bottom, top->bottom
+  // (0 for horizontal edges), 16.16 px per px. Lines: [0] = dx/dy (0 when dy
+  // is 0). Points: [0] = size in pixels.
+  int32_t slope[3];
+#else
   float sx[2], sy[2];
   // Triangles: dx/dy of the edges top->middle, middle->bottom, top->bottom
   // (0 for horizontal edges). Lines: [0] = 1/dx, [1] = 1/dy (0 when the
   // difference is 0). Points: [0] = size in pixels.
   float slope[3];
+#endif
   const Material *mat;
   int32_t sortKey;     // ascending = farther first
   int16_t yMin, yMax;  // range of scanlines crossed (inclusive)
@@ -288,8 +360,13 @@ struct Span {
   uint8_t lay;  // LayerId of the primitive (see fragNearer())
 #if SHAPOGFX3D_TEXTURE
 #if SHAPOGFX3D_PERSPECTIVE == 2
+#if SHAPOGFX3D_FIXED_POINT
+  int32_t uw, vw, iw;  // (u/w, v/w) Q12, 1/w Q26
+  int32_t duw, dvw, diw;
+#else
   float uw, vw, iw;  // (u/w, v/w, 1/w)
   float duw, dvw, diw;
+#endif
 #else
   int32_t u, v;  // texels, 16.16 fixed point
   int32_t du, dv;
@@ -307,16 +384,26 @@ struct StackEntry {
 // Direct-mapped cache of transformed vertices, reused within putPrimitive()
 struct CachedVertex {
   ShadedVertex sv;
+#if SHAPOGFX3D_FIXED_POINT
+  int32_t invW;   // 1/w, Q26
+  int32_t viewZ;  // 16.16
+#else
   float invW;
   float viewZ;
+#endif
   uint16_t tag;  // vertex index (NONE = empty)
   bool ok;  // false: in front of the near plane (the whole triangle is dropped)
 };
 
 // Vertex of a point or line: view-space position and unlit color (0..255)
 struct UnlitVertex {
+#if SHAPOGFX3D_FIXED_POINT
+  int32_t vx, vy, vz;  // 16.16
+  int32_t r, g, b;     // 8.8
+#else
   vec3f view;
   float r, g, b;
+#endif
 };
 
 // Per-primitive constants of the vertex stage
@@ -331,6 +418,13 @@ struct PrimSetup {
   vec3f lightModel;  // light direction (towards the light) in model space,
                      // scaled so that dot(normal, lightModel) is the diffuse
                      // factor; valid when lit && !viewNormal
+#if SHAPOGFX3D_FIXED_POINT
+  int32_t lightModelQ[3];  // lightModel, Q24
+  int32_t amb[3], dif[3];  // material colors, 8.8
+  int32_t alpha256;        // opacity, 0..256
+  int32_t texWq, texHq;    // texture size in texels (integers)
+  bool vertexColor, add;
+#endif
 };
 
 static constexpr int STACK_DEPTH = SHAPOGFX3D_STACK_DEPTH;
@@ -394,6 +488,113 @@ static inline int32_t floatSortKey(float f) {
   std::memcpy(&i, &f, sizeof(i));
   return i ^ (int32_t)(((uint32_t)(i >> 31)) >> 1);
 }
+
+#if SHAPOGFX3D_FIXED_POINT
+// --- Fixed-point helpers ----------------------------------------------------
+
+// float -> fixed with `shift` fraction bits, saturating; NaN maps to 0
+static inline int32_t fToFix(float v, int shift, int32_t maxAbs) {
+  const float s = v * (float)((int64_t)1 << shift);
+  const float lim = (float)maxAbs;
+  if (s != s) return 0;
+  if (s <= -lim) return -maxAbs;
+  if (s >= lim) return maxAbs;
+  return (int32_t)s;
+}
+static inline int32_t clampFix(int64_t v, int32_t maxAbs) {
+  return v < -maxAbs ? -maxAbs : (v > maxAbs ? maxAbs : (int32_t)v);
+}
+static inline int32_t clampColorFP(int32_t v) {
+  return v < 0 ? 0 : (v > COLOR_MAX ? COLOR_MAX : v);
+}
+static inline int clz64(uint64_t v) { return __builtin_clzll(v); }
+
+// ~2^62 / x for x in [2^31, 2^32): a 32-bit division gives the first 16 bits
+// and two Newton steps the rest (about 30 good bits)
+static inline uint32_t rcpNorm(uint32_t x) {
+  uint64_t r = (uint64_t)(0xFFFFFFFFu / (x >> 16)) << 14;
+  for (int i = 0; i < 2; i++) {
+    const int64_t e = (int64_t)(((uint64_t)1 << 62) - (uint64_t)x * r);
+    r = (uint64_t)((int64_t)r + (((int64_t)(r >> 8) * (e >> 24)) >> 30));
+  }
+  return r > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)r;
+}
+
+// A divisor as a normalized reciprocal, so that several dividends can share
+// the division: 1 / den ~= rcp * 2^(ds - 94)
+struct Rcp {
+  uint32_t rcp;
+  int ds;
+  bool neg, zero;
+};
+static inline Rcp makeRcp(int64_t den) {
+  Rcp r;
+  r.zero = (den == 0);
+  r.neg = den < 0;
+  if (r.zero) {
+    r.rcp = 0;
+    r.ds = 0;
+    return r;
+  }
+  const uint64_t u = r.neg ? (uint64_t)0 - (uint64_t)den : (uint64_t)den;
+  r.ds = clz64(u);
+  r.rcp = rcpNorm((uint32_t)((u << r.ds) >> 32));
+  return r;
+}
+// num / den * 2^shift, saturating at +-maxAbs
+static inline int32_t mulRcp(int64_t num, const Rcp &d, int shift,
+                             int32_t maxAbs) {
+  if (num == 0 || d.zero) return 0;
+  const bool neg = (num < 0) != d.neg;
+  const uint64_t u = num < 0 ? (uint64_t)0 - (uint64_t)num : (uint64_t)num;
+  const int ns = clz64(u);
+  const uint64_t p = (uint64_t)(uint32_t)((u << ns) >> 32) * d.rcp;
+  const int e = d.ds - ns - 62 + shift;  // num / den * 2^shift = p * 2^e
+  uint64_t r;
+  if (e >= 64 || (e > 0 && (p >> (64 - e)) != 0)) {
+    r = (uint64_t)maxAbs;
+  } else if (e >= 0) {
+    r = p << e;
+  } else {
+    r = (-e >= 64) ? 0 : (p >> -e);
+  }
+  if (r > (uint64_t)maxAbs) r = (uint64_t)maxAbs;
+  return neg ? -(int32_t)r : (int32_t)r;
+}
+static inline int32_t divQ(int64_t num, int64_t den, int shift,
+                           int32_t maxAbs) {
+  return mulRcp(num, makeRcp(den), shift, maxAbs);
+}
+
+// Integer square root (floor), Newton from above
+static inline uint32_t isqrt32(uint32_t v) {
+  if (v < 2) return v;
+  const int bits = 32 - __builtin_clz(v);
+  uint32_t r = 1u << ((bits + 1) >> 1);
+  for (;;) {
+    const uint32_t nr = (r + v / r) >> 1;
+    if (nr >= r) return r;
+    r = nr;
+  }
+}
+// A vector of any length (components up to 2^30) to a Q15 unit vector
+static inline void normalizeQ15(int64_t x, int64_t y, int64_t z,
+                                int32_t out[3]) {
+  const uint64_t len2 = (uint64_t)(x * x + y * y + z * z);
+  if (len2 == 0) {
+    out[0] = out[1] = 0;
+    out[2] = 1 << NORMAL_SHIFT;
+    return;
+  }
+  int sh = 0;
+  while ((len2 >> sh) >= ((uint64_t)1 << 32)) sh += 2;
+  const int64_t len = (int64_t)isqrt32((uint32_t)(len2 >> sh)) << (sh / 2);
+  const Rcp r = makeRcp(len);
+  out[0] = mulRcp(x, r, NORMAL_SHIFT, 1 << NORMAL_SHIFT);
+  out[1] = mulRcp(y, r, NORMAL_SHIFT, 1 << NORMAL_SHIFT);
+  out[2] = mulRcp(z, r, NORMAL_SHIFT, 1 << NORMAL_SHIFT);
+}
+#endif  // SHAPOGFX3D_FIXED_POINT
 
 // Texture format usable by the rasterizer; NONE for disabled formats
 static inline TexFmt texFmtOf(const Texture *tex) {
@@ -529,6 +730,7 @@ void Graphics3D::beginScene() {
   layerFlags_ = 0;
   layerOpen_ = false;
   cur_ = mat4f::identity();
+  curQDirty_ = true;
 }
 
 void Graphics3D::endScene() { layerOpen_ = false; }
@@ -577,30 +779,43 @@ uint8_t *Graphics3D::allocRecord(size_t size) {
   return rec;
 }
 
-void Graphics3D::loadIdentity() { cur_ = mat4f::identity(); }
+void Graphics3D::loadIdentity() {
+  cur_ = mat4f::identity();
+  curQDirty_ = true;
+}
 
 void Graphics3D::translate(const vec3f &v) {
   cur_ = cur_ * mat4f::translation(v.x, v.y, v.z);
+  curQDirty_ = true;
 }
 void Graphics3D::translate(float x, float y, float z) {
   cur_ = cur_ * mat4f::translation(x, y, z);
+  curQDirty_ = true;
 }
 void Graphics3D::rotate(float angle, const vec3f &axis) {
   cur_ = cur_ * mat4f::rotation(angle, axis);
+  curQDirty_ = true;
 }
 void Graphics3D::rotate(float angle, float x, float y, float z) {
   cur_ = cur_ * mat4f::rotation(angle, {x, y, z});
+  curQDirty_ = true;
 }
 void Graphics3D::scale(const vec3f &v) {
   cur_ = cur_ * mat4f::scaling(v.x, v.y, v.z);
+  curQDirty_ = true;
 }
 void Graphics3D::scale(float x, float y, float z) {
   cur_ = cur_ * mat4f::scaling(x, y, z);
+  curQDirty_ = true;
 }
-void Graphics3D::transform(const mat4f &m) { cur_ = cur_ * m; }
+void Graphics3D::transform(const mat4f &m) {
+  cur_ = cur_ * m;
+  curQDirty_ = true;
+}
 void Graphics3D::lookAt(const vec3f &eye, const vec3f &target,
                         const vec3f &up) {
   cur_ = cur_ * mat4f::lookAt(eye, target, up);
+  curQDirty_ = true;
 }
 
 bool Graphics3D::pushState() {
@@ -615,6 +830,7 @@ void Graphics3D::popState() {
   if (!stack_ || stackTop_ <= 0) return;
   stackTop_--;
   cur_ = stack_[stackTop_].matrix;
+  curQDirty_ = true;
   curMat_ = stack_[stackTop_].material;
 }
 
@@ -624,6 +840,14 @@ void Graphics3D::enableParallelLight(const vec3f &dir, const colorf &col) {
   lightEnabled_ = true;
   lightDir_ = normalize(cur_.transformDir(dir));
   lightCol_ = col;
+#if SHAPOGFX3D_FIXED_POINT
+  lightQ_.dir[0] = fToFix(lightDir_.x, NORMAL_SHIFT, 1 << NORMAL_SHIFT);
+  lightQ_.dir[1] = fToFix(lightDir_.y, NORMAL_SHIFT, 1 << NORMAL_SHIFT);
+  lightQ_.dir[2] = fToFix(lightDir_.z, NORMAL_SHIFT, 1 << NORMAL_SHIFT);
+  lightQ_.col[0] = fToFix(col.r, COLOR_SHIFT, 1 << 15);
+  lightQ_.col[1] = fToFix(col.g, COLOR_SHIFT, 1 << 15);
+  lightQ_.col[2] = fToFix(col.b, COLOR_SHIFT, 1 << 15);
+#endif
 }
 
 void Graphics3D::disableParallelLight() { lightEnabled_ = false; }
@@ -631,6 +855,11 @@ void Graphics3D::disableParallelLight() { lightEnabled_ = false; }
 void Graphics3D::enableEnvironmentLight(const colorf &col) {
   envEnabled_ = true;
   envCol_ = col;
+#if SHAPOGFX3D_FIXED_POINT
+  lightQ_.env[0] = fToFix(col.r, COLOR_SHIFT, 1 << 15);
+  lightQ_.env[1] = fToFix(col.g, COLOR_SHIFT, 1 << 15);
+  lightQ_.env[2] = fToFix(col.b, COLOR_SHIFT, 1 << 15);
+#endif
 }
 
 void Graphics3D::disableEnvironmentLight() { envEnabled_ = false; }
@@ -647,6 +876,7 @@ void Graphics3D::setPerspectiveProjection(float fovY, float aspect, float zNear,
   proj_ = mat4f::perspective(fovY, aspect, zNear, zFar);
   projKind_ = ProjKind::PERSPECTIVE;
   zNear_ = zNear;
+  projQDirty_ = true;
 }
 
 void Graphics3D::setOrthographicProjection(float left, float right,
@@ -655,10 +885,141 @@ void Graphics3D::setOrthographicProjection(float left, float right,
   proj_ = mat4f::orthographic(left, right, bottom, top, zNear, zFar);
   projKind_ = ProjKind::ORTHOGRAPHIC;
   zNear_ = zNear;
+  projQDirty_ = true;
 }
 
 // ---------------------------------------------------------------------------
 // Vertex processing (transform + lighting + projection)
+
+#if SHAPOGFX3D_FIXED_POINT
+
+// Bring the fixed-point copies of the current matrix and the projection up
+// to date. The matrix changes with every transform call, the projection with
+// the setters; both are converted once, not per vertex.
+void Graphics3D::refreshFixed() {
+  if (curQDirty_) {
+    for (int c = 0; c < 3; c++) {
+      for (int r = 0; r < 3; r++) {
+        curQ_.r[c * 3 + r] = fToFix(cur_.m[c * 4 + r], MAT_SHIFT, INT32_MAX);
+      }
+    }
+    for (int r = 0; r < 3; r++) {
+      curQ_.t[r] = fToFix(cur_.m[12 + r], FP_SHIFT, INT32_MAX);
+    }
+    curQDirty_ = false;
+  }
+  if (projQDirty_) {
+    ProjQ &p = projQ_;
+    const float hw = screenW_ * 0.5f, hh = screenH_ * 0.5f;
+    p.kind = (uint8_t)projKind_;
+    p.zNear = fToFix(zNear_, FP_SHIFT, INT32_MAX);
+    p.cx = (int32_t)screenW_ << (FP_SHIFT - 1);
+    p.cy = (int32_t)screenH_ << (FP_SHIFT - 1);
+    // Perspective: sx = cx + (x / w) * m[0] * (W / 2); z = m[10] + m[14] / w
+    p.fx = fToFix(proj_.m[0] * hw, 8, INT32_MAX);
+    p.fy = fToFix(proj_.m[5] * hh, 8, INT32_MAX);
+    p.zA = fToFix(proj_.m[10], 24, INT32_MAX);
+    p.zB = fToFix(proj_.m[14], FP_SHIFT, INT32_MAX);
+    // Orthographic: sx = x * m[0] * (W / 2) + (m[12] / 2 + 1 / 2) * W
+    p.sxScale = fToFix(proj_.m[0] * hw, 16, INT32_MAX);
+    p.syScale = fToFix(-proj_.m[5] * hh, 16, INT32_MAX);
+    p.sxOff =
+        fToFix((proj_.m[12] * 0.5f + 0.5f) * screenW_, FP_SHIFT, INT32_MAX);
+    p.syOff =
+        fToFix((0.5f - proj_.m[13] * 0.5f) * screenH_, FP_SHIFT, INT32_MAX);
+    p.zScale = fToFix(proj_.m[10], 24, INT32_MAX);
+    p.zOff = fToFix(proj_.m[14], 24, INT32_MAX);
+    for (int i = 0; i < 16; i++) {
+      p.m[i] = fToFix(proj_.m[i], MAT_SHIFT, INT32_MAX);
+    }
+    projQDirty_ = false;
+  }
+}
+
+// Project a view-space point (16.16) to the screen (16.16 px), the NDC depth
+// (8.24) and 1/w (Q26). Returns false when w <= 0.
+bool Graphics3D::projectQ(int32_t vx, int32_t vy, int32_t vz, ShadedVertex &sv,
+                          int32_t &invW) const {
+  const ProjQ &p = projQ_;
+  switch ((ProjKind)p.kind) {
+    case ProjKind::PERSPECTIVE: {
+      const int32_t w = -vz;
+      if (w <= 0) return false;
+      invW = divQ(1, w, IW_SHIFT + FP_SHIFT, INT32_MAX);  // 2^26 / (w units)
+      const int64_t xr = clampFix(((int64_t)vx * invW) >> IW_SHIFT, 1 << 27);
+      const int64_t yr = clampFix(((int64_t)vy * invW) >> IW_SHIFT, 1 << 27);
+      sv.sx = clampFix(p.cx + ((xr * p.fx) >> 8), SCREEN_MAX);
+      sv.sy = clampFix(p.cy - ((yr * p.fy) >> 8), SCREEN_MAX);
+      sv.z = clampFix((int64_t)p.zA + (((int64_t)p.zB * invW) >>
+                                       (FP_SHIFT + IW_SHIFT - 24)),
+                      Z_MAX_FP);
+      return true;
+    }
+    case ProjKind::ORTHOGRAPHIC: {
+      sv.sx = clampFix((((int64_t)vx * p.sxScale) >> 16) + p.sxOff, SCREEN_MAX);
+      sv.sy = clampFix((((int64_t)vy * p.syScale) >> 16) + p.syOff, SCREEN_MAX);
+      sv.z =
+          clampFix((((int64_t)vz * p.zScale) >> FP_SHIFT) + p.zOff, Z_MAX_FP);
+      invW = 1 << IW_SHIFT;
+      return true;
+    }
+    default: {
+      // Any matrix: Q18 entries on a 16.16 point
+      auto row = [&](int r) -> int64_t {
+        return (((int64_t)p.m[r] * vx + (int64_t)p.m[4 + r] * vy +
+                 (int64_t)p.m[8 + r] * vz) >>
+                MAT_SHIFT) +
+               ((int64_t)p.m[12 + r] >> (MAT_SHIFT - FP_SHIFT));
+      };
+      const int64_t cx = row(0), cy = row(1), cz = row(2), w = row(3);
+      if (w <= 0) return false;
+      const int32_t rx = divQ(cx, w, FP_SHIFT, 1 << 27);
+      const int32_t ry = divQ(cy, w, FP_SHIFT, 1 << 27);
+      sv.sx = clampFix(p.cx + (((int64_t)rx * screenW_) >> 1), SCREEN_MAX);
+      sv.sy = clampFix(p.cy - (((int64_t)ry * screenH_) >> 1), SCREEN_MAX);
+      sv.z = divQ(cz, w, 24, Z_MAX_FP);
+      invW = divQ(1, w, IW_SHIFT + FP_SHIFT, INT32_MAX);
+      return true;
+    }
+  }
+}
+
+// The current matrix (Q18 / 16.16) on a float position -> view space 16.16
+static inline void transformQ(const MatQ &m, const vec3f &pos, int32_t &vx,
+                              int32_t &vy, int32_t &vz) {
+  const int32_t px = fToFix(pos.x, FP_SHIFT, INT32_MAX);
+  const int32_t py = fToFix(pos.y, FP_SHIFT, INT32_MAX);
+  const int32_t pz = fToFix(pos.z, FP_SHIFT, INT32_MAX);
+  vx = (int32_t)((((int64_t)m.r[0] * px + (int64_t)m.r[3] * py +
+                   (int64_t)m.r[6] * pz) >>
+                  MAT_SHIFT) +
+                 m.t[0]);
+  vy = (int32_t)((((int64_t)m.r[1] * px + (int64_t)m.r[4] * py +
+                   (int64_t)m.r[7] * pz) >>
+                  MAT_SHIFT) +
+                 m.t[1]);
+  vz = (int32_t)((((int64_t)m.r[2] * px + (int64_t)m.r[5] * py +
+                   (int64_t)m.r[8] * pz) >>
+                  MAT_SHIFT) +
+                 m.t[2]);
+}
+
+// A material color (0..1, Q8) times the vertex color, as 8.8 of 0..255
+static inline int32_t vertexColorQ(int32_t unitQ8, uint32_t c8, bool useVertex,
+                                   bool add, int32_t alpha256) {
+  int32_t r = unitQ8 * 255;  // Q8 of 0..1 -> 8.8 of 0..255
+  if (useVertex) r = (int32_t)(((int64_t)r * c8 * 257) >> 16);  // x c / 255
+  if (add) r = (int32_t)(((int64_t)r * alpha256) >> 8);
+  return clampColorFP(r);
+}
+
+#else
+void Graphics3D::refreshFixed() {}
+bool Graphics3D::projectQ(int32_t, int32_t, int32_t, ShadedVertex &,
+                          int32_t &) const {
+  return false;
+}
+#endif  // SHAPOGFX3D_FIXED_POINT
 
 // Project a view-space point to the screen. Returns false when w <= 0.
 // The projection matrices built by the two setters are sparse, so only their
@@ -718,6 +1079,104 @@ static bool lightToModelSpace(const mat4f &m, const vec3f &lightDirView,
   return true;
 }
 
+#if SHAPOGFX3D_FIXED_POINT
+void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
+                             CachedVertex &out) const {
+  out.ok = false;
+  int32_t vx, vy, vz;
+  transformQ(curQ_, in.position, vx, vy, vz);
+  // Triangles crossing or in front of the near plane are dropped
+  if (vz > -projQ_.zNear) return;
+  ShadedVertex &sv = out.sv;
+  if (!projectQ(vx, vy, vz, sv, out.invW)) return;
+
+  const int32_t nq[3] = {fToFix(in.normal.x, NORMAL_SHIFT, 1 << 18),
+                         fToFix(in.normal.y, NORMAL_SHIFT, 1 << 18),
+                         fToFix(in.normal.z, NORMAL_SHIFT, 1 << 18)};
+  int32_t d = 0;  // diffuse factor, Q15
+  int32_t n[3] = {0, 0, 0};
+  if (ps.viewNormal) {
+    const MatQ &m = curQ_;
+    normalizeQ15(((int64_t)m.r[0] * nq[0] + (int64_t)m.r[3] * nq[1] +
+                  (int64_t)m.r[6] * nq[2]) >>
+                     MAT_SHIFT,
+                 ((int64_t)m.r[1] * nq[0] + (int64_t)m.r[4] * nq[1] +
+                  (int64_t)m.r[7] * nq[2]) >>
+                     MAT_SHIFT,
+                 ((int64_t)m.r[2] * nq[0] + (int64_t)m.r[5] * nq[1] +
+                  (int64_t)m.r[8] * nq[2]) >>
+                     MAT_SHIFT,
+                 n);
+    if (lightEnabled_) {
+      d = -(int32_t)(((int64_t)n[0] * lightQ_.dir[0] +
+                      (int64_t)n[1] * lightQ_.dir[1] +
+                      (int64_t)n[2] * lightQ_.dir[2]) >>
+                     NORMAL_SHIFT);
+    }
+  } else if (lightEnabled_) {
+    d = (int32_t)(((int64_t)nq[0] * ps.lightModelQ[0] +
+                   (int64_t)nq[1] * ps.lightModelQ[1] +
+                   (int64_t)nq[2] * ps.lightModelQ[2]) >>
+                  LIGHT_SHIFT);
+  }
+
+#if SHAPOGFX3D_TEXTURE
+  if (ps.tex) {
+    if (ps.envMap) {
+      // Environment map UV from the view-space normal: (n + 1) / 2 in Q16
+      // times the texture size is 16.16 texels
+      sv.u = clampFix((int64_t)(n[0] + (1 << NORMAL_SHIFT)) * ps.texWq,
+                      TEX_MAX_FP);
+      sv.v = clampFix((int64_t)((1 << NORMAL_SHIFT) - n[1]) * ps.texHq,
+                      TEX_MAX_FP);
+    } else {
+      sv.u = clampFix((int64_t)fToFix(in.uv.x, FP_SHIFT, 1 << 30) * ps.texWq,
+                      TEX_MAX_FP);
+      sv.v = clampFix((int64_t)fToFix(in.uv.y, FP_SHIFT, 1 << 30) * ps.texHq,
+                      TEX_MAX_FP);
+    }
+  } else {
+    sv.u = sv.v = 0;
+  }
+#endif
+
+  // Gouraud shading: lighting is evaluated per vertex. Colors are Q8 of
+  // 0..1 here and become 8.8 of 0..255 in vertexColorQ().
+  int32_t r, g, b;
+  if (ps.lit) {
+    r = g = b = 0;
+    if (envEnabled_) {
+      r += (ps.amb[0] * lightQ_.env[0]) >> COLOR_SHIFT;
+      g += (ps.amb[1] * lightQ_.env[1]) >> COLOR_SHIFT;
+      b += (ps.amb[2] * lightQ_.env[2]) >> COLOR_SHIFT;
+    }
+    if (lightEnabled_ && d > 0) {
+      r += (int32_t)((((int64_t)ps.dif[0] * lightQ_.col[0]) >> COLOR_SHIFT) *
+                         d >>
+                     NORMAL_SHIFT);
+      g += (int32_t)((((int64_t)ps.dif[1] * lightQ_.col[1]) >> COLOR_SHIFT) *
+                         d >>
+                     NORMAL_SHIFT);
+      b += (int32_t)((((int64_t)ps.dif[2] * lightQ_.col[2]) >> COLOR_SHIFT) *
+                         d >>
+                     NORMAL_SHIFT);
+    }
+  } else {
+    r = ps.dif[0];
+    g = ps.dif[1];
+    b = ps.dif[2];
+  }
+  sv.r = vertexColorQ(r, gfx2d::colorR(in.color), ps.vertexColor, ps.add,
+                      ps.alpha256);
+  sv.g = vertexColorQ(g, gfx2d::colorG(in.color), ps.vertexColor, ps.add,
+                      ps.alpha256);
+  sv.b = vertexColorQ(b, gfx2d::colorB(in.color), ps.vertexColor, ps.add,
+                      ps.alpha256);
+
+  out.viewZ = vz;
+  out.ok = true;
+}
+#else
 void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
                              CachedVertex &out) const {
   out.ok = false;
@@ -791,6 +1250,7 @@ void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
   out.viewZ = viewPos.z;
   out.ok = true;
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Triangle setup
@@ -844,6 +1304,161 @@ static inline void makeRecord(uint8_t *rec, const TriHead &h, bool depth,
   makeRecG<false>(rec, h, smooth, tex, fill);
 }
 
+#if SHAPOGFX3D_FIXED_POINT
+void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
+                              const CachedVertex &c, const Material *mat,
+                              const Texture *tex) {
+  if (!a.ok || !b.ok || !c.ok) return;
+
+  // Back-face culling (screen y points down, so front-facing = negative area)
+  const int64_t area2 = (int64_t)(b.sv.sx - a.sv.sx) * (c.sv.sy - a.sv.sy) -
+                        (int64_t)(c.sv.sx - a.sv.sx) * (b.sv.sy - a.sv.sy);
+  if (area2 == 0) return;
+  if (area2 > 0 && !(mat->flags & MaterialFlags::DOUBLE_SIDED)) return;
+
+  // Sort the vertices by screen y
+  const CachedVertex *cv[3] = {&a, &b, &c};
+  if (cv[1]->sv.sy < cv[0]->sv.sy) std::swap(cv[0], cv[1]);
+  if (cv[2]->sv.sy < cv[1]->sv.sy) std::swap(cv[1], cv[2]);
+  if (cv[1]->sv.sy < cv[0]->sv.sy) std::swap(cv[0], cv[1]);
+  const ShadedVertex &v0 = cv[0]->sv, &v1 = cv[1]->sv, &v2 = cv[2]->sv;
+
+  // Rows whose centers the triangle covers: ceil(y0 - 0.5) .. floor(y2 - 0.5)
+  int yMin = (v0.sy - FP_HALF + 0xFFFF) >> FP_SHIFT;
+  int yMax = (v2.sy - FP_HALF) >> FP_SHIFT;
+  yMin = std::max(yMin, 0);
+  yMax = std::min(yMax, (int)screenH_ - 1);
+  if (yMin > yMax) return;
+
+  // Attribute planes (Cramer's rule on the sorted vertices). The screen
+  // deltas are 16.16 px, so a gradient per pixel needs the extra shift.
+  const int32_t x0 = v0.sx, y0 = v0.sy;
+  const int64_t x10 = (int64_t)v1.sx - x0, y10 = (int64_t)v1.sy - y0;
+  const int64_t x20 = (int64_t)v2.sx - x0, y20 = (int64_t)v2.sy - y0;
+  const Rcp rd = makeRcp(x10 * y20 - x20 * y10);  // never 0 (area2 != 0)
+  auto plane = [&](int32_t a0, int32_t a1, int32_t a2, int32_t gradMax) {
+    const int64_t d1 = (int64_t)a1 - a0, d2 = (int64_t)a2 - a0;
+    return Plane{a0, mulRcp(d1 * y20 - d2 * y10, rd, FP_SHIFT, gradMax),
+                 mulRcp(d2 * x10 - d1 * x20, rd, FP_SHIFT, gradMax)};
+  };
+
+  TriHead h;
+  h.sx[0] = x0;
+  h.sy[0] = y0;
+  h.sx[1] = v1.sx;
+  h.sy[1] = v1.sy;
+  const int64_t y21 = (int64_t)v2.sy - v1.sy;
+  h.slope[0] = (y10 != 0) ? divQ(x10, y10, FP_SHIFT, SLOPE_MAX) : 0;
+  h.slope[1] =
+      (y21 != 0) ? divQ((int64_t)v2.sx - v1.sx, y21, FP_SHIFT, SLOPE_MAX) : 0;
+  h.slope[2] = divQ(x20, y20, FP_SHIFT, SLOPE_MAX);  // y20 > 0 (area2 != 0)
+
+  uint8_t flags = 0;
+  // The long edge is on the left when the middle vertex lies to its right
+  if (x0 + (((int64_t)h.slope[2] * y10) >> FP_SHIFT) < v1.sx) {
+    flags |= TriFlags::LEFT_LONG;
+  }
+
+  // Interpolated color only where the three vertex colors differ; the record
+  // of a flat triangle holds one color instead of three planes
+#if SHAPOGFX3D_GOURAUD
+  const bool smooth = !(v0.r == v1.r && v0.r == v2.r && v0.g == v1.g &&
+                        v0.g == v2.g && v0.b == v1.b && v0.b == v2.b);
+#else
+  const bool smooth = false;  // flat shading: the first vertex as passed in
+#endif
+  if (!smooth) flags |= TriFlags::FLAT;
+
+  const TexFmt tf = texFmtOf(tex);
+  const bool textured = (tf != TexFmt::NONE);
+  if (textured) flags |= TriFlags::TEX;
+#if SHAPOGFX3D_BLEND
+  // A texture with alpha makes the triangle translucent even in BlendMode::NONE
+  const bool texAlpha = texFmtHasAlpha(tf);
+  int blend = (int)mat->blendMode;
+  if (texAlpha && mat->blendMode == BlendMode::NONE)
+    blend = (int)BlendMode::ALPHA;
+  if (mat->blendMode == BlendMode::NONE && !texAlpha) flags |= TriFlags::OPAQUE;
+#else
+  const int blend = (int)BlendMode::NONE;
+  flags |= TriFlags::OPAQUE;  // translucency compiled out
+#endif
+
+  h.mat = mat;
+  h.sortKey = (a.viewZ >> 2) + (b.viewZ >> 2) + (c.viewZ >> 2);
+  h.yMin = (int16_t)yMin;
+  h.yMax = (int16_t)yMax;
+  h.flags = flags;
+  h.alpha64 = materialAlpha64(mat);
+  h.rasterFn =
+      (uint8_t)((int)tf * RASTER_PER_TEX + blend * 2 + (smooth ? 0 : 1));
+  h.layer = layerByte();
+
+  const bool depth = !(h.layer & LayerId::NO_DEPTH);
+  uint8_t *rec = allocRecord(TRI_REC_SIZE[recIndex(depth, smooth, textured)]);
+  if (!rec) {  // buffer overflow: drop for this frame
+    triDropped_++;
+    return;
+  }
+  const int32_t biasQ = fToFix(depthBias_, 24, 1 << 30);
+  makeRecord(rec, h, depth, smooth, textured, [&](auto &t) {
+    using R = std::remove_reference_t<decltype(t)>;
+    if constexpr (R::HAS_DEPTH) {
+      t.z = plane(clampFix((int64_t)v0.z + biasQ, Z_MAX_FP),
+                  clampFix((int64_t)v1.z + biasQ, Z_MAX_FP),
+                  clampFix((int64_t)v2.z + biasQ, Z_MAX_FP), Z_DELTA_MAX_FP);
+    }
+    if constexpr (R::SMOOTH) {  // 8.8 -> 8.16
+      t.r = plane(v0.r << 8, v1.r << 8, v2.r << 8, COLOR_GRAD_MAX);
+      t.g = plane(v0.g << 8, v1.g << 8, v2.g << 8, COLOR_GRAD_MAX);
+      t.b = plane(v0.b << 8, v1.b << 8, v2.b << 8, COLOR_GRAD_MAX);
+    } else {
+      // Flat: the color of the first vertex as passed in (before the y sort)
+      t.r = (uint8_t)((a.sv.r + 128) >> 8);
+      t.g = (uint8_t)((a.sv.g + 128) >> 8);
+      t.b = (uint8_t)((a.sv.b + 128) >> 8);
+    }
+    if constexpr (R::TEXTURED) {
+#if SHAPOGFX3D_TEXTURE
+      int32_t u[3] = {v0.u, v1.u, v2.u}, v[3] = {v0.v, v1.v, v2.v};
+      // Wrap texture coordinates per triangle to avoid fixed-point overflow
+      // (subtract the texture period below the minimum from all three
+      // vertices; relative values are unchanged). Sizes are powers of two.
+      const int wPot = 1 << gfx2d::log2Floor(tex->width);
+      const int hPot = 1 << gfx2d::log2Floor(tex->height);
+      const int32_t uOff =
+          (std::min({u[0], u[1], u[2]}) >> FP_SHIFT) & ~(wPot - 1);
+      const int32_t vOff =
+          (std::min({v[0], v[1], v[2]}) >> FP_SHIFT) & ~(hPot - 1);
+      for (int i = 0; i < 3; i++) {
+        u[i] -= uOff << FP_SHIFT;
+        v[i] -= vOff << FP_SHIFT;
+      }
+#if SHAPOGFX3D_PERSPECTIVE >= 1
+      // (u/w, v/w) are linear in screen space: 16.16 texels x Q26 -> Q12
+      int32_t uw[3], vw[3], iw[3];
+      for (int i = 0; i < 3; i++) {
+        uw[i] = clampFix(
+            ((int64_t)u[i] * cv[i]->invW) >> (FP_SHIFT + IW_SHIFT - UW_SHIFT),
+            INT32_MAX);
+        vw[i] = clampFix(
+            ((int64_t)v[i] * cv[i]->invW) >> (FP_SHIFT + IW_SHIFT - UW_SHIFT),
+            INT32_MAX);
+        iw[i] = cv[i]->invW;
+      }
+      t.uw = plane(uw[0], uw[1], uw[2], GRAD_MAX);
+      t.vw = plane(vw[0], vw[1], vw[2], GRAD_MAX);
+      t.iw = plane(iw[0], iw[1], iw[2], GRAD_MAX);
+#else
+      t.u = plane(u[0], u[1], u[2], COLOR_GRAD_MAX);
+      t.v = plane(v[0], v[1], v[2], COLOR_GRAD_MAX);
+#endif
+#endif  // SHAPOGFX3D_TEXTURE
+    }
+  });
+  triCount_++;
+}
+#else
 void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
                               const CachedVertex &c, const Material *mat,
                               const Texture *tex) {
@@ -984,6 +1599,7 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   });
   triCount_++;
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Points and lines
@@ -994,6 +1610,21 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 
 #if SHAPOGFX3D_UNLIT
 
+#if SHAPOGFX3D_FIXED_POINT
+void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
+                             UnlitVertex &out) const {
+  transformQ(curQ_, in.position, out.vx, out.vy, out.vz);
+  const bool useVertex = (mat->flags & MaterialFlags::VERTEX_COLOR) != 0;
+  const bool add = mat->blendMode == BlendMode::ADD;
+  const int32_t alpha256 = fToFix(clamp01(mat->diffuse.a), 8, 256);
+  out.r = vertexColorQ(fToFix(mat->diffuse.r, COLOR_SHIFT, 1 << 15),
+                       gfx2d::colorR(in.color), useVertex, add, alpha256);
+  out.g = vertexColorQ(fToFix(mat->diffuse.g, COLOR_SHIFT, 1 << 15),
+                       gfx2d::colorG(in.color), useVertex, add, alpha256);
+  out.b = vertexColorQ(fToFix(mat->diffuse.b, COLOR_SHIFT, 1 << 15),
+                       gfx2d::colorB(in.color), useVertex, add, alpha256);
+}
+#else
 void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
                              UnlitVertex &out) const {
   out.view = cur_.transformPoint(in.position);
@@ -1011,6 +1642,7 @@ void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
   out.g = clamp01(g) * 255.0f;
   out.b = clamp01(b) * 255.0f;
 }
+#endif
 
 static inline uint8_t unlitRasterFn(const Material *mat, bool flat) {
 #if SHAPOGFX3D_BLEND
@@ -1033,8 +1665,110 @@ static inline uint8_t opaqueFlag(const Material *mat) {
 #endif
 }
 
+#if !SHAPOGFX3D_FIXED_POINT
 static inline Plane constPlane(float v) { return {v, 0.0f, 0.0f}; }
+#endif
 
+#if SHAPOGFX3D_FIXED_POINT
+void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
+  // Clip against the near plane (visible: z <= -zNear)
+  const int32_t zn = -projQ_.zNear;
+  const bool aIn = a.vz <= zn, bIn = b.vz <= zn;
+  if (!aIn && !bIn) return;
+  if (aIn != bIn) {
+    const int32_t tt = divQ((int64_t)zn - a.vz, (int64_t)b.vz - a.vz, FP_SHIFT,
+                            1 << FP_SHIFT);  // Q16, 0..1
+    auto lerpQ = [&](int32_t p, int32_t q) {
+      return (int32_t)(p + ((((int64_t)q - p) * tt) >> FP_SHIFT));
+    };
+    UnlitVertex c;
+    c.vx = lerpQ(a.vx, b.vx);
+    c.vy = lerpQ(a.vy, b.vy);
+    c.vz = lerpQ(a.vz, b.vz);
+    c.r = lerpQ(a.r, b.r);
+    c.g = lerpQ(a.g, b.g);
+    c.b = lerpQ(a.b, b.b);
+    (aIn ? b : a) = c;
+  }
+  ShadedVertex sa, sb;
+  int32_t invW;
+  if (!projectQ(a.vx, a.vy, a.vz, sa, invW)) return;
+  if (!projectQ(b.vx, b.vy, b.vz, sb, invW)) return;
+  const int32_t biasQ = fToFix(depthBias_, 24, 1 << 30);
+  const int32_t az = clampFix((int64_t)sa.z + biasQ, Z_MAX_FP);
+  const int32_t bz = clampFix((int64_t)sb.z + biasQ, Z_MAX_FP);
+  const int32_t ax = sa.sx, ay = sa.sy, bx = sb.sx, by = sb.sy;
+
+  // Rows containing the end points; nothing to do when fully off screen
+  int yMin = std::min(ay, by) >> FP_SHIFT;
+  int yMax = std::max(ay, by) >> FP_SHIFT;
+  yMin = std::max(yMin, 0);
+  yMax = std::min(yMax, (int)screenH_ - 1);
+  if (yMin > yMax) return;
+  if (std::max(ax, bx) < 0 ||
+      std::min(ax, bx) >= ((int32_t)screenW_ << FP_SHIFT))
+    return;
+
+  TriHead h;
+  h.sx[0] = ax;
+  h.sy[0] = ay;
+  h.sx[1] = bx;
+  h.sy[1] = by;
+  const int64_t dx = (int64_t)bx - ax, dy = (int64_t)by - ay;
+  h.slope[0] = (dy != 0) ? divQ(dx, dy, FP_SHIFT, SLOPE_MAX) : 0;  // dx / dy
+  h.slope[1] = 0;
+  h.slope[2] = 0;
+  // Attributes vary along the major axis: per row for steep lines, per
+  // column for shallow ones (see makeLineSpan)
+  const bool steep = (dy < 0 ? -dy : dy) >= (dx < 0 ? -dx : dx);
+  auto linePlane = [&](int32_t p, int32_t q, int32_t gradMax) {
+    if (steep) {
+      return Plane{p, 0,
+                   (dy != 0) ? divQ((int64_t)q - p, dy, FP_SHIFT, gradMax) : 0};
+    }
+    return Plane{p, (dx != 0) ? divQ((int64_t)q - p, dx, FP_SHIFT, gradMax) : 0,
+                 0};
+  };
+#if SHAPOGFX3D_GOURAUD
+  const bool smooth = !(a.r == b.r && a.g == b.g && a.b == b.b);
+#else
+  const bool smooth = false;  // flat shading: the first end point
+#endif
+
+  uint8_t flags = TriFlags::LINE;
+  if (!smooth) flags |= TriFlags::FLAT;
+  flags |= opaqueFlag(mat);
+  h.mat = mat;
+  h.sortKey = (a.vz >> 1) + (b.vz >> 1);
+  h.yMin = (int16_t)yMin;
+  h.yMax = (int16_t)yMax;
+  h.flags = flags;
+  h.alpha64 = materialAlpha64(mat);
+  h.rasterFn = unlitRasterFn(mat, !smooth);
+  h.layer = layerByte();
+
+  const bool depth = !(h.layer & LayerId::NO_DEPTH);
+  uint8_t *rec = allocRecord(TRI_REC_SIZE[recIndex(depth, smooth, false)]);
+  if (!rec) {
+    triDropped_++;
+    return;
+  }
+  makeRecord(rec, h, depth, smooth, false, [&](auto &t) {
+    using R = std::remove_reference_t<decltype(t)>;
+    if constexpr (R::HAS_DEPTH) t.z = linePlane(az, bz, Z_DELTA_MAX_FP);
+    if constexpr (R::SMOOTH) {
+      t.r = linePlane(a.r << 8, b.r << 8, COLOR_GRAD_MAX);
+      t.g = linePlane(a.g << 8, b.g << 8, COLOR_GRAD_MAX);
+      t.b = linePlane(a.b << 8, b.b << 8, COLOR_GRAD_MAX);
+    } else {
+      t.r = (uint8_t)((a.r + 128) >> 8);
+      t.g = (uint8_t)((a.g + 128) >> 8);
+      t.b = (uint8_t)((a.b + 128) >> 8);
+    }
+  });
+  triCount_++;
+}
+#else
 void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
   // Clip against the near plane (visible: z <= -zNear)
   const float zn = -zNear_;
@@ -1124,7 +1858,63 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
   });
   triCount_++;
 }
+#endif
 
+#if SHAPOGFX3D_FIXED_POINT
+void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
+  if (a.vz > -projQ_.zNear) return;
+  ShadedVertex sv;
+  int32_t invW;
+  if (!projectQ(a.vx, a.vy, a.vz, sv, invW)) return;
+  const int32_t z =
+      clampFix((int64_t)sv.z + fToFix(depthBias_, 24, 1 << 30), Z_MAX_FP);
+  const int size = pointSize_;
+  // Square of `size` pixels centered on the point: floor(s - size / 2 + 0.5)
+  const int32_t half = (int32_t)size << (FP_SHIFT - 1);
+  const int x0 = (sv.sx - half + FP_HALF) >> FP_SHIFT;
+  const int y0 = (sv.sy - half + FP_HALF) >> FP_SHIFT;
+  if (x0 + size <= 0 || x0 >= (int)screenW_) return;
+  int yMin = std::max(y0, 0), yMax = std::min(y0 + size - 1, (int)screenH_ - 1);
+  if (yMin > yMax) return;
+
+  TriHead h;
+  h.sx[0] = h.sx[1] = (int32_t)x0 << FP_SHIFT;
+  h.sy[0] = h.sy[1] = (int32_t)y0 << FP_SHIFT;
+  h.slope[0] = size;
+  h.slope[1] = h.slope[2] = 0;
+  uint8_t flags = TriFlags::POINT | TriFlags::FLAT;
+  flags |= opaqueFlag(mat);
+  h.mat = mat;
+  h.sortKey = a.vz;
+  h.yMin = (int16_t)yMin;
+  h.yMax = (int16_t)yMax;
+  h.flags = flags;
+  h.alpha64 = materialAlpha64(mat);
+  h.rasterFn = unlitRasterFn(mat, true);
+  h.layer = layerByte();
+
+  const bool depth = !(h.layer & LayerId::NO_DEPTH);
+  uint8_t *rec = allocRecord(TRI_REC_SIZE[recIndex(depth, false, false)]);
+  if (!rec) {
+    triDropped_++;
+    return;
+  }
+  makeRecord(rec, h, depth, false, false, [&](auto &t) {
+    using R = std::remove_reference_t<decltype(t)>;
+    if constexpr (R::HAS_DEPTH) t.z = Plane{z, 0, 0};
+    if constexpr (R::SMOOTH) {  // never selected: a point is always flat
+      t.r = Plane{a.r << 8, 0, 0};
+      t.g = Plane{a.g << 8, 0, 0};
+      t.b = Plane{a.b << 8, 0, 0};
+    } else {
+      t.r = (uint8_t)((a.r + 128) >> 8);
+      t.g = (uint8_t)((a.g + 128) >> 8);
+      t.b = (uint8_t)((a.b + 128) >> 8);
+    }
+  });
+  triCount_++;
+}
+#else
 void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   if (a.view.z > -zNear_) return;
   float sx, sy, z, invW;
@@ -1175,6 +1965,7 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   });
   triCount_++;
 }
+#endif
 
 #endif  // SHAPOGFX3D_UNLIT
 
@@ -1235,6 +2026,9 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
   const uint16_t *idx = prim.indices;
   int n = prim.indexCount;
 
+#if SHAPOGFX3D_FIXED_POINT
+  refreshFixed();
+#endif
   // Per-primitive constants of the vertex stage
   PrimSetup ps;
   ps.mat = mat;
@@ -1248,6 +2042,22 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
   if (lightEnabled_ && !lightToModelSpace(cur_, lightDir_, ps.lightModel)) {
     ps.viewNormal = true;
   }
+#if SHAPOGFX3D_FIXED_POINT
+  ps.lightModelQ[0] = fToFix(ps.lightModel.x, LIGHT_SHIFT, INT32_MAX);
+  ps.lightModelQ[1] = fToFix(ps.lightModel.y, LIGHT_SHIFT, INT32_MAX);
+  ps.lightModelQ[2] = fToFix(ps.lightModel.z, LIGHT_SHIFT, INT32_MAX);
+  ps.amb[0] = fToFix(mat->ambient.r, COLOR_SHIFT, 1 << 15);
+  ps.amb[1] = fToFix(mat->ambient.g, COLOR_SHIFT, 1 << 15);
+  ps.amb[2] = fToFix(mat->ambient.b, COLOR_SHIFT, 1 << 15);
+  ps.dif[0] = fToFix(mat->diffuse.r, COLOR_SHIFT, 1 << 15);
+  ps.dif[1] = fToFix(mat->diffuse.g, COLOR_SHIFT, 1 << 15);
+  ps.dif[2] = fToFix(mat->diffuse.b, COLOR_SHIFT, 1 << 15);
+  ps.alpha256 = fToFix(clamp01(mat->diffuse.a), 8, 256);
+  ps.texWq = ps.tex ? (int32_t)ps.tex->width : 0;
+  ps.texHq = ps.tex ? (int32_t)ps.tex->height : 0;
+  ps.vertexColor = (mat->flags & MaterialFlags::VERTEX_COLOR) != 0;
+  ps.add = mat->blendMode == BlendMode::ADD;
+#endif
 
   // Vertex cache: avoid re-transforming vertices shared by several triangles
   // (strips, fans, indexed meshes). Invalidated per primitive.
@@ -1622,6 +2432,20 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::clipTranslucent(const Span &frag) {
 
 // Texture attributes of a span that samples no texture. They are never read
 // by its rasterizer, but spanAdvance() steps them like any other span.
+#if SHAPOGFX3D_FIXED_POINT
+static inline void clearSpanTex(Span &out) {
+#if !SHAPOGFX3D_TEXTURE
+  (void)out;
+#else
+#if SHAPOGFX3D_PERSPECTIVE == 2
+  out.uw = out.vw = out.duw = out.dvw = out.diw = 0;
+  out.iw = 1 << IW_SHIFT;
+#else
+  out.u = out.v = out.du = out.dv = 0;
+#endif
+#endif
+}
+#else
 static inline void clearSpanTex(Span &out) {
 #if !SHAPOGFX3D_TEXTURE
   (void)out;
@@ -1635,10 +2459,56 @@ static inline void clearSpanTex(Span &out) {
 #endif
 #endif
 }
+#endif
 
 // Fill the depth and color of a span covering [x0, x1) from the planes of t,
 // evaluated at the center of the leftmost pixel (xc, yc). A record without an
 // attribute costs neither the evaluation nor the storage of its plane.
+#if SHAPOGFX3D_FIXED_POINT
+template <typename REC>
+static inline void fillSpanBase(const REC &t, int32_t xc, int32_t yc, int x0,
+                                int x1, Span &out) {
+  // Offsets of the leftmost pixel center from the record's reference point
+  const int32_t ox = xc - t.sx[0], oy = yc - t.sy[0];
+  out.x0 = x0;
+  out.x1 = x1;
+  if constexpr (REC::HAS_DEPTH) {
+    out.z0 = t.z.at(ox, oy);
+    out.dz = t.z.dx;
+  } else {
+    out.z0 = 0;  // a layer without depth never compares them (fragNearer())
+    out.dz = 0;
+  }
+#if SHAPOGFX3D_GOURAUD
+  if constexpr (REC::SMOOTH) {
+    // Color: the plane values at pixel centers inside the triangle lie within
+    // 0..255 up to rounding; clamp the start value to guard the rounding.
+    constexpr int32_t MAX16 = 255 << FIX_SHIFT;
+    auto clamp16 = [](int32_t v) {
+      return v < 0 ? 0 : (v > MAX16 ? MAX16 : v);
+    };
+    out.r = clamp16(t.r.at(ox, oy));
+    out.g = clamp16(t.g.at(ox, oy));
+    out.b = clamp16(t.b.at(ox, oy));
+    out.dr = t.r.dx;
+    out.dg = t.g.dx;
+    out.db = t.b.dx;
+  } else {
+    out.r = (int32_t)t.r << FIX_SHIFT;
+    out.g = (int32_t)t.g << FIX_SHIFT;
+    out.b = (int32_t)t.b << FIX_SHIFT;
+    out.dr = out.dg = out.db = 0;
+  }
+#else
+  out.r = t.r;
+  out.g = t.g;
+  out.b = t.b;
+#endif
+  out.lay = t.layer;
+  out.tri = &t;
+  out.next = nullptr;
+}
+#else
 template <typename REC>
 static inline void fillSpanBase(const REC &t, float xc, float yc, int x0,
                                 int x1, Span &out) {
@@ -1676,12 +2546,18 @@ static inline void fillSpanBase(const REC &t, float xc, float yc, int x0,
   out.tri = &t;
   out.next = nullptr;
 }
+#endif
 
 // Span of an untextured primitive (points and lines)
 #if SHAPOGFX3D_UNLIT
 template <typename REC>
+#if SHAPOGFX3D_FIXED_POINT
+static inline void fillUnlitSpan(const REC &t, int32_t xc, int32_t yc, int x0,
+                                 int x1, Span &out) {
+#else
 static inline void fillUnlitSpan(const REC &t, float xc, float yc, int x0,
                                  int x1, Span &out) {
+#endif
   fillSpanBase(t, xc, yc, x0, x1, out);
   clearSpanTex(out);
 }
@@ -1691,6 +2567,65 @@ static inline void fillUnlitSpan(const REC &t, float xc, float yc, int x0,
 // Line segment a -> b on pixel row yi: one pixel per row for steep lines, one
 // pixel per column (a horizontal run) for shallow lines, so the coverage
 // matches a Bresenham line. Both end points are drawn.
+#if SHAPOGFX3D_FIXED_POINT
+template <typename REC>
+static bool makeLineSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
+  const int32_t ax = t.sx[0], ay = t.sy[0], bx = t.sx[1], by = t.sy[1];
+  const int64_t dx = (int64_t)bx - ax, dy = (int64_t)by - ay;
+  const int32_t dxdy = t.slope[0];  // 16.16 px per px
+  int c0, c1;
+  if ((dy < 0 ? -dy : dy) >= (dx < 0 ? -dx : dx)) {
+    // Steep: the pixel at the row center, with the parameter kept within
+    // the segment
+    int64_t o = (int64_t)(((int32_t)yi << FP_SHIFT) + FP_HALF) - ay;
+    if (dy > 0) {
+      o = o < 0 ? 0 : (o > dy ? dy : o);
+    } else {
+      o = o > 0 ? 0 : (o < dy ? dy : o);
+    }
+    c0 = (int)((ax + ((o * dxdy) >> FP_SHIFT)) >> FP_SHIFT);
+    c1 = c0 + 1;
+    if (c0 < rx0 || c0 >= rx1) return false;
+  } else {
+    // Shallow: columns whose center's y falls into [yi, yi + 1)
+    const int ca = ax >> FP_SHIFT, cb = bx >> FP_SHIFT;
+    const int cMin = std::min(ca, cb), cMax = std::max(ca, cb);
+    if (dy == 0) {
+      c0 = cMin;
+      c1 = cMax + 1;
+    } else {
+      auto xAt = [&](int64_t y) {  // x of the line at y (16.16), bounded
+        const int64_t x = ax + (((y - ay) * dxdy) >> FP_SHIFT);
+        return x < -((int64_t)1 << 40)
+                   ? -((int64_t)1 << 40)
+                   : (x > ((int64_t)1 << 40) ? ((int64_t)1 << 40) : x);
+      };
+      int64_t xA = xAt((int64_t)yi << FP_SHIFT);
+      int64_t xB = xAt((int64_t)(yi + 1) << FP_SHIFT);
+      if (xA > xB) std::swap(xA, xB);
+      c0 = (int)((xA - FP_HALF + 0xFFFF) >> FP_SHIFT);  // ceil(x - 0.5)
+      c1 = (int)((xB - FP_HALF + 0xFFFF) >> FP_SHIFT);
+      // The rows of the end points always include the end point pixels
+      if (yi == (ay >> FP_SHIFT)) {
+        c0 = std::min(c0, ca);
+        c1 = std::max(c1, ca + 1);
+      }
+      if (yi == (by >> FP_SHIFT)) {
+        c0 = std::min(c0, cb);
+        c1 = std::max(c1, cb + 1);
+      }
+      c0 = std::max(c0, cMin);
+      c1 = std::min(c1, cMax + 1);
+    }
+    c0 = std::max(c0, rx0);
+    c1 = std::min(c1, rx1);
+    if (c0 >= c1) return false;
+  }
+  fillUnlitSpan(t, ((int32_t)c0 << FP_SHIFT) + FP_HALF,
+                ((int32_t)yi << FP_SHIFT) + FP_HALF, c0, c1, out);
+  return true;
+}
+#else
 template <typename REC>
 static bool makeLineSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
   const float ax = t.sx[0], ay = t.sy[0], bx = t.sx[1], by = t.sy[1];
@@ -1735,10 +2670,24 @@ static bool makeLineSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
   fillUnlitSpan(t, (float)c0 + 0.5f, (float)yi + 0.5f, c0, c1, out);
   return true;
 }
+#endif
 #endif  // SHAPOGFX3D_LINES
 
 #if SHAPOGFX3D_POINTS
 // Point: a square with its top-left pixel at (sx[0], sy[0]), size slope[0]
+#if SHAPOGFX3D_FIXED_POINT
+template <typename REC>
+static bool makePointSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
+  const int size = (int)t.slope[0];
+  const int x0 = t.sx[0] >> FP_SHIFT;
+  int c0 = std::max(x0, rx0);
+  int c1 = std::min(x0 + size, rx1);
+  if (c0 >= c1) return false;
+  fillUnlitSpan(t, ((int32_t)c0 << FP_SHIFT) + FP_HALF,
+                ((int32_t)yi << FP_SHIFT) + FP_HALF, c0, c1, out);
+  return true;
+}
+#else
 template <typename REC>
 static bool makePointSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
   const int size = (int)t.slope[0];
@@ -1748,13 +2697,92 @@ static bool makePointSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
   fillUnlitSpan(t, (float)c0 + 0.5f, (float)yi + 0.5f, c0, c1, out);
   return true;
 }
+#endif
 #endif  // SHAPOGFX3D_POINTS
 
 // Build the span of triangle t on the scanline with center yc, limited to
 // the region [rx0, rx1). Returns false when the triangle covers no pixel
 // center there.
+#if SHAPOGFX3D_FIXED_POINT
 template <typename REC>
-static bool makeTriSpan(const REC &t, float yc, int rx0, int rx1, Span &out) {
+static bool makeTriSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
+  // Edge x at the row center: the long edge, and the short edge covering
+  // this row (the top->middle edge covers [sy0, sy1), middle->bottom covers
+  // [sy1, sy2))
+  const int32_t yc = ((int32_t)yi << FP_SHIFT) + FP_HALF;
+  const int64_t oy = (int64_t)yc - t.sy[0];
+  const int64_t xLong = t.sx[0] + (((int64_t)t.slope[2] * oy) >> FP_SHIFT);
+  const int64_t xShort =
+      (yc < t.sy[1])
+          ? t.sx[0] + (((int64_t)t.slope[0] * oy) >> FP_SHIFT)
+          : t.sx[1] +
+                (((int64_t)t.slope[1] * ((int64_t)yc - t.sy[1])) >> FP_SHIFT);
+  const bool leftLong = (t.flags & TriFlags::LEFT_LONG) != 0;
+  const int64_t xl = leftLong ? xLong : xShort;
+  const int64_t xr = leftLong ? xShort : xLong;
+  const int64_t width = xr - xl;
+  if (width <= 0) return false;
+
+  // Fill the pixels whose centers (xi + 0.5) fall inside [xl, xr)
+  int xi0 = (int)((xl - FP_HALF + 0xFFFF) >> FP_SHIFT);
+  int xi1 = (int)((xr - FP_HALF + 0xFFFF) >> FP_SHIFT);
+  xi0 = std::max(xi0, rx0);
+  xi1 = std::min(xi1, rx1);
+  if (xi0 >= xi1) return false;
+
+  const int32_t xc = ((int32_t)xi0 << FP_SHIFT) + FP_HALF;
+  fillSpanBase(t, xc, yc, xi0, xi1, out);
+
+  if constexpr (!REC::TEXTURED) {
+    clearSpanTex(out);
+  } else {
+#if SHAPOGFX3D_TEXTURE
+#if SHAPOGFX3D_PERSPECTIVE == 2
+    const int32_t ox = xc - t.sx[0];
+    out.uw = t.uw.at(ox, (int32_t)oy);
+    out.vw = t.vw.at(ox, (int32_t)oy);
+    out.iw = t.iw.at(ox, (int32_t)oy);
+    out.duw = t.uw.dx;
+    out.dvw = t.vw.dx;
+    out.diw = t.iw.dx;
+#elif SHAPOGFX3D_PERSPECTIVE == 1
+    // Vertical-only correction: (u, v) are exact at the span end points and
+    // interpolated affinely in between. u = (u/w) / (1/w), in 16.16 texels:
+    // Q12 / Q26 needs the shift of 26 - 12 + 16.
+    const int32_t oxl = (int32_t)(xl - t.sx[0]), oxr = (int32_t)(xr - t.sx[0]);
+    const int32_t iwL = t.iw.at(oxl, (int32_t)oy),
+                  iwR = t.iw.at(oxr, (int32_t)oy);
+    constexpr int UV_SHIFT = IW_SHIFT - UW_SHIFT + FP_SHIFT;
+    const int32_t uL =
+        divQ(t.uw.at(oxl, (int32_t)oy), iwL, UV_SHIFT, TEX_MAX_FP);
+    const int32_t uR =
+        divQ(t.uw.at(oxr, (int32_t)oy), iwR, UV_SHIFT, TEX_MAX_FP);
+    const int32_t vL =
+        divQ(t.vw.at(oxl, (int32_t)oy), iwL, UV_SHIFT, TEX_MAX_FP);
+    const int32_t vR =
+        divQ(t.vw.at(oxr, (int32_t)oy), iwR, UV_SHIFT, TEX_MAX_FP);
+    const int32_t du = divQ((int64_t)uR - uL, width, FP_SHIFT, COLOR_GRAD_MAX);
+    const int32_t dv = divQ((int64_t)vR - vL, width, FP_SHIFT, COLOR_GRAD_MAX);
+    const int64_t t0 = xc - xl;
+    out.u = uL + (int32_t)(((int64_t)du * t0) >> FP_SHIFT);
+    out.v = vL + (int32_t)(((int64_t)dv * t0) >> FP_SHIFT);
+    out.du = du;
+    out.dv = dv;
+#else
+    const int32_t ox = xc - t.sx[0];
+    out.u = t.u.at(ox, (int32_t)oy);
+    out.v = t.v.at(ox, (int32_t)oy);
+    out.du = t.u.dx;
+    out.dv = t.v.dx;
+#endif
+#endif  // SHAPOGFX3D_TEXTURE
+  }
+  return true;
+}
+#else
+template <typename REC>
+static bool makeTriSpan(const REC &t, int yi, int rx0, int rx1, Span &out) {
+  const float yc = (float)yi + 0.5f;
   // Edge x at yc: the long edge, and the short edge covering this row (the
   // top->middle edge covers [sy0, sy1), middle->bottom covers [sy1, sy2))
   const float xLong = t.sx[0] + t.slope[2] * (yc - t.sy[0]);
@@ -1813,6 +2841,7 @@ static bool makeTriSpan(const REC &t, float yc, int rx0, int rx1, Span &out) {
   }
   return true;
 }
+#endif
 
 // Span of a primitive of a known record layout. Lines and points are never
 // textured, so their span builders are only compiled into the untextured
@@ -1829,7 +2858,7 @@ static inline bool makeSpanRec(const TriHead &h, int yi, int rx0, int rx1,
     if (h.flags & TriFlags::POINT) return makePointSpan(t, yi, rx0, rx1, out);
 #endif
   }
-  return makeTriSpan(t, (float)yi + 0.5f, rx0, rx1, out);
+  return makeTriSpan(t, yi, rx0, rx1, out);
 }
 
 // Recover the record layout from the header and build the span
@@ -2094,6 +3123,16 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
   // Sub-spans of PERSPECTIVE_STEP pixels: (u, v) are exact at the sub-span
   // ends and interpolated linearly inside. uAcc/vAcc mirror the walker's
   // accumulators at the sub-span start.
+#if SHAPOGFX3D_FIXED_POINT
+  int32_t uw = sp.uw, vw = sp.vw, iw = sp.iw;
+  int32_t uAcc = 0, vAcc = 0, du = 0, dv = 0;
+  int left = 0, prevM = 0;
+  if constexpr (TEX) {
+    constexpr int UV_SHIFT = IW_SHIFT - UW_SHIFT + FIX_SHIFT;
+    uAcc = divQ(uw, iw, UV_SHIFT, TEX_MAX_FP);
+    vAcc = divQ(vw, iw, UV_SHIFT, TEX_MAX_FP);
+  }
+#else
   float uw = sp.uw, vw = sp.vw, iw = sp.iw;
   int32_t uAcc = 0, vAcc = 0, du = 0, dv = 0;
   int left = 0, prevM = 0;
@@ -2102,6 +3141,7 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
     uAcc = toFixTex(uw * inv);
     vAcc = toFixTex(vw * inv);
   }
+#endif
 #endif
 
   for (int i = 0; i < n; i++) {
@@ -2112,11 +3152,20 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur,
         uAcc += du * prevM;
         vAcc += dv * prevM;
         const int m = std::min(n - i, PERSPECTIVE_STEP);
+#if SHAPOGFX3D_FIXED_POINT
+        uw += sp.duw * m;
+        vw += sp.dvw * m;
+        iw += sp.diw * m;
+        constexpr int UV_SHIFT = IW_SHIFT - UW_SHIFT + FIX_SHIFT;
+        const int32_t u1 = divQ(uw, iw, UV_SHIFT, TEX_MAX_FP);
+        const int32_t v1 = divQ(vw, iw, UV_SHIFT, TEX_MAX_FP);
+#else
         uw += sp.duw * (float)m;
         vw += sp.dvw * (float)m;
         iw += sp.diw * (float)m;
         const float inv = 1.0f / iw;
         const int32_t u1 = toFixTex(uw * inv), v1 = toFixTex(vw * inv);
+#endif
         if (m == PERSPECTIVE_STEP) {
           du = (u1 - uAcc) / PERSPECTIVE_STEP;
           dv = (v1 - vAcc) / PERSPECTIVE_STEP;
@@ -2279,7 +3328,8 @@ static SHAPOGFX3D_HOT_ATTR void fillLineT(uint8_t *line, int x, int n,
 #define SHAPOGFX3D_HOT_TABLE(OUT)                                        \
   SHAPOGFX3D_HOT_ROW(OUT, TexFmt::NONE)                                  \
   SHAPOGFX3D_HOT_ROW_GRAY1(OUT)                                          \
-  SHAPOGFX3D_HOT_ROW_RGB444(OUT) SHAPOGFX3D_HOT_ROW_ARGB4444(OUT)        \
+  SHAPOGFX3D_HOT_ROW_RGB444(OUT)                                         \
+  SHAPOGFX3D_HOT_ROW_ARGB4444(OUT)                                       \
       SHAPOGFX3D_HOT_ROW_RGB565BE(OUT) template SHAPOGFX3D_HOT_ATTR void \
       fillLineT<OUT>(uint8_t *, int, int, uint32_t);
 #if SHAPOGFX_FORMAT_RGB565BE
