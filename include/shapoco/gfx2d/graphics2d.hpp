@@ -66,6 +66,15 @@ class Graphics2D {
   void fillRect(int x, int y, int w, int h, Color c) {
     fillRect(Rect{x, y, w, h}, c);
   }
+  // Fill with a blend mode: NONE overwrites (the color's alpha is ignored),
+  // ALPHA blends with the color's alpha x opacity (what the plain fillRect
+  // does with the alpha alone), ADD adds the color scaled by alpha x
+  // opacity with saturation
+  void fillRect(const Rect &r, Color c, BlendMode mode, int opacity = 255);
+  void fillRect(int x, int y, int w, int h, Color c, BlendMode mode,
+                int opacity = 255) {
+    fillRect(Rect{x, y, w, h}, c, mode, opacity);
+  }
   // Outline inside the rectangle, `thickness` pixels wide
   void drawRect(const Rect &r, Color c, int thickness = 1);
   void drawRect(int x, int y, int w, int h, Color c, int thickness = 1) {

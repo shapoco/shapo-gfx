@@ -26,6 +26,18 @@ static void fillSpanT(uint8_t *line, int x, int n, uint32_t native,
   }
 }
 
+// Add a native color (already scaled by its weight) onto [x, x + n) of
+// `line`, saturating
+template <PixelFormat F>
+static void fillSpanAddT(uint8_t *line, int x, int n, uint32_t native) {
+  typename FormatTraits<F>::Cursor cur;
+  cur.init(line, x);
+  for (int i = 0; i < n; i++) {
+    cur.write(addNative<F>(cur.read(), native));
+    cur.next();
+  }
+}
+
 // Read n pixels of `line` starting at x as Colors
 template <PixelFormat F>
 static void readColorsT(const uint8_t *line, int x, int n, Color *out) {
@@ -370,6 +382,33 @@ static void fillSpanFmt(PixelFormat fmt, uint8_t *line, int x, int n,
   }
 }
 
+static void fillSpanAddFmt(PixelFormat fmt, uint8_t *line, int x, int n,
+                           uint32_t native) {
+  switch (fmt) {
+#if SHAPOGFX_FORMAT_GRAY1
+    case PixelFormat::GRAY1:
+      fillSpanAddT<PixelFormat::GRAY1>(line, x, n, native);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB444
+    case PixelFormat::RGB444:
+      fillSpanAddT<PixelFormat::RGB444>(line, x, n, native);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_ARGB4444
+    case PixelFormat::ARGB4444:
+      fillSpanAddT<PixelFormat::ARGB4444>(line, x, n, native);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB565BE
+    case PixelFormat::RGB565BE:
+      fillSpanAddT<PixelFormat::RGB565BE>(line, x, n, native);
+      break;
+#endif
+    default: break;
+  }
+}
+
 static void readColorsFmt(PixelFormat fmt, const uint8_t *line, int x, int n,
                           Color *out) {
   switch (fmt) {
@@ -482,6 +521,32 @@ void Graphics2D::fillRect(const Rect &rect, Color c) {
   Rect r = rect.normalized().intersect(state_.clip);
   if (r.isEmpty()) return;
   fillRectRaw(r, colorToNative(target_.format, c), a);
+}
+
+void Graphics2D::fillRect(const Rect &rect, Color c, BlendMode mode,
+                          int opacity) {
+  if (!hasTarget()) return;
+  if (opacity < 0) opacity = 0;
+  if (opacity > 255) opacity = 255;
+  if (mode == BlendMode::NONE) {
+    fillRect(rect, c | 0xFF000000u);
+    return;
+  }
+  const uint32_t a = (colorAlpha64(c) * alpha255To64((uint32_t)opacity)) >> 6;
+  if (a == 0) return;
+  Rect r = rect.normalized().intersect(state_.clip);
+  if (r.isEmpty()) return;
+  if (mode == BlendMode::ALPHA) {
+    fillRectRaw(r, colorToNative(target_.format, c), a);
+    return;
+  }
+  // Additive: the color scaled by its weight, then a saturating add
+  const Color scaled = makeColor((colorR(c) * a) >> 6, (colorG(c) * a) >> 6,
+                                 (colorB(c) * a) >> 6);
+  const uint32_t native = colorToNative(target_.format, scaled);
+  for (int y = r.y; y < r.bottom(); y++) {
+    fillSpanAddFmt(target_.format, target_.linePtr(y), r.x, r.width, native);
+  }
 }
 
 void Graphics2D::drawRect(const Rect &rect, Color c, int thickness) {

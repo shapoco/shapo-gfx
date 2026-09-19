@@ -190,6 +190,7 @@ class Graphics2D {
   void clear(Color);                          // fills the clip rectangle
   void setPixel(int x, int y, Color); Color getPixel(int x, int y) const;
   void fillRect(const Rect &, Color);         void fillRect(int x, int y, int w, int h, Color);
+  void fillRect(const Rect &, Color, BlendMode, int opacity = 255);  // NONE / ALPHA / ADD (additive, saturating)
   void drawRect(const Rect &, Color, int thickness = 1);
   void fillRoundRect(const Rect &, int radius, Color); void drawRoundRect(const Rect &, int radius, Color);
   void drawHLine(int x, int y, int w, Color); void drawVLine(int x, int y, int h, Color);
