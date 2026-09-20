@@ -227,9 +227,14 @@ Semantics:
 - **Rectangles** are half-open (`[x, x + w)`); negative sizes are normalized.
   `drawRect` draws inside the rectangle.
 - **Ellipses and rounded rectangles** are described by the horizontal extent of each
-  row (computed with one square root per row). Outlines are the pixels of a row not
-  covered by both neighboring rows, plus the row's end pixels, which yields a closed
-  one-pixel outline consistent with the fill.
+  row (computed with one square root per row). An outline row runs, on each side,
+  from that row's own end inwards to just short of the nearer of the two neighboring
+  rows' ends on that side, which yields a closed one-pixel outline consistent with
+  the fill. Reaching to the *nearer* neighbor is what closes it where the edge is
+  nearly flat -- the top and bottom of a circle, where consecutive rows' ends are
+  many columns apart and the end pixels alone would leave a dotted line. Where the
+  edge is steep the neighbors are one column away and the row is its end pixels, as
+  before.
 - **Lines** walk the major axis with a 16.16 fixed-point minor coordinate and are
   clipped along the major axis before stepping; runs of pixels on the same row are
   filled as spans. Both end points are drawn.

@@ -654,10 +654,22 @@ static void outlineExtent(Graphics2D &g, const Rect &rows, const Extent &ext,
       (g.*span)(y, l, r + 1, native, a);  // cap row
       continue;
     }
-    // Left part not covered by both neighbors, right part likewise; at least
-    // the end pixels
-    int innerL = std::min(pl, nl), innerR = std::max(pr, nr);
+    // The outline of this row has to reach far enough inwards to meet the
+    // row above and the row below, or a shape whose edge is nearly flat --
+    // the top and bottom of a circle -- comes out as a dotted line: there
+    // the neighbouring rows' ends are many columns away, and drawing only
+    // this row's own end pixels leaves the gap between them empty.
+    //
+    // So each side runs from this row's end to just short of the NEARER of
+    // the two neighbours' ends on that side (the narrower row, the one the
+    // outline has to bridge to), which is the max on the left and the min on
+    // the right. Where the edge is steep the neighbours are a column away
+    // and this is the single end pixel it was before. The clamps keep a
+    // degenerate extent from painting across the shape.
+    int innerL = std::max(pl, nl), innerR = std::min(pr, nr);
     int le = std::max(l, innerL - 1), rs = std::min(r, innerR + 1);
+    if (le > r) le = r;
+    if (rs < l) rs = l;
     (g.*span)(y, l, le + 1, native, a);
     if (rs > le) (g.*span)(y, rs, r + 1, native, a);
   }
