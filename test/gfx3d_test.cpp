@@ -865,6 +865,69 @@ static void testRenderContexts() {
   CHECK_EQ(r.getStats().spanDropped, 0);
 }
 
+#if SHAPOGFX3D_GOURAUD
+// A vertex-colored fan with a bright center and a black rim (an aura): no
+// pixel may come out brighter than the center in any channel. The rounding
+// of the color gradients must not step the rim end of a span below 0, where
+// it would wrap around to full intensity.
+static void testSmoothFanRim() {
+  g3::Graphics3D r;
+  r.init(W, H, arena, sizeof(arena));
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
+  r.setClearColor({0, 0, 0, 1});
+  const float ay = (float)H / W;
+  uint32_t seed = 1;
+  auto rnd = [&] {
+    seed = seed * 1103515245u + 12345u;
+    return (float)((seed >> 8) & 0xFFFF) / 65535.0f;
+  };
+  int bad = 0;
+  for (int it = 0; it < 200; it++) {
+    const g3::Material m = {{1, 1, 1, 1},
+                            {1, 1, 1, 1},
+                            nullptr,
+                            (it & 1) ? g3::BlendMode::ADD : g3::BlendMode::NONE,
+                            g3::MaterialFlags::VERTEX_COLOR};
+    const int cr = (int)(rnd() * 255), cg = (int)(rnd() * 60),
+              cb = (int)(rnd() * 255);
+    const float cx = rnd() * 2 - 1, cy = (rnd() * 2 - 1) * ay;
+    const float rad = 0.1f + rnd() * 0.5f;
+    constexpr int SEG = 16;
+    g3::Vertex v[SEG + 2] = {};
+    uint16_t idx[SEG + 2];
+    v[0].position = {cx, cy, 0};
+    v[0].color = g2::makeColor(cr, cg, cb);
+    idx[0] = 0;
+    for (int k = 0; k <= SEG; k++) {
+      const float a = (float)k * 6.2831853f / SEG;
+      v[k + 1].position = {cx + std::cos(a) * rad, cy + std::sin(a) * rad, 0};
+      v[k + 1].color = g2::makeColor(0, 0, 0);
+      idx[k + 1] = (uint16_t)(k + 1);
+    }
+    const g3::VertexBuffer vb = {SEG + 2, v};
+    r.setOrthographicProjection(-1, 1, -ay, ay, 0.1f, 10);
+    r.beginScene();
+    r.translate(0, 0, -2);
+    r.putPrimitive({g3::PrimitiveType::TRIANGLE_FAN, &vb, SEG + 2, idx, &m});
+    r.endScene();
+    r.beginRender();
+    r.render(0, 0, W, H, s);
+    r.endRender();
+    const int lim[3] = {cr * 31 / 255 + 1, cg * 63 / 255 + 1,
+                        cb * 31 / 255 + 1};
+    const uint16_t *px = (const uint16_t *)s.pixels();
+    bool wrong = false;
+    for (int i = 0; i < W * H && !wrong; i++) {
+      const uint16_t p = g2::bswap16(px[i]);
+      const int c[3] = {p >> 11, (p >> 5) & 63, p & 31};
+      for (int k = 0; k < 3; k++) wrong |= c[k] > lim[k];
+    }
+    bad += wrong;
+  }
+  CHECK_EQ(bad, 0);
+}
+#endif
+
 void testGfx3D() {
   genTextures();
 #if SHAPOGFX3D_LINES && SHAPOGFX3D_POINTS
@@ -878,6 +941,9 @@ void testGfx3D() {
   testWatertight();
   testFarVertex();
   testRenderContexts();
+#if SHAPOGFX3D_GOURAUD
+  testSmoothFanRim();
+#endif
 #if SHAPOGFX3D_TEXTURE && SHAPOGFX3D_BLEND
   testTextureAlpha();
 #endif

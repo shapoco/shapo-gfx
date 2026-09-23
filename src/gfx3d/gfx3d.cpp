@@ -159,7 +159,7 @@ namespace shapoco::gfx3d {
 namespace detail {
 
 static constexpr int FIX_SHIFT = 16;
-static constexpr float FIX_ONE = 65536.0f;
+[[maybe_unused]] static constexpr float FIX_ONE = 65536.0f;
 
 static constexpr int PERSPECTIVE_STEP = SHAPOGFX3D_PERSPECTIVE_STEP;
 static_assert(PERSPECTIVE_STEP >= 2 &&
@@ -191,15 +191,10 @@ static constexpr int32_t SCREEN_MAX = (COORD_BITS <= 12 ? 8191 : 32767)
 static constexpr int32_t SLOPE_MAX = INT32_MAX;  // |edge slope|, 16.16 px/row
 static constexpr int Z_SHIFT = 24;
 static constexpr int32_t Z_MAX_FP = 120 << Z_SHIFT;
-static constexpr int32_t Z_DELTA_MAX_FP = 64 << Z_SHIFT;
-static constexpr int32_t COLOR_MAX_FP = 255 << FIX_SHIFT;
-static constexpr int32_t COLOR_GRAD_MAX = 16000 << FIX_SHIFT;
-static constexpr int32_t TEX_MAX_FP = 30000 << FIX_SHIFT;
-static constexpr int32_t TEX_GRAD_MAX = 16000 << FIX_SHIFT;
-static constexpr int IW_NORM = 28;
-static constexpr int UW_SHIFT = 30;
-static constexpr int32_t IW_MAX_FP = INT32_MAX;
-static constexpr int32_t UW_MAX_FP = INT32_MAX;
+[[maybe_unused]] static constexpr int32_t COLOR_MAX_FP = 255 << FIX_SHIFT;
+[[maybe_unused]] static constexpr int32_t TEX_MAX_FP = 30000 << FIX_SHIFT;
+[[maybe_unused]] static constexpr int IW_NORM = 28;
+[[maybe_unused]] static constexpr int UW_SHIFT = 30;
 
 #if SHAPOGFX3D_FIXED_POINT
 // Formats of the fixed-point vertex stage: screen and view-space coordinates
@@ -274,12 +269,13 @@ constexpr uint8_t FLAT =
     1u << 0;  // all three vertex colors are equal (no color interpolation)
 constexpr uint8_t TEX = 1u << 1;     // samples a texture
 constexpr uint8_t OPAQUE = 1u << 2;  // opaque (BlendMode::NONE)
-constexpr uint8_t LINE = 1u << 3;  // line segment [0] -> [1] (see makeLineSpan)
-constexpr uint8_t POINT =
+[[maybe_unused]] constexpr uint8_t LINE =
+    1u << 3;  // line segment [0] -> [1] (see makeLineSpan)
+[[maybe_unused]] constexpr uint8_t POINT =
     1u << 4;  // point: sx/sy[0] = top-left pixel, slope[0] = size
 constexpr uint8_t LEFT_LONG =
     1u << 5;  // triangles: the long edge (top->bottom) is on the left
-constexpr uint8_t STEEP = 1u << 6;  // lines: |dy| >= |dx|
+[[maybe_unused]] constexpr uint8_t STEEP = 1u << 6;  // lines: |dy| >= |dx|
 }  // namespace TriFlags
 
 // Layer of a primitive, as stored in its record and in its spans: the index of
@@ -553,16 +549,14 @@ static inline float clampf(float v, float lo, float hi) {
 
 // Float to int for screen coordinates (the range is limited first)
 static constexpr float COORD_MAX = 1e8f;
-static inline int floorInt(float v) {
+[[maybe_unused]] static inline int floorInt(float v) {
   return (int)std::floor(clampf(v, -COORD_MAX, COORD_MAX));
-}
-static inline int ceilInt(float v) {
-  return (int)std::ceil(clampf(v, -COORD_MAX, COORD_MAX));
 }
 
 // v x scale rounded to an integer, saturating at +-maxAbs; NaN maps to 0.
 // Converts the float setup's results to the record formats.
-static inline int32_t fixF(float v, float scale, int32_t maxAbs) {
+[[maybe_unused]] static inline int32_t fixF(float v, float scale,
+                                            int32_t maxAbs) {
   const float s = v * scale;
   const float lim = (float)maxAbs;
   if (s != s) return 0;
@@ -587,13 +581,13 @@ static inline int64_t mulFit(int64_t a, int64_t b) {
 }
 
 // floor(log2(v)) of a positive float, from its bits (no library call)
-static inline int floatExponent(float v) {
+[[maybe_unused]] static inline int floatExponent(float v) {
   uint32_t i;
   std::memcpy(&i, &v, sizeof(i));
   return (int)((i >> 23) & 0xFFu) - 127;
 }
 // 2^k for -126 <= k <= 127, from its bits
-static inline float pow2f(int k) {
+[[maybe_unused]] static inline float pow2f(int k) {
   k = k < -126 ? -126 : (k > 127 ? 127 : k);
   const uint32_t i = (uint32_t)(k + 127) << 23;
   float v;
@@ -607,12 +601,12 @@ static inline float pow2f(int k) {
 // 7 bits of mantissa); the fixed-point build keeps a 5-bit exponent and 10
 // bits of mantissa of the 16.16 value. Primitives whose keys are equal keep
 // the order they were added in.
-static inline int16_t sortKeyOf(float z) {
+[[maybe_unused]] static inline int16_t sortKeyOf(float z) {
   int32_t i;
   std::memcpy(&i, &z, sizeof(i));
   return (int16_t)((i ^ (int32_t)(((uint32_t)(i >> 31)) >> 1)) >> 16);
 }
-static inline int16_t sortKeyOf(int32_t z) {
+[[maybe_unused]] static inline int16_t sortKeyOf(int32_t z) {
   const uint32_t m = z < 0 ? (uint32_t)0 - (uint32_t)z : (uint32_t)z;
   int code = (int)m;
   if (m >= 1024) {
@@ -626,7 +620,8 @@ static inline int16_t sortKeyOf(int32_t z) {
 // (the fixed-point vertex stage and, in both builds, the setup of lines)
 
 // float -> fixed with `shift` fraction bits, saturating; NaN maps to 0
-static inline int32_t fToFix(float v, int shift, int32_t maxAbs) {
+[[maybe_unused]] static inline int32_t fToFix(float v, int shift,
+                                              int32_t maxAbs) {
   const float s = v * (float)((int64_t)1 << shift);
   const float lim = (float)maxAbs;
   if (s != s) return 0;
@@ -3282,10 +3277,10 @@ struct SpanTex {
 #endif
 };
 
-static inline int32_t addWrap(int32_t a, int32_t b) {
+[[maybe_unused]] static inline int32_t addWrap(int32_t a, int32_t b) {
   return (int32_t)((uint32_t)a + (uint32_t)b);
 }
-static inline int32_t mulWrap(int32_t a, int b) {
+[[maybe_unused]] static inline int32_t mulWrap(int32_t a, int b) {
   return (int32_t)((uint32_t)a * (uint32_t)b);
 }
 
@@ -3317,26 +3312,37 @@ struct PerspDiv {
 template <typename REC>
 static inline void spanAttrs(const REC &t, int ox, int oy, int n,
                              SpanColor &col, SpanTex &st) {
-  (void)n;
-  (void)st;
+  (void)ox, (void)oy, (void)n, (void)st;  // unused by some configurations
   if constexpr (REC::SMOOTH) {
 #if SHAPOGFX3D_GOURAUD
     // The plane values at pixel centers inside the primitive lie within
-    // 0..255 up to rounding; clamp the start value to guard the rounding.
-    // In 8.8, then 8.16 for the pixel loop
-    int32_t c[3];
+    // 0..255 up to the rounding of the 8.8 gradients, which can take the
+    // last pixel of a span slightly outside (a fan fading to black at its
+    // rim) and would wrap it around to full intensity. So both ends are
+    // evaluated (8.8); where one lies outside 0..255 both are clamped and
+    // the step is derived from them, which keeps every pixel in between.
+    constexpr int32_t MAX88 = 255 << 8;
+    auto clamp88 = [](int32_t v) {
+      return v < 0 ? 0 : (v > MAX88 ? MAX88 : v);
+    };
+    int32_t c[3], d[3];
     for (int k = 0; k < 3; k++) {
-      const int32_t v = (int32_t)((uint32_t)((int32_t)t.c0[k] * 4) +
-                                  (uint32_t)(int32_t)t.dx[k] * (uint32_t)ox +
-                                  (uint32_t)(int32_t)t.dy[k] * (uint32_t)oy);
-      c[k] = (v < 0 ? 0 : (v > (255 << 8) ? (255 << 8) : v)) << 8;
+      const int32_t v0 = (int32_t)((uint32_t)((int32_t)t.c0[k] * 4) +
+                                   (uint32_t)(int32_t)t.dx[k] * (uint32_t)ox +
+                                   (uint32_t)(int32_t)t.dy[k] * (uint32_t)oy);
+      const int32_t v1 = (int32_t)((uint32_t)v0 + (uint32_t)(int32_t)t.dx[k] *
+                                                      (uint32_t)(n - 1));
+      const int32_t c0 = clamp88(v0), c1 = clamp88(v1);
+      c[k] = c0 << 8;  // 8.8 -> 8.16 for the pixel loop
+      d[k] = (c0 == v0 && c1 == v1) || n <= 1 ? (int32_t)t.dx[k] * 256
+                                              : (c1 - c0) * 256 / (n - 1);
     }
     col.r = c[0];
     col.g = c[1];
     col.b = c[2];
-    col.dr = (int32_t)t.dx[0] * 256;
-    col.dg = (int32_t)t.dx[1] * 256;
-    col.db = (int32_t)t.dx[2] * 256;
+    col.dr = d[0];
+    col.dg = d[1];
+    col.db = d[2];
 #endif
   } else {
     col.setFlat(t.r, t.g, t.b);
