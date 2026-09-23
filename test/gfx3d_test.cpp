@@ -1,5 +1,7 @@
 // gfx3d: banded rendering, output formats, transparent clear, texture formats
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -652,6 +654,125 @@ static void testLayersAndConfig() {
   CHECK(r.isInitialized());
 }
 
+// Triangles sharing an edge leave no pixel between them: every row of a
+// convex silhouette made of many triangles is one unbroken run
+static void testWatertight() {
+  static const g3::Material M_W = {{1, 1, 1, 1},
+                                   {1, 1, 1, 1},
+                                   nullptr,
+                                   g3::BlendMode::NONE,
+                                   g3::MaterialFlags::DOUBLE_SIDED};
+  g3::Graphics3D r;
+  r.init(W, H, arena, sizeof(arena));
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  r.setClearColor({1, 0, 1, 1});
+  const g2::Color clear = g2::makeColor(255, 0, 255);
+  int gaps = 0, lit = 0;
+  for (int i = 0; i < 12; i++) {
+    const float t = 0.37f * (float)i;
+    r.setPerspectiveProjection(1.0f, (float)W / H, 0.3f, 50.0f);
+    r.beginScene();
+    r.translate(0, 0, -3.2f);
+    r.rotate(0.4f + t, 1, 0.2f, 0);
+    r.rotate(t * 1.7f, 0, 1, 0);
+    r.enableEnvironmentLight({0.3f, 0.3f, 0.3f, 1});
+    r.enableParallelLight({-0.5f, -1, -0.5f}, {1, 1, 1, 1});
+    r.setMaterial(M_W);
+    if (i & 1) {
+      r.putIcosphere({0, 0, 0}, 1.2f, 3);
+    } else {
+      r.putPlane({0, 0, 0}, 2.0f, 2.0f, 13, 11);
+    }
+    r.endScene();
+    r.beginRender();
+    r.render(0, 0, W, H, s);
+    r.endRender();
+    for (int y = 0; y < H; y++) {
+      int x0 = W, x1 = -1;
+      for (int x = 0; x < W; x++) {
+        if (pixelAt(s, x, y) != clear) {
+          x0 = std::min(x0, x);
+          x1 = std::max(x1, x);
+        }
+      }
+      for (int x = x0 + 1; x < x1; x++) {
+        if (pixelAt(s, x, y) == clear) gaps++;
+      }
+      if (x1 >= x0) lit += x1 - x0 + 1;
+    }
+  }
+  CHECK_EQ(gaps, 0);
+  CHECK(lit > W * H);
+}
+
+// A vertex far beyond the screen (and the guard band of the setup): the
+// float build clips the triangle to the guard band in screen space, so its
+// coverage stays exact; the fixed-point build clamps the vertex, which bends
+// the edges (only checked for the float build)
+static void testFarVertex() {
+  static const g3::Material M_F = {{1, 1, 1, 1},
+                                   {1, 1, 1, 1},
+                                   nullptr,
+                                   g3::BlendMode::NONE,
+                                   g3::MaterialFlags::DOUBLE_SIDED};
+  g3::Graphics3D r;
+  r.init(W, H, arena, sizeof(arena));
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  r.setClearColor({0, 0, 0, 1});
+  const float ay = (float)H / W;
+  // Orthographic: x in [-1, 1] spans the width
+  const float px[3] = {-0.5f, -0.3f, 400.0f}, py[3] = {0.2f, 0.5f, -150.0f};
+  r.setOrthographicProjection(-1, 1, -ay, ay, 0.1f, 10);
+  r.beginScene();
+  r.translate(0, 0, -2);
+  r.setMaterial(M_F);
+  {
+    g3::Vertex v[3];
+    for (int i = 0; i < 3; i++) {
+      v[i] = {{px[i], py[i], 0}, {0, 0, 1}, {0, 0}, g3::VERTEX_WHITE};
+    }
+    const g3::VertexBuffer vb = {3, v};
+    static const uint16_t idx[3] = {0, 1, 2};
+    r.putPrimitive({g3::PrimitiveType::TRIANGLES, &vb, 3, idx, nullptr});
+  }
+  r.endScene();
+  r.beginRender();
+  r.render(0, 0, W, H, s);
+  r.endRender();
+  // Exact coverage of the pixel centers, by edge functions in screen space
+  float sxv[3], syv[3];
+  for (int i = 0; i < 3; i++) {
+    sxv[i] = (px[i] * 0.5f + 0.5f) * W;
+    syv[i] = (0.5f - py[i] / ay * 0.5f) * H;
+  }
+  int wrong = 0, inside = 0;
+  for (int y = 0; y < H; y++) {
+    for (int x = 0; x < W; x++) {
+      const double cx = x + 0.5, cy = y + 0.5;
+      double e[3];
+      bool in = true, near = false;
+      for (int k = 0; k < 3; k++) {
+        const int j = (k + 1) % 3;
+        const double ex = sxv[j] - sxv[k], ey = syv[j] - syv[k];
+        e[k] = ((cx - sxv[k]) * ey - (cy - syv[k]) * ex) /
+               std::sqrt(ex * ex + ey * ey);
+        if (std::fabs(e[k]) < 0.01) near = true;
+      }
+      const bool pos = e[0] > 0 && e[1] > 0 && e[2] > 0;
+      const bool neg = e[0] < 0 && e[1] < 0 && e[2] < 0;
+      in = pos || neg;
+      if (in) inside++;
+      if (!near && in != (pixelAt(s, x, y) != g2::Colors::BLACK)) wrong++;
+    }
+  }
+  CHECK(inside > W * H / 8);
+#if SHAPOGFX3D_FIXED_POINT
+  (void)wrong;  // clamped: see SPEC.md, "Fixed-point vertex stage"
+#else
+  CHECK_EQ(wrong, 0);
+#endif
+}
+
 void testGfx3D() {
   genTextures();
 #if SHAPOGFX3D_LINES && SHAPOGFX3D_POINTS
@@ -662,6 +783,8 @@ void testGfx3D() {
   testBandsAndClear();
   testOutputFormats();
   testLayersAndConfig();
+  testWatertight();
+  testFarVertex();
 #if SHAPOGFX3D_TEXTURE && SHAPOGFX3D_BLEND
   testTextureAlpha();
 #endif

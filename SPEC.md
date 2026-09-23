@@ -104,9 +104,9 @@ costs no more than one of a build without the feature. Bytes per record on a
 | all of them | 132 | |
 
 Turning a feature off removes the corresponding layouts and their code. A span
-is 68 bytes whatever the record is (48 without `SHAPOGFX3D_TEXTURE`, 44 without
-`SHAPOGFX3D_GOURAUD`, 28 without both, 76 at perspective level 2); the pool holds
-`Config::spanCapacity` of them.
+is 16 bytes in every configuration -- its pixel range, its layer and pointers to
+its record and to the next span -- because its attributes are evaluated from the
+record when it is drawn; the pool holds `Config::spanCapacity` of them.
 
 Disabling a format removes its code from both renderers: the pixel cursors, the 2D
 per-format row operations, the 3D texture samplers and (for output formats) the 3D
@@ -648,8 +648,9 @@ and `ADD` multiply their opacity by `a4 / 15`. Texel alpha 0 skips the pixel.
 1. **Fixed part**: line buckets (2 x screen height x `uint16_t`), layer table
    (`SHAPOGFX3D_LAYER_MAX` entries of 8 bytes), matrix stack (16 entries), vertex
    cache (64 entries).
-2. **Span pool**: `Config::spanCapacity` spans, or a quarter of the remaining space
-   clamped to 32..512 spans when it is 0. Spans beyond the capacity are dropped,
+2. **Span pool**: `Config::spanCapacity` spans of 16 bytes, or a quarter of the
+   remaining space clamped to 32..512 spans when it is 0 (so 512 spans, 8 KB,
+   unless the arena is small). Spans beyond the capacity are dropped,
    which leaves holes in the picture, so a tuned value is one that keeps
    `Stats::spanPeak` below it with margin for the worst frame; whatever it saves
    goes to the triangle buffer.
@@ -672,12 +673,11 @@ uninitialized. Overflowing buffers drop the excess for the current frame.
 
 ### Fixed-point vertex stage (`SHAPOGFX3D_FIXED_POINT`)
 
-The pipeline from a vertex to a span record is float by default: the current
-matrix and the projection, lighting, the perspective divide, and the plane
-setup of every triangle, line and point (Cramer's rule), plus the evaluation of
-those planes and edge slopes for every span in `render()`. On a Cortex-M0+ or
-another core without an FPU every one of those operations is a library call of
-50 to 100 cycles, and a kite of two triangles was measured at 60 us.
+The pipeline from a vertex to a primitive record is float by default: the
+current matrix and the projection, lighting, the perspective divide, and the
+plane setup of every triangle, line and point (Cramer's rule). On a Cortex-M0+
+or another core without an FPU every one of those operations is a library call
+of 50 to 100 cycles, and a kite of two triangles was measured at 60 us.
 
 With `SHAPOGFX3D_FIXED_POINT=1` all of it is integer. The public API does not
 change: positions, matrices and materials stay float, and existing scenes
@@ -697,20 +697,17 @@ once, at the boundary:
   division for 16 bits, then Newton steps), which also serves the plane setup,
   where the determinant's reciprocal is shared by every gradient of the
   triangle. Screen coordinates are 16.16 px, depth 8.24, colors 8.8.
-- Records hold integer coordinates and planes. A plane is stored as its value
-  at the primitive's reference point (the top vertex, or a line's first end)
-  plus its two per-pixel gradients, and a span evaluates it with two 64-bit
-  products; the constant-at-origin form of the float path would not fit an
-  integer for off-screen vertices.
-- Texture coordinates follow: `(u/w, v/w)` in Q12, `1/w` in Q26, divided per
-  span end (perspective level 1) or per sub-span (level 2) with the same
-  reciprocal.
+- The primitive setup computes the same integer records as the float build
+  (see "Rendering pipeline"), with 64-bit products and the normalized
+  reciprocal where the float build uses float; `render()` is the same code in
+  both builds.
 
 Limits the float path does not have: view-space coordinates within +-32767
 model units; rotation and scale entries within +-2048; screen coordinates are
-clamped to +-8191 px (a triangle with a vertex far off screen bends slightly
-where it crosses the edge; the float path allows 1e8); texture coordinates
-within +-30000 texels. The picture is not pixel-identical to the float path.
+clamped to the guard band, +-8191 px (a triangle with a vertex beyond it bends
+where it crosses the screen, noticeably so when the vertex is thousands of
+pixels further out; the float path clips such a triangle exactly); texture
+coordinates within +-30000 texels. The picture is not pixel-identical to the float path.
 Measured on the same scenes, one 240x240 frame of a game differs in 90 pixels
 on average (worst 811) and a lit, textured, translucent test scene in 7% of its
 pixels, almost all by one shading step; both look the same. The test suite
@@ -742,27 +739,49 @@ merged into the active list, triangles that have been passed are removed, and th
     1. The record layout is recovered from the header (layer, flat and textured
        flags) and selects the span builder, so a primitive costs only the
        attributes it has.
-    2. The two edges crossing the scanline give the span's pixel range; its
-       attributes are evaluated at the center of the leftmost pixel from the
-       primitive's attribute planes (each attribute is stored as `c + dx * x + dy *
-       y` in screen space, set up once per primitive), with the plane's `dx` as the
-       per-pixel increment (depth as 8.24 fixed point; color and texture coordinates
-       as 16.16 fixed point). A flat primitive stores one color instead of three
-       planes, so its span takes it as a constant.
+    2. The two edges crossing the scanline give the span's pixel range: a span is
+       only that range, the layer and a pointer to the record. Each edge is
+       stored as its x at the center of the first row it is used on plus its
+       step per row, both 16.16 px, so the x on a row is one 32-bit
+       multiply-add. The stored x is derived from the edge's upper vertex
+       (`x + floor(slope * (row center - y))`), which makes the x of a shared
+       edge bit-identical in both triangles on every row: no pixel center falls
+       between them.
     3. The span is inserted. Opaque spans are kept in a list sorted by x that never
        overlaps; translucent spans in a separate list in insertion order. Which of
        two overlapping spans is nearer is decided in this order: spans reach the
        list in layer order, so one from another layer is the one added later and
        therefore in front; inside a layer without depth the later span wins for the
-       same reason; otherwise the NDC depths are compared at the center of the
-       overlapping interval. If the new span is nearer and opaque, the overlapping
+       same reason; otherwise the NDC depths of the two records' depth planes are
+       compared at the pixel at the center of the overlapping interval. Cutting
+       a span only moves its ends. If the new span is nearer and opaque, the overlapping
        part of the farther span is removed whether it is opaque or translucent; if a
        translucent span is nearer, both are kept. Within a layer this does not rely
        on the per-primitive sort order alone, so large and small polygons are ordered
        correctly.
 3. The opaque spans are rasterized in x order. The gaps are filled with the clear
    color when clearing is enabled and left untouched otherwise. Then the translucent
-   spans are composited in list order according to their blend mode.
+   spans are composited in list order according to their blend mode. Only now,
+   and only for the spans that are drawn, are the color and the texture
+   coordinates evaluated at the span's first pixel from the record's planes,
+   with the plane's `dx` as the per-pixel increment. A flat primitive stores one
+   color instead of three planes, so its span takes it as a constant.
+
+Everything in `render()` is 32-bit integer arithmetic, in the float build as in
+the fixed-point one. Each attribute of a record is a plane: its value at the
+center of a reference pixel (column `xa` on the first row, next to the
+primitive) and its two per-pixel gradients, in the attribute's own format --
+depth 8.24 (NDC), color 8.16 (0..255), texture coordinates 16.16 texels. It is
+evaluated at a pixel as `a0 + dx * (x - xa) + dy * (y - yMin)` in wrapping
+32-bit arithmetic: at any pixel the primitive covers, the true value lies
+within the range of its vertex values, so the sum is right even where a
+product wraps. A plane whose gradients would exceed 2^30 in its format (a
+sliver seen edge on) is stored constant instead. The setup computes the records
+in float (or in fixed point, see above) once per primitive; the float build
+first clips a triangle or a line that reaches beyond the guard band of the
+16.16 coordinates (+-8191 px, +-32767 px from 13 coordinate bits on) in screen
+space, where every stored attribute is linear, so far-off vertices cost a few
+extra records but no accuracy.
 
 Per-pixel processing is integer only. The inner loop is specialized for each
 combination of blend mode (3) x texture format (none + 4) x flat (all three vertex
@@ -777,18 +796,22 @@ coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
 
 - **0**: affine everywhere.
 - **1** (default): vertical correction. `(u/w, v/w, 1/w)`, which are linear in screen
-  space, are planes of the triangle; at the two end points of each span they are
-  divided to obtain exact `(u, v)`, and the span interior is interpolated affinely in
-  fixed point. The three divides (both `1/w` and `1/width`) are folded into one
-  `float` divide per span; costs 12 bytes per textured record. Along a
-  scanline, a horizontal surface seen by a camera without roll has constant depth, so
-  this level renders such surfaces without distortion; surfaces whose depth varies
-  along the scanline keep affine distortion inside each span, while span end points
-  (and therefore edges shared between triangles) are exact.
-- **2**: full correction. `(u/w, v/w, 1/w)` are interpolated across the span in `float`
-  and divided every `SHAPOGFX3D_PERSPECTIVE_STEP` pixels (default 16); `(u, v)` are
-  interpolated linearly in fixed point in between. Costs one divide per 16 textured
-  pixels, 12 bytes per textured record and 8 bytes per span.
+  space, are planes of the triangle; at the first and the last pixel of each drawn
+  span they are divided to obtain exact `(u, v)`, and the span interior is
+  interpolated affinely in fixed point. `1/w` is scaled per primitive by a power of
+  two that puts its largest vertex value into [2^28, 2^29) (the scale cancels in the
+  division), and a division is one normalized 32-bit division giving a 16-bit
+  reciprocal of `1/w` plus two 32x32 -> 64 multiplications (`arch::mulShift`) for
+  `u` and `v`. Per drawn textured span: two such divisions and two 32-bit divisions
+  by the span length; costs 12 bytes per textured record. Along a scanline, a
+  horizontal surface seen by a camera without roll has constant depth, so this level
+  renders such surfaces without distortion; surfaces whose depth varies along the
+  scanline keep affine distortion inside each span, while span end pixels (and
+  therefore edges shared between triangles) are exact.
+- **2**: full correction. `(u/w, v/w, 1/w)` are interpolated across the span and
+  divided every `SHAPOGFX3D_PERSPECTIVE_STEP` pixels (default 16) the same way;
+  `(u, v)` are interpolated linearly in fixed point in between. Costs one division
+  per 16 textured pixels and 12 bytes per textured record.
 
 With `SHAPOGFX3D_RP2_INTERP` (RP2040/RP2350), RGB565BE and ARGB4444 texels of
 textures with a power-of-two stride are addressed by the SIO interpolator: lane 0
@@ -860,8 +883,12 @@ bitmaps and text metrics, consistency between RGB565BE and RGB444 targets, and f
 the 3D renderer: banded versus whole-frame rendering (byte identical), offset
 rendering, transparent clear, all texture formats on both output formats, texel
 alpha, the winding of every shape (culled and double-sided renders must match),
-vertex colors, the index range check, and points/lines (Bresenham coverage, end points,
-LINE_LOOP, hidden-line removal, point size, near-plane clipping, depth bias). `test/data` holds a procedural image and a
+vertex colors, the index range check, points/lines (Bresenham coverage, end points,
+LINE_LOOP, hidden-line removal, point size, near-plane clipping, depth bias),
+watertight shared edges (no background pixel inside the silhouette of a subdivided
+plane or an icosphere) and exact coverage of a triangle with a vertex far beyond the
+guard band (float build), plus the `SHAPOGFX_COORD_BITS` limits and 2D lines and
+polygons with far-off vertices. `test/data` holds a procedural image and a
 small glTF model with the headers generated from them in both vertex forms
 (`test/tools` regenerates them); the tests verify the generated textures against
 the source pixels, that the packed model renders like the float one, and the

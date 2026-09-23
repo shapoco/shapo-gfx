@@ -258,6 +258,7 @@ struct LightQ {
 struct ShadedVertex;
 struct VertexQ;
 struct TriHead;
+struct PlaneSet;
 struct TriEntry;
 struct LayerDesc;
 struct Span;
@@ -475,6 +476,7 @@ class Graphics3D {
 
   bool clearEnabled_ = true;
   colorf clearColor_ = {0, 0, 0, 1};
+  gfx2d::Color clearColor8_ = 0xFF000000u;  // clearColor_ as render() uses it
 
   size_t arenaSize_ = 0;
   size_t arenaFixed_ = 0;  // bytes always in use (line buckets, layer table,
@@ -520,6 +522,9 @@ class Graphics3D {
   // nullptr when the triangle buffer is full. openLayer() is called first, so
   // the record belongs to the current layer.
   uint8_t *allocRecord(size_t size);
+  // Store a primitive whose header and planes are complete (see PlaneSet)
+  void storePrimitive(const detail::TriHead &h, const detail::PlaneSet &ps,
+                      bool smooth, bool textured);
   uint8_t layerByte();  // id of the current layer, opening one if needed
   void unlitVertex(const Vertex &in, const Material *mat,
                    detail::UnlitVertex &out) const;
@@ -530,9 +535,9 @@ class Graphics3D {
   detail::Span *allocSpan();
   detail::Span **cutSpan(detail::Span **pp, int ox0, int ox1);
   void appendTranslucent(const detail::Span &sp, int x1);
-  void insertOpaque(detail::Span &frag);
-  void insertTranslucent(detail::Span &frag);
-  void clipTranslucent(const detail::Span &frag);
+  void insertOpaque(detail::Span &frag, int yi);
+  void insertTranslucent(detail::Span &frag, int yi);
+  void clipTranslucent(const detail::Span &frag, int yi);
   uint16_t mergeLists(uint16_t a, uint16_t b);
 };
 
