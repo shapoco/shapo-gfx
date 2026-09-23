@@ -71,7 +71,11 @@ The 3D renderer's architecture-specific code lives in `src/gfx3d/arch/`, behind 
 few hooks with a portable implementation that is always present (`generic.hpp`);
 `arch.hpp` detects the target (`SHAPOGFX_ARCH_RP2`, `SHAPOGFX_ARCH_ESP32S3`,
 `SHAPOGFX_ARCH_ESP32P4`, else `SHAPOGFX_ARCH_GENERIC`; any of them may be defined
-by hand) and selects the implementation. With `SHAPOGFX3D_RP2_INTERP` the target
+by hand) and selects the implementation; the instruction set selects some too
+(`armv6m.hpp` for a Cortex-M0/M0+, `__ARM_ARCH_6M__`). The hooks: `mulShift` and
+`mulShiftU16` (a product shifted right, used by the perspective division), the
+texture walker (`InterpTex` on RP2) and `RenderState` (hardware state that
+`render()` saves and restores). With `SHAPOGFX3D_RP2_INTERP` the target
 must link `hardware_interp`; `render()` saves and restores `interp0` of the calling
 core, so interrupt handlers running during `render()` must not use it.
 
@@ -707,10 +711,12 @@ once, at the boundary:
   primitive.
 - A vertex is converted when it is fetched (three float-to-int conversions),
   transformed with 32x32 -> 64 multiplies into 16.16 view space, and projected
-  with one division: 1/w comes from a normalized reciprocal (a 32-bit hardware
-  division for 16 bits, then Newton steps), which also serves the plane setup,
-  where the determinant's reciprocal is shared by every gradient of the
-  triangle. Screen coordinates are 16.16 px, depth 8.24, colors 8.8.
+  with one division: 1/w comes from a normalized reciprocal (one 32-bit
+  hardware division gives 16 bits of it, and a quotient is the top 16 bits of
+  the dividend times it, a 32-bit product, for about 15 significant bits),
+  which also serves the plane setup, where the determinant's reciprocal is
+  shared by every gradient of the triangle. Screen coordinates are 16.16 px,
+  depth 8.24, colors 8.8.
 - The primitive setup computes the same integer records as the float build
   (see "Rendering pipeline"), with 64-bit products and the normalized
   reciprocal where the float build uses float; `render()` is the same code in
@@ -818,8 +824,9 @@ coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
   interpolated affinely in fixed point. `1/w` is scaled per primitive by a power of
   two that puts its largest vertex value into [2^28, 2^29) (the scale cancels in the
   division), and a division is one normalized 32-bit division giving a 16-bit
-  reciprocal of `1/w` plus two 32x32 -> 64 multiplications (`arch::mulShift`) for
-  `u` and `v`. Per drawn textured span: two such divisions and two 32-bit divisions
+  reciprocal of `1/w` plus two 32x16-bit multiplications (`arch::mulShiftU16`;
+  two 16x16 -> 32-bit products each on a Cortex-M0+, which has no 64-bit
+  multiply) for `u` and `v`. Per drawn textured span: two such divisions and two 32-bit divisions
   by the span length; costs 12 bytes per textured record. Along a scanline, a
   horizontal surface seen by a camera without roll has constant depth, so this level
   renders such surfaces without distortion; surfaces whose depth varies along the

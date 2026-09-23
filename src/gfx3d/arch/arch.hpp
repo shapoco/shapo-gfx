@@ -45,6 +45,9 @@
 #endif
 
 #include "generic.hpp"
+#if defined(__ARM_ARCH_6M__)
+#include "armv6m.hpp"
+#endif
 #if defined(SHAPOGFX_ARCH_RP2)
 #include "rp2.hpp"
 #endif
@@ -52,6 +55,11 @@
 // The hooks gfx3d.cpp calls
 namespace shapoco::gfx3d::arch {
 using generic::mulShift;
+#if defined(__ARM_ARCH_6M__)
+using armv6m::mulShiftU16;
+#else
+using generic::mulShiftU16;
+#endif
 #if defined(SHAPOGFX_ARCH_RP2) && SHAPOGFX3D_RP2_INTERP
 using rp2::RenderState;
 #else

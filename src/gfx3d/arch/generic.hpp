@@ -9,9 +9,15 @@
 
 namespace shapoco::gfx3d::arch::generic {
 
-// (a * b) >> sh with a 64-bit product (0 <= sh < 32)
+// (a * b) >> sh with a 64-bit product (0 <= sh < 32); the result must fit
+// 32 bits
 static inline int32_t mulShift(int32_t a, int32_t b, int sh) {
   return (int32_t)(((int64_t)a * b) >> sh);
+}
+
+// The same for b < 2^16 and 0 <= sh <= 16
+static inline int32_t mulShiftU16(int32_t a, uint32_t b, int sh) {
+  return (int32_t)(((int64_t)a * (int64_t)b) >> sh);
 }
 
 // Hardware state render() has to preserve for the caller

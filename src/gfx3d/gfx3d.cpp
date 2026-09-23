@@ -93,8 +93,9 @@
 // point once when they change, a vertex once when it is fetched, and
 // everything from there to the primitive records is integer arithmetic:
 // 32x32 -> 64 multiplies and a normalized-reciprocal division (one 32-bit
-// hardware division plus Newton steps). The records and everything after
-// them (render()) are the same in both builds and integer only.
+// hardware division for a 16-bit reciprocal, see Rcp). The records and
+// everything after them (render()) are the same in both builds and integer
+// only.
 //
 // Limits that the float path does not have: view-space coordinates within
 // +-32767 model units, rotation and scale entries of the current matrix
@@ -581,23 +582,21 @@ static inline int32_t fToFix(float v, int shift, int32_t maxAbs) {
   if (s >= lim) return maxAbs;
   return (int32_t)s;
 }
-static inline int clz64(uint64_t v) { return __builtin_clzll(v); }
-
-// ~2^62 / x for x in [2^31, 2^32): a 32-bit division gives the first 16 bits
-// and two Newton steps the rest (about 30 good bits)
-static inline uint32_t rcpNorm(uint32_t x) {
-  uint64_t r = (uint64_t)(0xFFFFFFFFu / (x >> 16)) << 14;
-  for (int i = 0; i < 2; i++) {
-    const int64_t e = (int64_t)(((uint64_t)1 << 62) - (uint64_t)x * r);
-    r = (uint64_t)((int64_t)r + (((int64_t)(r >> 8) * (e >> 24)) >> 30));
-  }
-  return r > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)r;
+// Leading zeros of a nonzero 64-bit value, from 32-bit counts (one
+// instruction each from the Cortex-M3 on)
+static inline int clz64(uint64_t v) {
+  const uint32_t hi = (uint32_t)(v >> 32);
+  return hi ? __builtin_clz(hi) : 32 + __builtin_clz((uint32_t)v);
 }
 
-// A divisor as a normalized reciprocal, so that several dividends can share
-// the division: 1 / den ~= rcp * 2^(ds - 94)
+// A divisor as a normalized 16-bit reciprocal, so that several dividends can
+// share the division: 1 / |den| ~= rcp * 2^(ds - 79). It takes one 32-bit
+// division, and a quotient (mulRcp()) one 16 x 16 -> 32-bit product, for
+// about 15 significant bits -- plenty for what the setup divides (1/w, edge
+// slopes, plane gradients), and no 64-bit multiplication on a core without
+// one.
 struct Rcp {
-  uint32_t rcp;
+  uint32_t rcp;  // (2^15, 2^16)
   int ds;
   bool neg, zero;
 };
@@ -612,7 +611,7 @@ static inline Rcp makeRcp(int64_t den) {
   }
   const uint64_t u = r.neg ? (uint64_t)0 - (uint64_t)den : (uint64_t)den;
   r.ds = clz64(u);
-  r.rcp = rcpNorm((uint32_t)((u << r.ds) >> 32));
+  r.rcp = 0xFFFFFFFFu / (uint32_t)((u << r.ds) >> 47);  // / [2^16, 2^17)
   return r;
 }
 // num / den * 2^shift, saturating at +-maxAbs
@@ -622,15 +621,16 @@ static inline int32_t mulRcp(int64_t num, const Rcp &d, int shift,
   const bool neg = (num < 0) != d.neg;
   const uint64_t u = num < 0 ? (uint64_t)0 - (uint64_t)num : (uint64_t)num;
   const int ns = clz64(u);
-  const uint64_t p = (uint64_t)(uint32_t)((u << ns) >> 32) * d.rcp;
-  const int e = d.ds - ns - 62 + shift;  // num / den * 2^shift = p * 2^e
+  // The top 16 bits of the dividend times the reciprocal
+  const uint32_t p = (uint32_t)((u << ns) >> 48) * d.rcp;
+  const int e = d.ds - ns - 31 + shift;  // num / den * 2^shift = p * 2^e
   uint64_t r;
-  if (e >= 64 || (e > 0 && (p >> (64 - e)) != 0)) {
+  if (e >= 32 || (e > 0 && (p >> (32 - e)) != 0)) {
     r = (uint64_t)maxAbs;
   } else if (e >= 0) {
-    r = p << e;
+    r = (uint64_t)p << e;
   } else {
-    r = (-e >= 64) ? 0 : (p >> -e);
+    r = (-e >= 32) ? 0 : (p >> -e);
   }
   if (r > (uint64_t)maxAbs) r = (uint64_t)maxAbs;
   return neg ? -(int32_t)r : (int32_t)r;
@@ -1822,7 +1822,7 @@ struct PlaneSolver {
         mulRcp(d2 * x10 - d1 * x20, rd, FP_SHIFT - CR_DROP, GRAD_LIMIT);
     if (dx == GRAD_LIMIT || dx == -GRAD_LIMIT || dy == GRAD_LIMIT ||
         dy == -GRAD_LIMIT) {
-      return {(int32_t)(((int64_t)a0 + a1 + a2) / 3), 0, 0};
+      return {a0 / 3 + a1 / 3 + a2 / 3, 0, 0};
     }
     return {clampFix(a0 + (((int64_t)dx * rx + (int64_t)dy * ry) >> FP_SHIFT),
                      INT32_MAX),
@@ -1891,7 +1891,10 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 
   TriHead h;
   triangleHeader(h, mat, tf, smooth);
-  h.sortKey = sortKeyOf((int32_t)(((int64_t)a.viewZ + b.viewZ + c.viewZ) / 3));
+  // The average in 32 bits (a 64-bit division is a slow library call on a
+  // core without an FPU): a quarter of the sum, divided by 3, times 4
+  h.sortKey =
+      sortKeyOf(((a.viewZ >> 2) + (b.viewZ >> 2) + (c.viewZ >> 2)) / 3 * 4);
   h.layer = layerByte();
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
 
@@ -2124,7 +2127,7 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
 
   TriHead h;
   unlitHeader(h, mat, TriFlags::LINE, smooth);
-  h.sortKey = sortKeyOf((int32_t)(((int64_t)a.vz + b.vz) / 2));
+  h.sortKey = sortKeyOf((a.vz >> 1) + (b.vz >> 1));
   h.layer = layerByte();
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
   PlaneSet ps;
@@ -3102,23 +3105,23 @@ static inline int32_t mulWrap(int32_t a, int b) {
 #if SHAPOGFX3D_PERSPECTIVE >= 1
 // u (16.16 texels) = uw x 2^UW_SHIFT / iw in the formats of the texture
 // planes (see IW_NORM). One normalized 32-bit division gives a 16-bit
-// reciprocal of iw that the multiplications by uw and vw share.
+// reciprocal of iw that the multiplications by uw and vw share
+// (arch::mulShiftU16: a 32 x 16-bit product, two 16 x 16-bit ones on a
+// Cortex-M0+).
 struct PerspDiv {
   uint32_t r;
   int sh;
   explicit PerspDiv(int32_t iw) {
     // iw at a pixel lies within its primitive's vertex values, the largest
     // of which is in [2^IW_NORM, 2^(IW_NORM + 1)). Smaller ones are limited
-    // to IW_MIN, where a primitive spans a depth ratio beyond 2^15.
-    constexpr int32_t IW_MIN = 1 << (IW_NORM - 15);
+    // to IW_MIN, where a primitive spans a depth ratio beyond 2^14.
+    constexpr int32_t IW_MIN = 1 << (IW_NORM - 14);
     const uint32_t d = (uint32_t)(iw < IW_MIN ? IW_MIN : iw);
-    const int n = __builtin_clz(d);      // 2 .. 18
-    r = 0xFFFFFFFFu / ((d << n) >> 16);  // 2^(48 - n) / d, 17 bits
-    sh = 48 - UW_SHIFT - n;
+    const int n = __builtin_clz(d);      // 2 .. 17
+    r = 0xFFFFFFFFu / ((d << n) >> 15);  // 2^(47 - n) / d, in (2^15, 2^16)
+    sh = 47 - UW_SHIFT - n;              // 0 .. 15
   }
-  int32_t operator()(int32_t uw) const {
-    return arch::mulShift(uw, (int32_t)r, sh < 0 ? 0 : sh);
-  }
+  int32_t operator()(int32_t uw) const { return arch::mulShiftU16(uw, r, sh); }
 };
 #endif
 
