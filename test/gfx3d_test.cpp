@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 #include "check.hpp"
 #include "shapoco/gfx2d/surface_alloc.hpp"
@@ -773,6 +774,33 @@ static void testFarVertex() {
 #endif
 }
 
+// Two render contexts: the halves of the frame rendered at the same time on
+// two threads match a render in one call byte for byte
+static void testRenderContexts() {
+  g3::Config cfg = g3::defaultConfig(W, H, arena, sizeof(arena));
+  cfg.renderContexts = 2;
+  g3::Graphics3D r;
+  r.init(cfg);
+  CHECK(r.isInitialized());
+  g2::OwnedSurface whole = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface split = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  r.setClearColor({0.1f, 0.2f, 0.3f, 1});
+  for (int i = 0; i < 4; i++) {
+    buildScene(r, &M_RED, 0.3f + 0.9f * (float)i);
+    r.beginRender();
+    r.render(0, 0, W, H, whole);
+    std::thread t1(
+        [&] { r.render(1, 0, H / 2, W, H - H / 2, split, 0, H / 2); });
+    r.render(0, 0, 0, W, H / 2, split);
+    t1.join();
+    r.render(2, 0, 0, W, H, split);  // no such context: draws nothing
+    r.endRender();
+    CHECK(std::memcmp(whole.pixels(), split.pixels(), whole.bytes()) == 0);
+  }
+  CHECK(r.getStats().spanPeak > 0);
+  CHECK_EQ(r.getStats().spanDropped, 0);
+}
+
 void testGfx3D() {
   genTextures();
 #if SHAPOGFX3D_LINES && SHAPOGFX3D_POINTS
@@ -785,6 +813,7 @@ void testGfx3D() {
   testLayersAndConfig();
   testWatertight();
   testFarVertex();
+  testRenderContexts();
 #if SHAPOGFX3D_TEXTURE && SHAPOGFX3D_BLEND
   testTextureAlpha();
 #endif

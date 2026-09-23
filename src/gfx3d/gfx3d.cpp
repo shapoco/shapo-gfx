@@ -387,12 +387,11 @@ static inline int recIndex(bool depth, bool smooth, bool tex) {
   return (depth ? 4 : 0) | (smooth ? 2 : 0) | (tex ? 1 : 0);
 }
 
-// One entry per primitive: where its record is and the scanline list link.
-// beginRender() sorts the entries of each layer by depth.
-struct TriEntry {
-  uint16_t rec;   // record offset from the start of the region, in 4 bytes
-  uint16_t link;  // next entry of the scanline list (NONE: end)
-};
+// One entry per primitive: the offset of its record from the start of the
+// region, in 4 bytes. beginRender() sorts the entries of each layer by depth.
+// Each render context keeps a scanline-list link per entry as well (see
+// RenderContext::link), which is where the rest of an entry's bytes go.
+using TriEntry = uint16_t;
 
 struct LayerDesc {
   int32_t first;  // index of the first entry of the layer
@@ -417,6 +416,21 @@ struct PlaneSet {
   Plane p[A_COUNT];  // A_T*: (u/w, v/w, 1/w), or (u, v) at level 0
   uint8_t fr, fg, fb;
   const Texture *tex;  // textured primitives
+};
+
+// The state of one render() call: its span pool and span lists, the
+// per-scanline triangle lists and the links of the active triangle list. A
+// renderer holds Config::renderContexts of them, so that as many render()
+// calls may run at the same time -- one per core, each on its own band.
+struct RenderContext {
+  Span *pool;
+  int count;     // spans used on the current scanline
+  int peak;      // most spans used on a scanline (reset by beginRender())
+  int dropped;   // spans dropped because the pool overflowed
+  Span *opaque;  // ascending x, non-overlapping
+  Span *transHead, *transTail;        // insertion order (farthest first)
+  uint16_t *bucketHead, *bucketTail;  // per scanline: entries starting there
+  uint16_t *link;  // per entry: the next of its list (placed by beginRender())
 };
 
 struct StackEntry {
@@ -485,6 +499,7 @@ static constexpr int STACK_DEPTH = SHAPOGFX3D_STACK_DEPTH;
 static constexpr int LAYER_MAX = SHAPOGFX3D_LAYER_MAX;
 static constexpr int SPAN_CAPACITY_MIN = 32;
 static constexpr int SPAN_CAPACITY_MAX = 512;
+static constexpr int RENDER_CONTEXTS_MAX = 4;
 static constexpr int VCACHE_SIZE = SHAPOGFX3D_VCACHE_SIZE;
 static constexpr uint16_t NONE = 0xFFFF;
 
@@ -744,20 +759,31 @@ void Graphics3D::init(const Config &cfg) {
   p = alignUp8(p);
   auto avail = [&]() -> size_t { return (end > p) ? (size_t)(end - p) : 0; };
 
-  // Fixed allocations: line buckets (screenH x 2), layer table, matrix stack,
-  // vertex cache
+  // Render contexts, each with its line buckets (screenH x 2)
+  const int nctx =
+      std::max(1, std::min(RENDER_CONTEXTS_MAX, (int)cfg.renderContexts));
+  const size_t ctxBytes = alignUp8((size_t)nctx * sizeof(RenderContext));
   const size_t bucketBytes = alignUp8((size_t)h * 2 * sizeof(uint16_t));
+  // Fixed allocations: layer table, matrix stack, vertex cache
   const size_t layerBytes = alignUp8((size_t)LAYER_MAX * sizeof(LayerDesc));
   const size_t stackBytes = alignUp8((size_t)STACK_DEPTH * sizeof(StackEntry));
   const size_t vcacheBytes =
       alignUp8((size_t)VCACHE_SIZE * sizeof(CachedVertex));
-  if (avail() < bucketBytes + layerBytes + stackBytes + vcacheBytes) {
+  if (avail() <
+      ctxBytes + nctx * bucketBytes + layerBytes + stackBytes + vcacheBytes) {
     *this = Graphics3D();
     return;
   }
-  bucketHead_ = (uint16_t *)p;
-  bucketTail_ = bucketHead_ + h;
-  p += bucketBytes;
+  contexts_ = (RenderContext *)p;
+  contextCount_ = nctx;
+  p += ctxBytes;
+  for (int c = 0; c < nctx; c++) {
+    RenderContext &rc = contexts_[c];
+    rc = RenderContext();
+    rc.bucketHead = (uint16_t *)p;
+    rc.bucketTail = rc.bucketHead + h;
+    p += bucketBytes;
+  }
   layers_ = (LayerDesc *)p;
   p += layerBytes;
   stack_ = (StackEntry *)p;
@@ -766,16 +792,19 @@ void Graphics3D::init(const Config &cfg) {
   p += vcacheBytes;
   arenaFixed_ = (size_t)(p - (uintptr_t)cfg.arena);
 
-  // Span pool: as requested, or a quarter of the remaining space
+  // Span pools, one per context: as requested, or a quarter of the
+  // remaining space shared among the contexts
   int spanCap = cfg.spanCapacity;
   if (spanCap <= 0) {
-    spanCap = (int)((avail() / 4) / sizeof(Span));
+    spanCap = (int)((avail() / 4) / (sizeof(Span) * nctx));
     spanCap = std::max(SPAN_CAPACITY_MIN, std::min(SPAN_CAPACITY_MAX, spanCap));
   }
-  spanCap = std::min(spanCap, (int)(avail() / sizeof(Span)));
-  spanPool_ = (Span *)p;
+  spanCap = std::min(spanCap, (int)(avail() / (sizeof(Span) * nctx)));
   spanCapacity_ = spanCap;
-  p += (size_t)spanCap * sizeof(Span);
+  for (int c = 0; c < nctx; c++) {
+    contexts_[c].pool = (Span *)p;
+    p += (size_t)spanCap * sizeof(Span);
+  }
   p = alignUp8(p);
 
   // Triangle buffer: everything that remains, entries growing up from its
@@ -785,9 +814,10 @@ void Graphics3D::init(const Config &cfg) {
   region &= ~(size_t)(REC_ALIGN - 1);
   recBase_ = (uint8_t *)p;
   entries_ = (TriEntry *)p;
+  entryBytes_ = (int)sizeof(TriEntry) + nctx * (int)sizeof(uint16_t);
   recEnd_ = recBase_ + region;
   recTop_ = recEnd_;
-  if (spanCap <= 0 || region < sizeof(TriEntry) + TRI_REC_SIZE[7]) {
+  if (spanCap <= 0 || region < (size_t)entryBytes_ + TRI_REC_SIZE[7]) {
     *this = Graphics3D();
     return;
   }
@@ -847,15 +877,16 @@ uint8_t Graphics3D::layerByte() {
 
 // Reserve a record and register its entry. Records are packed downwards from
 // the end of the region and the entries upwards from its start, so the buffer
-// is full when the two meet.
+// is full when the two meet. The space between them keeps room for the links
+// of every render context, which beginRender() places there.
 uint8_t *Graphics3D::allocRecord(size_t size) {
   if (!recBase_ || triCount_ >= (int)NONE) return nullptr;
   uint8_t *rec = recTop_ - size;
-  if (rec < recBase_ + (size_t)(triCount_ + 1) * sizeof(TriEntry)) {
+  if (rec < recBase_ + (size_t)(triCount_ + 1) * (size_t)entryBytes_) {
     return nullptr;
   }
   recTop_ = rec;
-  entries_[triCount_].rec = (uint16_t)((size_t)(rec - recBase_) / REC_UNIT);
+  entries_[triCount_] = (TriEntry)((size_t)(rec - recBase_) / REC_UNIT);
   return rec;
 }
 
@@ -2563,8 +2594,8 @@ void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
 // Rendering
 
 // Header of the record an entry points to
-static inline const TriHead *recOf(const uint8_t *base, const TriEntry &e) {
-  return (const TriHead *)(base + (size_t)e.rec * REC_UNIT);
+static inline const TriHead *recOf(const uint8_t *base, TriEntry e) {
+  return (const TriHead *)(base + (size_t)e * REC_UNIT);
 }
 
 void Graphics3D::beginRender() {
@@ -2574,34 +2605,41 @@ void Graphics3D::beginRender() {
   // determines the compositing order of translucent primitives; between
   // layers the order the layers were opened in decides. Only the entries are
   // permuted, never the records.
-  spanPeak_ = 0;
-  spanDropped_ = 0;
   if (!recBase_) return;
+  // The links of each context go between the entries and the records
+  uint16_t *link =
+      (uint16_t *)(recBase_ + (size_t)triCount_ * sizeof(TriEntry));
+  for (int c = 0; c < contextCount_; c++) {
+    RenderContext &rc = contexts_[c];
+    rc.peak = 0;
+    rc.dropped = 0;
+    rc.link = link + (size_t)c * (size_t)triCount_;
+  }
   const uint8_t *base = recBase_;
   for (int i = 0; i < layerCount_; i++) {
     if (layers_[i].id & LayerId::NO_DEPTH) continue;  // kept in the order added
     const int first = layers_[i].first;
     const int last = (i + 1 < layerCount_) ? layers_[i + 1].first : triCount_;
     std::sort(entries_ + first, entries_ + last,
-              [base](const TriEntry &a, const TriEntry &b) {
+              [base](TriEntry a, TriEntry b) {
                 const int ka = recOf(base, a)->sortKey;
                 const int kb = recOf(base, b)->sortKey;
                 // Equal depth keeps the order the primitives were added in:
                 // records grow downwards, so the earlier one sits higher.
                 if (ka != kb) return ka < kb;
-                return a.rec > b.rec;
+                return a > b;
               });
   }
 }
 
 void Graphics3D::endRender() {}
 
-SHAPOGFX3D_HOT_ATTR Span *Graphics3D::allocSpan() {
-  if (spanCount_ >= spanCapacity_) {
-    spanDropped_++;
+static SHAPOGFX3D_HOT_ATTR Span *allocSpan(RenderContext &rc, int capacity) {
+  if (rc.count >= capacity) {
+    rc.dropped++;
     return nullptr;
   }
-  return &spanPool_[spanCount_++];
+  return &rc.pool[rc.count++];
 }
 
 // Advance the left end of a span by n pixels
@@ -2643,14 +2681,15 @@ static inline bool fragNearer(const Span &frag, const Span &e, int ox0, int ox1,
 // Remove the range [ox0, ox1) from list element e = *pp.
 // Returns the position at which to continue scanning (after the remaining part,
 // or the rest of e).
-SHAPOGFX3D_HOT_ATTR Span **Graphics3D::cutSpan(Span **pp, int ox0, int ox1) {
+static SHAPOGFX3D_HOT_ATTR Span **cutSpan(RenderContext &rc, int capacity,
+                                          Span **pp, int ox0, int ox1) {
   Span *e = *pp;
   bool leftRemains = e->x0 < ox0;
   bool rightRemains = e->x1 > ox1;
   if (leftRemains && rightRemains) {
     // Hole in the middle: split the right part into a new span (dropped if the
     // pool is full)
-    Span *r = allocSpan();
+    Span *r = allocSpan(rc, capacity);
     if (r) {
       *r = *e;
       spanAdvance(*r, ox1 - r->x0);
@@ -2674,18 +2713,20 @@ SHAPOGFX3D_HOT_ATTR Span **Graphics3D::cutSpan(Span **pp, int ox0, int ox1) {
 #if SHAPOGFX3D_BLEND
 
 // Append (part of) a span [sp.x0, x1) to the translucent list
-SHAPOGFX3D_HOT_ATTR void Graphics3D::appendTranslucent(const Span &sp, int x1) {
-  Span *n = allocSpan();
+static SHAPOGFX3D_HOT_ATTR void appendTranslucent(RenderContext &rc,
+                                                  int capacity, const Span &sp,
+                                                  int x1) {
+  Span *n = allocSpan(rc, capacity);
   if (!n) return;  // pool overflow: drop this span
   *n = sp;
   n->x1 = (coord_t)x1;
   n->next = nullptr;
-  if (transTail_) {
-    transTail_->next = n;
+  if (rc.transTail) {
+    rc.transTail->next = n;
   } else {
-    transHead_ = n;
+    rc.transHead = n;
   }
-  transTail_ = n;
+  rc.transTail = n;
 }
 
 #endif  // SHAPOGFX3D_BLEND
@@ -2694,20 +2735,21 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::appendTranslucent(const Span &sp, int x1) {
 // Overlaps with existing spans are resolved by comparing depth at the center of
 // the overlap and removing the farther part. Because this does not rely on the
 // per-triangle sort order, large and small polygons are ordered correctly too.
-SHAPOGFX3D_HOT_ATTR void Graphics3D::insertOpaque(Span &frag, int yi) {
-  Span **pp = &opaqueHead_;
+static SHAPOGFX3D_HOT_ATTR void insertOpaque(RenderContext &rc, int capacity,
+                                             Span &frag, int yi) {
+  Span **pp = &rc.opaque;
   while (*pp && (*pp)->x1 <= frag.x0) pp = &(*pp)->next;
   while (*pp && (*pp)->x0 < frag.x1) {
     Span *e = *pp;
     int ox0 = std::max(e->x0, frag.x0);
     int ox1 = std::min(e->x1, frag.x1);
     if (fragNearer(frag, *e, ox0, ox1, yi)) {
-      pp = cutSpan(pp, ox0, ox1);
+      pp = cutSpan(rc, capacity, pp, ox0, ox1);
     } else {
       // The part sticking out to the left of e is final (elements before it are
       // done)
       if (frag.x0 < ox0) {
-        Span *n = allocSpan();
+        Span *n = allocSpan(rc, capacity);
         if (n) {
           *n = frag;
           n->x1 = (coord_t)ox0;
@@ -2725,7 +2767,7 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::insertOpaque(Span &frag, int yi) {
     }
   }
   if (frag.x0 < frag.x1) {
-    Span *n = allocSpan();
+    Span *n = allocSpan(rc, capacity);
     if (n) {
       *n = frag;
       n->next = *pp;
@@ -2738,8 +2780,10 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::insertOpaque(Span &frag, int yi) {
 
 // Add a translucent span to the translucent list, excluding the parts hidden by
 // nearer opaque spans
-SHAPOGFX3D_HOT_ATTR void Graphics3D::insertTranslucent(Span &frag, int yi) {
-  Span **pp = &opaqueHead_;
+static SHAPOGFX3D_HOT_ATTR void insertTranslucent(RenderContext &rc,
+                                                  int capacity, Span &frag,
+                                                  int yi) {
+  Span **pp = &rc.opaque;
   while (*pp && (*pp)->x1 <= frag.x0) pp = &(*pp)->next;
   while (*pp && (*pp)->x0 < frag.x1) {
     Span *e = *pp;
@@ -2749,7 +2793,7 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::insertTranslucent(Span &frag, int yi) {
       pp = &e->next;  // translucent is nearer: keep both
       continue;
     }
-    if (frag.x0 < ox0) appendTranslucent(frag, ox0);
+    if (frag.x0 < ox0) appendTranslucent(rc, capacity, frag, ox0);
     if (frag.x1 > ox1) {
       spanAdvance(frag, ox1 - frag.x0);
       pp = &e->next;
@@ -2757,13 +2801,14 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::insertTranslucent(Span &frag, int yi) {
       return;
     }
   }
-  if (frag.x0 < frag.x1) appendTranslucent(frag, frag.x1);
+  if (frag.x0 < frag.x1) appendTranslucent(rc, capacity, frag, frag.x1);
 }
 
 // Remove the parts of translucent spans that lie behind the new opaque span
 // frag
-SHAPOGFX3D_HOT_ATTR void Graphics3D::clipTranslucent(const Span &frag, int yi) {
-  Span **pp = &transHead_;
+static SHAPOGFX3D_HOT_ATTR void clipTranslucent(RenderContext &rc, int capacity,
+                                                const Span &frag, int yi) {
+  Span **pp = &rc.transHead;
   bool modified = false;
   while (*pp) {
     Span *e = *pp;
@@ -2774,15 +2819,15 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::clipTranslucent(const Span &frag, int yi) {
     int ox0 = std::max(e->x0, frag.x0);
     int ox1 = std::min(e->x1, frag.x1);
     if (fragNearer(frag, *e, ox0, ox1, yi)) {
-      pp = cutSpan(pp, ox0, ox1);
+      pp = cutSpan(rc, capacity, pp, ox0, ox1);
       modified = true;
     } else {
       pp = &e->next;
     }
   }
   if (modified) {
-    transTail_ = nullptr;
-    for (Span *e = transHead_; e; e = e->next) transTail_ = e;
+    rc.transTail = nullptr;
+    for (Span *e = rc.transHead; e; e = e->next) rc.transTail = e;
   }
 }
 
@@ -3198,6 +3243,25 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
   constexpr bool TEXA = texFmtHasAlpha(T);
   (void)st;
 
+#if SHAPOGFX3D_GOURAUD
+  // An opaque, untextured, smoothly shaded RGB565 span: red and green come
+  // packed from arch::GouraudRG (the SIO interpolator on RP2), blue is
+  // stepped here
+  if constexpr (B == BlendMode::NONE && !TEX && !FLAT &&
+                OUT == PixelFormat::RGB565BE) {
+    arch::GouraudRG rg;
+    rg.init(col.r, col.g, col.dr, col.dg);
+    int32_t b = col.b;
+    const int32_t db = col.db;
+    for (int i = 0; i < n; i++) {
+      cur.write(rg.next() | (((uint32_t)b >> 19) & 31u));
+      cur.next();
+      b += db;
+    }
+    return;
+  }
+#endif
+
   uint32_t sr = col.r5();
   uint32_t sg = col.g6();
   uint32_t sb = col.b5();
@@ -3492,19 +3556,19 @@ static const RasterFn RASTER_FNS_RGB444[RASTER_TABLE_SIZE] =
 #endif
 
 // Merge two ascending lists (links are stored in the entries)
-uint16_t Graphics3D::mergeLists(uint16_t a, uint16_t b) {
-  TriEntry *const ent = entries_;
+static SHAPOGFX3D_HOT_ATTR uint16_t mergeLists(uint16_t *link, uint16_t a,
+                                               uint16_t b) {
   uint16_t head = NONE;
   uint16_t *pp = &head;
   while (a != NONE && b != NONE) {
     if (a < b) {
       *pp = a;
-      pp = &ent[a].link;
-      a = ent[a].link;
+      pp = &link[a];
+      a = link[a];
     } else {
       *pp = b;
-      pp = &ent[b].link;
-      b = ent[b].link;
+      pp = &link[b];
+      b = link[b];
     }
   }
   *pp = (a != NONE) ? a : b;
@@ -3514,7 +3578,18 @@ uint16_t Graphics3D::mergeLists(uint16_t a, uint16_t b) {
 SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int16_t x, int16_t y, int16_t w,
                                             int16_t h, const Surface &dst,
                                             int16_t dstX, int16_t dstY) {
-  if (!recBase_ || !spanPool_ || !dst.pixels) return;
+  render(0, x, y, w, h, dst, dstX, dstY);
+}
+
+// Everything render() changes is in its context, so calls with different
+// contexts may run at the same time (the rest of the renderer is only read).
+SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int ctx, int16_t x, int16_t y,
+                                            int16_t w, int16_t h,
+                                            const Surface &dst, int16_t dstX,
+                                            int16_t dstY) {
+  if (!recBase_ || !dst.pixels || ctx < 0 || ctx >= contextCount_) return;
+  RenderContext &rc = contexts_[ctx];
+  const int cap = spanCapacity_;
 
   // Output format
   const RasterFn *table = nullptr;
@@ -3556,7 +3631,9 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int16_t x, int16_t y, int16_t w,
   const int y0 = std::max(ry, 0);
   const int y1 = std::min(ry + rh, (int)screenH_);
   if (y0 >= y1 || rx0 >= rx1) return;
-  TriEntry *const ent = entries_;
+  const TriEntry *const ent = entries_;
+  uint16_t *const link = rc.link;
+  uint16_t *const bucketHead = rc.bucketHead, *const bucketTail = rc.bucketTail;
   const uint8_t *const base = recBase_;
 
   arch::RenderState archState;  // e.g. the RP2 interpolator the caller uses
@@ -3564,60 +3641,60 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int16_t x, int16_t y, int16_t w,
 
   // For each scanline of the region, build the list of triangles that start
   // intersecting at that line (linked by entry position, i.e. by depth)
-  for (int i = y0; i < y1; i++) bucketHead_[i] = bucketTail_[i] = NONE;
+  for (int i = y0; i < y1; i++) bucketHead[i] = bucketTail[i] = NONE;
   for (int p = 0; p < triCount_; p++) {
     const TriHead &t = *recOf(base, ent[p]);
     if (t.yMax < y0 || t.yMin >= y1) continue;
     int line = std::max((int)t.yMin, y0);
-    ent[p].link = NONE;
-    if (bucketTail_[line] != NONE) {
-      ent[bucketTail_[line]].link = (uint16_t)p;
+    link[p] = NONE;
+    if (bucketTail[line] != NONE) {
+      link[bucketTail[line]] = (uint16_t)p;
     } else {
-      bucketHead_[line] = (uint16_t)p;
+      bucketHead[line] = (uint16_t)p;
     }
-    bucketTail_[line] = (uint16_t)p;
+    bucketTail[line] = (uint16_t)p;
   }
 
   uint16_t active = NONE;  // triangles intersecting the current line (by depth)
   for (int yi = y0; yi < y1; yi++) {
-    active = mergeLists(active, bucketHead_[yi]);
+    active = mergeLists(link, active, bucketHead[yi]);
 
     // Clear the span lists (per scanline)
-    spanCount_ = 0;
-    opaqueHead_ = nullptr;
-    transHead_ = transTail_ = nullptr;
+    rc.count = 0;
+    rc.opaque = nullptr;
+    rc.transHead = rc.transTail = nullptr;
 
     uint16_t *pp = &active;
     while (*pp != NONE) {
       const uint16_t p = *pp;
       const TriHead &t = *recOf(base, ent[p]);
       if (yi > t.yMax) {
-        *pp = ent[p].link;  // passed: remove from the active list
+        *pp = link[p];  // passed: remove from the active list
         continue;
       }
       Span sp;
       if (makeSpan(t, yi, rx0, rx1, sp)) {
 #if SHAPOGFX3D_BLEND
         if (t.flags & TriFlags::OPAQUE) {
-          clipTranslucent(sp, yi);
-          insertOpaque(sp, yi);
+          clipTranslucent(rc, cap, sp, yi);
+          insertOpaque(rc, cap, sp, yi);
         } else {
-          insertTranslucent(sp, yi);
+          insertTranslucent(rc, cap, sp, yi);
         }
 #else
-        insertOpaque(sp, yi);  // every primitive is opaque
+        insertOpaque(rc, cap, sp, yi);  // every primitive is opaque
 #endif
       }
-      pp = &ent[p].link;
+      pp = &link[p];
     }
-    if (spanCount_ > spanPeak_) spanPeak_ = spanCount_;
+    if (rc.count > rc.peak) rc.peak = rc.count;
 
     // Draw the opaque spans (ascending x) and the background in the gaps,
     // then composite the translucent spans on top
     uint8_t *line = dst.linePtr(dy + (yi - ry));
     const int xBase = dx - rx0;  // screen x -> dst x
     int cursor = rx0;
-    for (const Span *e = opaqueHead_; e; e = e->next) {
+    for (const Span *e = rc.opaque; e; e = e->next) {
       if (clearEnabled_ && e->x0 > cursor) {
         fillFn(line, xBase + cursor, e->x0 - cursor, clearNative);
       }
@@ -3628,7 +3705,7 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int16_t x, int16_t y, int16_t w,
       fillFn(line, xBase + cursor, rx1 - cursor, clearNative);
     }
 #if SHAPOGFX3D_BLEND
-    for (const Span *e = transHead_; e; e = e->next) {
+    for (const Span *e = rc.transHead; e; e = e->next) {
       table[e->tri->rasterFn](line, xBase + e->x0, e->x1 - e->x0, *e, yi);
     }
 #endif
@@ -3644,16 +3721,24 @@ Stats Graphics3D::getStats() const {
   Stats st;
   st.arenaSize = arenaSize_;
   st.triBytes =
-      (size_t)(recEnd_ - recTop_) + (size_t)triCount_ * sizeof(TriEntry);
+      (size_t)(recEnd_ - recTop_) + (size_t)triCount_ * (size_t)entryBytes_;
   st.triBytesTotal = (size_t)(recEnd_ - recBase_);
-  st.arenaUsed = arenaFixed_ + st.triBytes + (size_t)spanPeak_ * sizeof(Span);
+  // Spans: the peak of the busiest context, the drops of all of them
+  int peak = 0, dropped = 0;
+  size_t spanBytes = 0;
+  for (int c = 0; c < contextCount_; c++) {
+    peak = std::max(peak, contexts_[c].peak);
+    dropped += contexts_[c].dropped;
+    spanBytes += (size_t)contexts_[c].peak * sizeof(Span);
+  }
+  st.arenaUsed = arenaFixed_ + st.triBytes + spanBytes;
   st.triCount = triCount_;
   st.triDropped = triDropped_;
   st.layerCount = layerCount_;
   st.layersDropped = layersDropped_;
   st.spanCapacity = spanCapacity_;
-  st.spanPeak = spanPeak_;
-  st.spanDropped = spanDropped_;
+  st.spanPeak = peak;
+  st.spanDropped = dropped;
   st.badIndices = badIndices_;
   st.nodesDropped = nodesDropped_;
   return st;

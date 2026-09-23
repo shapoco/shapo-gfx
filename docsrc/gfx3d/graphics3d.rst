@@ -113,7 +113,8 @@ Config / LayerFlags
      int16_t screenWidth = 0, screenHeight = 0;
      void *arena = nullptr;   // 作業メモリ
      size_t arenaSize = 0;
-     int spanCapacity = 0;    // 1 ラインに持てる線分数。0 なら既定値
+     int spanCapacity = 0;    // 1 ラインに持てる線分数 (レンダリングコンテキストごと)。0 なら既定値
+     int renderContexts = 1;  // 同時に実行できる render() の数 (1〜4)
    };
    Config defaultConfig(int16_t w, int16_t h, void *arena, size_t arenaSize);
 
@@ -138,9 +139,9 @@ Stats
      int triDropped;        // バッファあふれで破棄した数 (beginScene() でリセット)
      int layerCount;        // 現在のシーンのレイヤ数 (beginScene() でリセット)
      int layersDropped;     // 空きがなく無視した beginLayer() の数 (beginScene() でリセット)
-     int spanCapacity;      // 線分プールの容量
-     int spanPeak;          // 1 ラインで同時に使った線分数の最大 (beginRender() でリセット)
-     int spanDropped;       // プールあふれで破棄した数 (beginRender() でリセット)
+     int spanCapacity;      // 線分プールの容量 (コンテキストごと)
+     int spanPeak;          // 1 ラインで同時に使った線分数の最大、最も使ったコンテキストの値 (beginRender() でリセット)
+     int spanDropped;       // プールあふれで破棄した数、全コンテキストの合計 (beginRender() でリセット)
      int badIndices;        // 添字範囲外で破棄した三角形数 (beginScene() でリセット)
      int nodesDropped;      // スタック満杯で飛ばしたノード数 (beginScene() でリセット)
    };
@@ -210,6 +211,7 @@ Stats
 
    "``void beginRender()``", "三角形を奥から順にソートする"
    "``void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst, int16_t dstX = 0, int16_t dstY = 0)``", "画面領域 (x, y, w, h) を ``dst`` の (dstX, dstY) に描く。画面と ``dst`` の両方でクリップされる。``dst`` は RGB565BE か RGB444"
+   "``void render(int ctx, int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst, int16_t dstX = 0, int16_t dstY = 0)``", "レンダリングコンテキスト ``ctx`` (0〜``Config::renderContexts`` - 1) で描く。コンテキストが異なる呼び出しは同時に実行できる (コアごとに別の帯を描くなど)。同じコンテキストの呼び出しを重ねてはいけない"
    "``void endRender()``", "レンダリングを終える"
    "``Stats getStats() const``", "統計 (``endRender()`` 後に呼ぶとそのフレームの値)"
 
@@ -229,6 +231,42 @@ Stats
      lcd.writeAsync(0, y, band);
    }
    g3d.endRender();
+
+使用例: デュアルコア
+================================================================================
+
+``Config::renderContexts = 2`` にすると、2 つのコアで画面の上下半分を同時に描けます。
+シーンの構築と ``beginRender()`` は片方のコアで行い、両方の ``render()`` が終わってから ``endRender()`` を呼びます。
+
+.. code-block:: cpp
+
+   g3::Config cfg = g3::defaultConfig(W, H, arena, sizeof(arena));
+   cfg.renderContexts = 2;
+   g3d.init(cfg);
+
+   // core 1
+   void core1Main() {
+     for (;;) {
+       multicore_fifo_pop_blocking();                 // フレームの準備ができた
+       g3d.render(1, 0, H / 2, W, H / 2, fb, 0, H / 2);
+       multicore_fifo_push_blocking(1);
+     }
+   }
+
+   // core 0
+   buildScene();
+   g3d.beginRender();
+   multicore_fifo_push_blocking(1);
+   g3d.render(0, 0, 0, W, H / 2, fb);
+   multicore_fifo_pop_blocking();
+   g3d.endRender();
+
+コンテキストを 1 つ増やすごとに、線分プール 1 つ分、画面 1 行あたり 4 バイト、プリミティブ 1 個あたり 2 バイトを使います。
+
+統計の確認
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
 
    g3::Stats st = g3d.getStats();
    if (st.triDropped || st.spanDropped) {

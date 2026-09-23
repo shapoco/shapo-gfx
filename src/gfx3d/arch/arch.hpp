@@ -33,9 +33,10 @@
 #define SHAPOGFX_ARCH_GENERIC 1
 #endif
 
-// RP2040 / RP2350: fetch 16-bit texels through the SIO interpolator (interp0
-// of the core that calls render()). On by default where the Pico SDK's
-// hardware_interp is available; define it as 0 to use the portable walker.
+// RP2040 / RP2350: fetch 16-bit texels through the SIO interpolator interp0
+// and step Gouraud colors through interp1 (of the core that calls render()).
+// On by default where the Pico SDK's hardware_interp is available; define it
+// as 0 to use the portable code.
 #ifndef SHAPOGFX3D_RP2_INTERP
 #if defined(SHAPOGFX_ARCH_RP2) && __has_include("hardware/interp.h")
 #define SHAPOGFX3D_RP2_INTERP 1
@@ -61,8 +62,10 @@ using armv6m::mulShiftU16;
 using generic::mulShiftU16;
 #endif
 #if defined(SHAPOGFX_ARCH_RP2) && SHAPOGFX3D_RP2_INTERP
+using rp2::GouraudRG;
 using rp2::RenderState;
 #else
+using generic::GouraudRG;
 using generic::RenderState;
 #endif
 }  // namespace shapoco::gfx3d::arch

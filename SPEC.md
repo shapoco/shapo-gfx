@@ -39,7 +39,7 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX_COORD_BITS` | 11 | Bits of a screen coordinate and of a surface's width and height (1..15). Wider or taller surfaces are rejected (see below) |
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
-| `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
+| `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` and step Gouraud colors through `interp1`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise) |
 | `SHAPOGFX3D_FIXED_POINT` | 0 | Vertex stage and primitive setup in fixed point, for cores without an FPU (see "Fixed-point vertex stage") |
@@ -76,8 +76,8 @@ by hand) and selects the implementation; the instruction set selects some too
 `mulShiftU16` (a product shifted right, used by the perspective division), the
 texture walker (`InterpTex` on RP2) and `RenderState` (hardware state that
 `render()` saves and restores). With `SHAPOGFX3D_RP2_INTERP` the target
-must link `hardware_interp`; `render()` saves and restores `interp0` of the calling
-core, so interrupt handlers running during `render()` must not use it.
+must link `hardware_interp`; `render()` saves and restores `interp0` and `interp1` of
+the calling core, so interrupt handlers running during `render()` must not use them.
 
 ### Optional features of the 3D renderer
 
@@ -390,7 +390,8 @@ struct Primitive {
 struct Config {                  // from defaultConfig(), adjusted as needed
   int16_t screenWidth = 0, screenHeight = 0;
   void *arena = nullptr; size_t arenaSize = 0;
-  int spanCapacity = 0;         // 0: a quarter of the arena left, clamped to 32..512
+  int spanCapacity = 0;         // per render context; 0: a quarter of the arena left, clamped to 32..512
+  int renderContexts = 1;       // render() calls that may run at the same time (1..4)
 };
 Config defaultConfig(int16_t w, int16_t h, void *arena, size_t arenaSize);
 
@@ -403,7 +404,7 @@ struct Stats {
   size_t triBytes, triBytesTotal;  // triangle buffer in use / available
   int triCount, triDropped;
   int layerCount, layersDropped;
-  int spanCapacity, spanPeak, spanDropped;
+  int spanCapacity, spanPeak, spanDropped;  // per context; busiest context; all contexts
   int badIndices;    // triangles dropped because an index was >= vertexCount
   int nodesDropped;  // nodes skipped because the state stack was full
 };
@@ -502,6 +503,10 @@ class Graphics3D {
   // Render the screen region (x, y, w, h) into dst at (dstX, dstY); clipped to both
   void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst,
               int16_t dstX = 0, int16_t dstY = 0);
+  // The same with render context ctx; calls with different contexts may run at
+  // the same time (e.g. one per core, each on its own band)
+  void render(int ctx, int16_t x, int16_t y, int16_t w, int16_t h,
+              const Surface &dst, int16_t dstX = 0, int16_t dstY = 0);
 
   Stats getStats() const;
   int16_t screenWidth() const; int16_t screenHeight() const; bool isInitialized() const;
@@ -663,21 +668,25 @@ and `ADD` multiply their opacity by `a4 / 15`. Texel alpha 0 skips the pixel.
 
 `init()` aligns the arena to 8 bytes and carves it as follows:
 
-1. **Fixed part**: line buckets (2 x screen height x `uint16_t`), layer table
-   (`SHAPOGFX3D_LAYER_MAX` entries of 8 bytes), matrix stack (16 entries), vertex
-   cache (64 entries).
-2. **Span pool**: `Config::spanCapacity` spans of 16 bytes, or a quarter of the
-   remaining space clamped to 32..512 spans when it is 0 (so 512 spans, 8 KB,
-   unless the arena is small). Spans beyond the capacity are dropped,
-   which leaves holes in the picture, so a tuned value is one that keeps
-   `Stats::spanPeak` below it with margin for the worst frame; whatever it saves
-   goes to the triangle buffer.
+1. **Fixed part**: the render contexts (`Config::renderContexts`, each with line
+   buckets of 2 x screen height x `uint16_t`), layer table (`SHAPOGFX3D_LAYER_MAX`
+   entries of 8 bytes), matrix stack (16 entries), vertex cache (64 entries).
+2. **Span pools**: one per render context, `Config::spanCapacity` spans of 16 bytes
+   each, or when it is 0 a quarter of the remaining space shared among the
+   contexts, clamped to 32..512 spans per context (so 512 spans, 8 KB, per context
+   unless the arena is small). Spans beyond the capacity are dropped, which leaves
+   holes in the picture, so a tuned value is one that keeps `Stats::spanPeak` below
+   it with margin for the worst frame; whatever it saves goes to the triangle
+   buffer.
 3. **Triangle buffer**: everything that remains.
 
 The triangle buffer holds records of different sizes (see the table above), so it
 is a byte budget rather than a triangle count: the records are packed downwards
-from the end of the region while the 4-byte entries (record offset and scanline
-link) grow upwards from its start, and the buffer is full when the two meet.
+from the end of the region while the entries (a 2-byte record offset, plus a
+2-byte scanline link per render context: 4 bytes with one context) grow upwards
+from its start, and the buffer is full when the two meet. The entries are
+contiguous; `beginRender()` places the links of every context in the space
+between them and the records, which the entry size reserves.
 `Stats::triBytes` and `Stats::triBytesTotal` report both ends of it. Records are
 addressed by a 4-byte-unit offset, which caps the region at 256 KB; a larger arena
 leaves the excess unused.
@@ -688,6 +697,22 @@ vertices, not correctness.
 
 If the arena is too small for the fixed part, `init()` leaves the renderer
 uninitialized. Overflowing buffers drop the excess for the current frame.
+
+### Render contexts (multi-core rendering)
+
+Everything `render()` changes -- the span pool and span lists, the per-scanline
+triangle lists and the links of the active list -- belongs to a render context;
+the scene (records, entries, sort order) is only read between `beginRender()` and
+`endRender()`. With `Config::renderContexts = n` a renderer holds n contexts, and
+`render(ctx, ...)` calls with different contexts may run at the same time: on a
+dual-core RP2040/RP2350 core 0 renders the upper half with context 0 while core 1
+renders the lower half with context 1, which roughly halves the time of the span
+stage and the pixel loops together. `beginScene()` ... `beginRender()` run on one
+core, and `endRender()` after both halves are done. Each extra context costs a span
+pool, 4 bytes per screen row and 2 bytes per primitive. `render()` without a context
+uses context 0. The SIO interpolators are per core, so the RP2 paths work on both
+cores. The tests render two halves on two threads (checked with ThreadSanitizer)
+and compare with a single call byte for byte.
 
 ### Fixed-point vertex stage (`SHAPOGFX3D_FIXED_POINT`)
 
@@ -838,10 +863,16 @@ coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
   per 16 textured pixels and 12 bytes per textured record.
 
 With `SHAPOGFX3D_RP2_INTERP` (RP2040/RP2350), RGB565BE and ARGB4444 texels of
-textures with a power-of-two stride are addressed by the SIO interpolator: lane 0
-maps `u` to the byte offset in the row, lane 1 maps `v` to the row offset, and one
-`POP_FULL` per pixel yields the texel address and steps both coordinates. Other
-textures use the software walker.
+textures with a power-of-two stride are addressed by the SIO interpolator `interp0`:
+lane 0 maps `u` to the byte offset in the row, lane 1 maps `v` to the row offset,
+and one `POP_FULL` per pixel yields the texel address and steps both coordinates.
+Other textures use the software walker. Opaque, untextured, smoothly shaded spans
+into RGB565BE take their red and green from `interp1` (`arch::GouraudRG`): lanes 0
+and 1 step r and g (8.16) with `ADD_RAW`, and their shifted and masked values
+(`(r >> 8) & 0xF800`, `(g >> 13) & 0x07E0`) sum to the red and green of the pixel in
+the `FULL` result; blue is stepped in software. Both paths give the same pixels as
+the portable ones, which was checked on the host against an emulation of the
+interpolator (`tmp.work`), not on silicon.
 
 ### `endRender()`
 

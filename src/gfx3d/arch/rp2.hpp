@@ -61,11 +61,40 @@ struct InterpTex {
   }
 };
 
-// render() saves and restores interp0 of the calling core
+// GouraudRG (see generic.hpp) through interp1: lane 0 steps r and lane 1
+// steps g (ADD_RAW adds the step to the accumulator on every pop), and the
+// shifted and masked lanes sum to (r5 << 11) | (g6 << 5) in the FULL result,
+// so a pixel's red and green are one load.
+struct GouraudRG {
+  void init(int32_t r0, int32_t g0, int32_t dr0, int32_t dg0) {
+    interp_config c = interp_default_config();
+    interp_config_set_add_raw(&c, true);
+    interp_config_set_shift(&c, 8);  // bits 19..23 of r -> 11..15
+    interp_config_set_mask(&c, 11, 15);
+    interp_set_config(interp1, 0, &c);
+    interp_config_set_shift(&c, 13);  // bits 18..23 of g -> 5..10
+    interp_config_set_mask(&c, 5, 10);
+    interp_set_config(interp1, 1, &c);
+    interp1->base[0] = (uint32_t)dr0;
+    interp1->base[1] = (uint32_t)dg0;
+    interp1->base[2] = 0;
+    interp1->accum[0] = (uint32_t)r0;
+    interp1->accum[1] = (uint32_t)g0;
+  }
+  inline uint32_t next() { return (uint32_t)interp1->pop[2]; }
+};
+
+// render() saves and restores both interpolators of the calling core
 struct RenderState {
-  interp_hw_save_t save;
-  void begin() { interp_save(interp0, &save); }
-  void end() { interp_restore(interp0, &save); }
+  interp_hw_save_t save0, save1;
+  void begin() {
+    interp_save(interp0, &save0);
+    interp_save(interp1, &save1);
+  }
+  void end() {
+    interp_restore(interp0, &save0);
+    interp_restore(interp1, &save1);
+  }
 };
 
 }  // namespace shapoco::gfx3d::arch::rp2

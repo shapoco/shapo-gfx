@@ -138,11 +138,11 @@ struct Stats {
   int layerCount;  // layers used by the current scene (reset by beginScene())
   int layersDropped;  // beginLayer() calls ignored because there was no free
                       // layer (reset by beginScene())
-  int spanCapacity;   // capacity of the span pool
-  int spanPeak;  // maximum number of spans used on a single scanline (reset by
-                 // beginRender())
-  int spanDropped;  // spans dropped because the pool overflowed (reset by
-                    // beginRender())
+  int spanCapacity;   // capacity of the span pool (of each render context)
+  int spanPeak;     // maximum number of spans used on a single scanline, in the
+                    // busiest render context (reset by beginRender())
+  int spanDropped;  // spans dropped because a pool overflowed, all contexts
+                    // together (reset by beginRender())
   int badIndices;  // triangles dropped because an index was out of range (reset
                    // by beginScene())
   int nodesDropped;  // nodes skipped because the state stack was full (reset by
@@ -209,15 +209,20 @@ constexpr uint32_t NO_DEPTH = 1u << 0;
 struct Config {
   int16_t screenWidth = 0;
   int16_t screenHeight = 0;
-  void *arena = nullptr;  // working memory (8-byte aligned internally)
-  size_t arenaSize = 0;   // size of the arena in bytes
-  int spanCapacity = 0;   // spans held per scanline; 0 selects the default
-                          // (a quarter of the arena left after the fixed
-                          // part, clamped to 32..512). Spans beyond the
-                          // capacity are dropped, which leaves holes in the
-                          // picture; Stats::spanPeak tells how many a scene
-                          // really needs, so a tuned value gives the rest of
-                          // the arena to the triangle buffer.
+  void *arena = nullptr;   // working memory (8-byte aligned internally)
+  size_t arenaSize = 0;    // size of the arena in bytes
+  int spanCapacity = 0;    // spans held per scanline; 0 selects the default
+                           // (a quarter of the arena left after the fixed
+                           // part, clamped to 32..512). Spans beyond the
+                           // capacity are dropped, which leaves holes in the
+                           // picture; Stats::spanPeak tells how many a scene
+                           // really needs, so a tuned value gives the rest of
+                           // the arena to the triangle buffer. Each render
+                           // context has a pool of this many.
+  int renderContexts = 1;  // render() calls that may run at the same time
+                           // (1..4, see render(ctx, ...)). Each costs a span
+                           // pool, 4 bytes per screen row and 2 bytes per
+                           // primitive.
 };
 
 inline Config defaultConfig(int16_t w, int16_t h, void *arena,
@@ -260,7 +265,7 @@ struct ShadedVertex;
 struct VertexQ;
 struct TriHead;
 struct PlaneSet;
-struct TriEntry;
+struct RenderContext;
 struct LayerDesc;
 struct Span;
 struct StackEntry;
@@ -415,6 +420,13 @@ class Graphics3D {
   // the screen and to dst.
   void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst,
               int16_t dstX = 0, int16_t dstY = 0);
+  // The same with render context ctx (0 .. Config::renderContexts - 1).
+  // Calls with different contexts may run at the same time, for example one
+  // per core, each rendering its own region: between beginRender() and
+  // endRender() render() only reads the scene. Calls with the same context
+  // must not overlap. An invalid context draws nothing.
+  void render(int ctx, int16_t x, int16_t y, int16_t w, int16_t h,
+              const Surface &dst, int16_t dstX = 0, int16_t dstY = 0);
 
   // Get statistics (call after endRender() to get the values of that frame).
   Stats getStats() const;
@@ -430,14 +442,12 @@ class Graphics3D {
   // are packed downwards from the end of the region while the entry array
   // (record offset + scanline link, 4 bytes each) grows upwards from its
   // start; the scene is complete as long as the two have not met.
-  uint8_t *recBase_ = nullptr;           // start of the region (entry array)
-  uint8_t *recTop_ = nullptr;            // lowest record stored so far
-  uint8_t *recEnd_ = nullptr;            // end of the region
-  detail::TriEntry *entries_ = nullptr;  // == recBase_, sorted by beginRender()
+  uint8_t *recBase_ = nullptr;   // start of the region (entry array)
+  uint8_t *recTop_ = nullptr;    // lowest record stored so far
+  uint8_t *recEnd_ = nullptr;    // end of the region
+  uint16_t *entries_ = nullptr;  // == recBase_, sorted by beginRender()
+  int entryBytes_ = 4;  // per primitive: the entry and a link per context
   int triCount_ = 0;
-  uint16_t *bucketHead_ =
-      nullptr;  // per-scanline triangle lists (used inside render())
-  uint16_t *bucketTail_ = nullptr;
 
   detail::LayerDesc *layers_ = nullptr;
   int layerCount_ = 0;
@@ -445,13 +455,11 @@ class Graphics3D {
   uint32_t layerFlags_ = 0;  // flags of the layer opened by the next primitive
   bool layerOpen_ = false;   // a layer is receiving primitives
 
-  detail::Span *spanPool_ = nullptr;
-  int spanCapacity_ = 0;
-  int spanCount_ = 0;
-  detail::Span *opaqueHead_ = nullptr;  // opaque: ascending x, non-overlapping
-  detail::Span *transHead_ = nullptr,
-               *transTail_ =
-                   nullptr;  // translucent: insertion order (farthest first)
+  // What render() changes, per context (span pools, span lists, scanline
+  // lists), so that several render() calls can run at the same time
+  detail::RenderContext *contexts_ = nullptr;
+  int contextCount_ = 0;
+  int spanCapacity_ = 0;  // spans per context
 
   detail::StackEntry *stack_ = nullptr;
   int stackTop_ = 0;
@@ -483,8 +491,6 @@ class Graphics3D {
   size_t arenaFixed_ = 0;  // bytes always in use (line buckets, layer table,
                            // matrix stack, vertex cache)
   int triDropped_ = 0;
-  int spanPeak_ = 0;
-  int spanDropped_ = 0;
   int badIndices_ = 0;
   int nodesDropped_ = 0;
 
@@ -532,14 +538,6 @@ class Graphics3D {
   void emitLine(detail::UnlitVertex a, detail::UnlitVertex b,
                 const Material *mat);
   void emitPoint(const detail::UnlitVertex &a, const Material *mat);
-
-  detail::Span *allocSpan();
-  detail::Span **cutSpan(detail::Span **pp, int ox0, int ox1);
-  void appendTranslucent(const detail::Span &sp, int x1);
-  void insertOpaque(detail::Span &frag, int yi);
-  void insertTranslucent(detail::Span &frag, int yi);
-  void clipTranslucent(const detail::Span &frag, int yi);
-  uint16_t mergeLists(uint16_t a, uint16_t b);
 };
 
 }  // namespace shapoco::gfx3d
