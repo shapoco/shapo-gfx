@@ -265,7 +265,6 @@ struct ShadedVertex;
 struct VertexQ;
 struct TriHead;
 struct PlaneSet;
-struct SetupVertex;
 struct RenderContext;
 struct LayerDesc;
 struct Span;
@@ -543,10 +542,13 @@ class Graphics3D {
   // Store a primitive whose header and planes are complete (see PlaneSet)
   void storePrimitive(const detail::TriHead &h, const detail::PlaneSet &ps,
                       bool smooth, bool textured);
-  // Float setup: a triangle reaching beyond the guard band, clipped to it
-  void emitClipped(const detail::SetupVertex *sv, const detail::TriHead &h,
-                   detail::PlaneSet &ps, uint32_t attrs, bool smooth,
-                   bool textured);
+  // Float setup of a culled-in triangle; CLIP: it reaches beyond the guard
+  // band and is clipped to it
+  template <bool CLIP>
+  void emitTriangleSetup(const detail::CachedVertex &a,
+                         const detail::CachedVertex &b,
+                         const detail::CachedVertex &c, const Material *mat,
+                         const Texture *tex);
   uint8_t layerByte();  // id of the current layer, opening one if needed
   void unlitVertex(const Vertex &in, const Material *mat,
                    detail::UnlitVertex &out) const;

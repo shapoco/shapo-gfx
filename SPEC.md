@@ -821,9 +821,10 @@ reworked).
 
 `render()` needs about 170 bytes of stack plus a rasterizer's frame (48 to 96 bytes
 on ARM). The deepest path of scene building goes through `putPrimitive()` into the
-triangle setup: on ARM with `SHAPOGFX3D_TEXTURE=0` about 550 bytes in the float build
-(960 when a triangle has to be clipped to the guard band) and 890 bytes in the
-fixed-point build; lines take about 660 / 860. Measure the target's own compiler
+triangle setup: on ARM with `SHAPOGFX3D_TEXTURE=0` about 570 bytes in the float build
+(810 when a triangle has to be clipped to the guard band; that variant of the setup
+is a separate function, so its buffers are on the stack only then) and 890 bytes in
+the fixed-point build; lines take about 660 / 860. Measure the target's own compiler
 with `-fstack-usage`; Xtensa frames are larger than ARM's.
 
 ### Platform notes

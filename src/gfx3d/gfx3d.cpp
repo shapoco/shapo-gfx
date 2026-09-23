@@ -1770,8 +1770,26 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   if (area2 == 0.0f) return;
   if (area2 > 0.0f && !(mat->flags & MaterialFlags::DOUBLE_SIDED)) return;
 
-    // Interpolated color only where the three vertex colors differ; the record
-    // of a flat triangle holds one color instead of three planes
+  // A vertex beyond the guard band takes the clipping variant
+  auto inside = [](const CachedVertex &v) {
+    return std::fabs(v.sv.sx) <= GUARD && std::fabs(v.sv.sy) <= GUARD;
+  };
+  if (inside(a) && inside(b) && inside(c)) {
+    emitTriangleSetup<false>(a, b, c, mat, tex);
+  } else {
+    emitTriangleSetup<true>(a, b, c, mat, tex);
+  }
+}
+
+// The setup of a triangle that passed culling. Two out-of-line variants, so
+// that the clip buffers of the rare CLIP one take stack only when used and
+// never on top of the other's frame.
+template <bool CLIP>
+__attribute__((noinline)) void Graphics3D::emitTriangleSetup(
+    const CachedVertex &a, const CachedVertex &b, const CachedVertex &c,
+    const Material *mat, const Texture *tex) {
+  // Interpolated color only where the three vertex colors differ; the record
+  // of a flat triangle holds one color instead of three planes
 #if SHAPOGFX3D_GOURAUD
   const bool smooth =
       !(a.sv.r == b.sv.r && a.sv.r == c.sv.r && a.sv.g == b.sv.g &&
@@ -1848,51 +1866,49 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 #endif  // SHAPOGFX3D_TEXTURE
 
   const uint32_t attrs = attrMask(depth, smooth, textured);
-  const int screenH = screenH_;
-  auto inside = [](const SetupVertex &v) {
-    return std::fabs(v.x) <= GUARD && std::fabs(v.y) <= GUARD;
-  };
-  if (inside(sv[0]) && inside(sv[1]) && inside(sv[2])) {
-    if (setupTriangle(&sv[0], &sv[1], &sv[2], screenH, attrs, h, ps)) {
+  if constexpr (!CLIP) {
+    if (setupTriangle(&sv[0], &sv[1], &sv[2], screenH_, attrs, h, ps)) {
       storePrimitive(h, ps, smooth, textured);
     }
   } else {
-    emitClipped(sv, h, ps, attrs, smooth, textured);
-  }
-}
-
-// A triangle with a vertex beyond the guard band: clip it to the band in
-// screen space, where every stored attribute is linear, and store the
-// pieces. Out of line, so that the clip buffers take stack only here.
-__attribute__((noinline)) void Graphics3D::emitClipped(
-    const SetupVertex *sv, const TriHead &h, PlaneSet &ps, uint32_t attrs,
-    bool smooth, bool textured) {
-  ClipVertex bufA[7], bufB[7];  // 3 vertices + one per clip plane
-  bufA[0] = {sv[0].x, sv[0].y, 0.0f, 0.0f};
-  bufA[1] = {sv[1].x, sv[1].y, 1.0f, 0.0f};
-  bufA[2] = {sv[2].x, sv[2].y, 0.0f, 1.0f};
-  int n = 3;
-  n = clipPolygon(bufA, n, bufB, 0, 1.0f, GUARD);
-  n = clipPolygon(bufB, n, bufA, 0, -1.0f, GUARD);
-  n = clipPolygon(bufA, n, bufB, 1, 1.0f, GUARD);
-  n = clipPolygon(bufB, n, bufA, 1, -1.0f, GUARD);
-  // Fan triangles, their attributes from the weights
-  auto vertexAt = [&](const ClipVertex &c, SetupVertex &out) {
-    out.x = c.x;
-    out.y = c.y;
-    for (int k = 0; k < A_COUNT; k++) {
-      out.a[k] = sv[0].a[k] + (sv[1].a[k] - sv[0].a[k]) * c.w1 +
-                 (sv[2].a[k] - sv[0].a[k]) * c.w2;
-    }
-  };
-  SetupVertex p[3];
-  vertexAt(bufA[0], p[0]);
-  for (int i = 1; i + 1 < n; i++) {
-    vertexAt(bufA[i], p[1]);
-    vertexAt(bufA[i + 1], p[2]);
-    TriHead t = h;
-    if (setupTriangle(&p[0], &p[1], &p[2], screenH_, attrs, t, ps)) {
-      storePrimitive(t, ps, smooth, textured);
+    // Clip to the guard band in screen space, where every stored attribute
+    // is linear, and store the pieces
+    // 3 vertices + one per clip plane; the fan's setup vertices reuse the
+    // second buffer once the clipping is done
+    ClipVertex bufA[7];
+    union {
+      ClipVertex bufB[7];
+      SetupVertex p[3];
+    } u;
+    static_assert(sizeof(u.p) <= sizeof(u.bufB), "fan vertices must fit");
+    ClipVertex *const bufB = u.bufB;
+    bufA[0] = {sv[0].x, sv[0].y, 0.0f, 0.0f};
+    bufA[1] = {sv[1].x, sv[1].y, 1.0f, 0.0f};
+    bufA[2] = {sv[2].x, sv[2].y, 0.0f, 1.0f};
+    int n = 3;
+    n = clipPolygon(bufA, n, bufB, 0, 1.0f, GUARD);
+    n = clipPolygon(bufB, n, bufA, 0, -1.0f, GUARD);
+    n = clipPolygon(bufA, n, bufB, 1, 1.0f, GUARD);
+    n = clipPolygon(bufB, n, bufA, 1, -1.0f, GUARD);
+    // Fan triangles, their attributes from the weights
+    auto vertexAt = [&](const ClipVertex &cv, SetupVertex &out) {
+      out.x = cv.x;
+      out.y = cv.y;
+      for (int k = 0; k < A_COUNT; k++) {
+        out.a[k] = sv[0].a[k] + (sv[1].a[k] - sv[0].a[k]) * cv.w1 +
+                   (sv[2].a[k] - sv[0].a[k]) * cv.w2;
+      }
+    };
+    SetupVertex *const p = u.p;
+    vertexAt(bufA[0], p[0]);
+    const uint8_t flags = h.flags;  // setupTriangle() adds geometry flags
+    for (int i = 1; i + 1 < n; i++) {
+      vertexAt(bufA[i], p[1]);
+      vertexAt(bufA[i + 1], p[2]);
+      h.flags = flags;
+      if (setupTriangle(&p[0], &p[1], &p[2], screenH_, attrs, h, ps)) {
+        storePrimitive(h, ps, smooth, textured);
+      }
     }
   }
 }
