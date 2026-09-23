@@ -38,7 +38,7 @@ static const g3::PackedVertex mesh0Prim0Vertices[] = {
   {{-32767, 32767, -32767}, {1024, 0}, {0, 0, -127}, {128, 128, 255}},
   {{32767, 32767, -32767}, {0, 0}, {0, 0, -127}, {128, 128, 255}},
 };
-static const g3::VertexBuffer mesh0Prim0Vb = {24, nullptr, mesh0Prim0Vertices,
+static const g3::VertexBuffer mesh0Prim0Vb = {24, nullptr, mesh0Prim0Vertices, nullptr,
     {0.000015f, 0.000015f, 0.000015f}, {0.0f, 0.0f, 0.0f}};
 static const uint16_t mesh0Prim0Indices[] = {
   0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8,
@@ -103,7 +103,7 @@ static const g3::PackedVertex mesh1Prim0Vertices[] = {
   {{-32767, -32767, 32767}, {0, 0}, {-90, 0, 90}, {255, 255, 255}},
   {{0, 32767, 0}, {0, 0}, {0, 127, 0}, {255, 255, 255}},
 };
-static const g3::VertexBuffer mesh1Prim0Vb = {5, nullptr, mesh1Prim0Vertices,
+static const g3::VertexBuffer mesh1Prim0Vb = {5, nullptr, mesh1Prim0Vertices, nullptr,
     {0.000015f, 0.000012f, 0.000015f}, {0.0f, 0.4f, 0.0f}};
 static const uint16_t mesh1Prim0Indices[] = {
   0, 4, 1, 1, 4, 2, 2, 4, 3, 3, 4, 0, 0, 1, 2, 0,
@@ -129,7 +129,7 @@ static const g3::PackedVertex mesh2Prim0Vertices[] = {
   {{-32767, -32767, -32767}, {0, 0}, {0, 0, 0}, {0, 0, 255}},
   {{-32767, -32767, 32767}, {0, 0}, {0, 0, 0}, {0, 0, 255}},
 };
-static const g3::VertexBuffer mesh2Prim0Vb = {6, nullptr, mesh2Prim0Vertices,
+static const g3::VertexBuffer mesh2Prim0Vb = {6, nullptr, mesh2Prim0Vertices, nullptr,
     {0.000015f, 0.000015f, 0.000015f}, {0.5f, 0.5f, 0.5f}};
 static const uint16_t mesh2Prim0Indices[] = {
   0, 1, 2, 3, 4, 5,

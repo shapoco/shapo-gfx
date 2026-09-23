@@ -339,7 +339,7 @@ class Generator:
                 if uv_clamped:
                     warn(f"mesh {mesh_index} primitive {pi}: texture coordinates outside the "
                          "packed range of -32..32 were clamped; use --vertex-format float")
-                self.w(f"static const g3::VertexBuffer {pname}Vb = {{{count}, nullptr, {pname}Vertices,")
+                self.w(f"static const g3::VertexBuffer {pname}Vb = {{{count}, nullptr, {pname}Vertices, nullptr,")
                 self.w(
                     f"    {{{fmt_float(pscale[0])}, {fmt_float(pscale[1])}, {fmt_float(pscale[2])}}},"
                     + f" {{{fmt_float(pbias[0])}, {fmt_float(pbias[1])}, {fmt_float(pbias[2])}}}}};"
