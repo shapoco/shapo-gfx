@@ -108,6 +108,20 @@ CMake も PlatformIO も使わない
 フォーマットのマクロと ``SHAPOGFX_COORD_BITS`` は、ヘッダを含む全ての翻訳単位で同じ値にしてください
 (CMake のオプションで指定した ``SHAPOGFX_COORD_BITS`` はライブラリの利用側にも伝わります)。
 
+プラットフォーム別の設定
+================================================================================
+
+ライブラリはアーキテクチャに依存しませんが、次の設定が各ターゲットに向いています
+(クロスコンパイルとホストでの検証によるもので、実機では未確認です)。
+
+.. csv-table::
+   :header: "ターゲット", "推奨"
+
+   "RP2350 (Cortex-M33 + FPU)", "既定の float ビルド。``SHAPOGFX3D_RP2_INTERP`` は ``hardware_interp`` があれば既定で有効。``SHAPOGFX3D_HOT_ATTR`` と ``SHAPOGFX3D_HOT_INSTANTIATE=1`` でラスタライズ側を RAM に置き、``Config::renderContexts = 2`` で 2 コア描画。RISC-V (Hazard3) モードでは FPU がないので ``SHAPOGFX3D_FIXED_POINT=1``"
+   "RP2040 (Cortex-M0+、FPU なし)", "``SHAPOGFX3D_FIXED_POINT=1``、ラスタライズ側を RAM に、2 コア描画。XIP フラッシュ上のテクスチャはコードと 16 KB のキャッシュを奪い合うので、小さくよく使うテクスチャは RAM へコピーする。使わない 16 ビット出力フォーマットは無効化 (RAM 上のコードが約 20 KB 減る)。メモリや速度が足りなければ ``SHAPOGFX3D_DEPTH_BITS=16``、``SHAPOGFX3D_GOURAUD_STEP=4``"
+   "ESP32-S3 (Xtensa LX7 + FPU)", "float ビルド。アリーナは PSRAM ではなく内部 SRAM に置く。``RGB565`` に描いて ``esp_lcd`` 側でバイトスワップし、2 つのレンダリングコンテキストで 2 コア描画 (各コアに固定したタスクから)"
+   "ESP32-P4 (RISC-V + FPU、2 コア)", "S3 と同様。アリーナは内部メモリ (L2MEM) に。大きな 2D の転送や塗りはアプリ側で PPA / 2D-DMA に任せられる (3D レンダラでは使えない)"
+
 最小のサンプル: 2D
 ================================================================================
 

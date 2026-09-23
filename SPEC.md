@@ -777,6 +777,33 @@ on average (worst 811) and a lit, textured, translucent test scene in 7% of its
 pixels, almost all by one shading step; both look the same. The test suite
 passes in either build.
 
+### Platform notes
+
+The library is portable; these are the settings that suit the targets it was tuned
+for (checked by cross-compiling and on the host, not on hardware).
+
+- **RP2350** (Cortex-M33 with FPU): the default float build. `SHAPOGFX3D_RP2_INTERP`
+  is on by default with the Pico SDK's `hardware_interp`. Put the rasterization side
+  in RAM with `SHAPOGFX3D_HOT_ATTR='__attribute__((section(".time_critical.gfx3d")))'`
+  and `SHAPOGFX3D_HOT_INSTANTIATE=1`, and render on both cores with
+  `Config::renderContexts = 2`. In RISC-V (Hazard3) mode there is no FPU: use
+  `SHAPOGFX3D_FIXED_POINT=1`.
+- **RP2040** (Cortex-M0+, no FPU): `SHAPOGFX3D_FIXED_POINT=1`, the rasterization side
+  in RAM as above, both cores. Textures read from XIP flash compete with the code for
+  the 16 KB cache, so copy small, often used textures to RAM. Disable the 16-bit
+  output format that is not used (about 20 KB of RAM code each), and consider
+  `SHAPOGFX3D_DEPTH_BITS=16` and `SHAPOGFX3D_GOURAUD_STEP=4` where memory or cycles are
+  short.
+- **ESP32-S3** (Xtensa LX7 with FPU): the float build; its divide and square root are
+  slow, but the renderer needs one division per vertex and two per textured span.
+  Place the arena in internal SRAM, not PSRAM (the span lists are walked per pixel
+  row); a frame buffer in PSRAM works for plain writes but makes blending slow. Draw
+  into `RGB565` and let `esp_lcd` swap the bytes, and render on both cores with two
+  render contexts (one task pinned to each core).
+- **ESP32-P4** (RISC-V with FPU, two cores): as the S3; the arena in internal memory
+  (L2MEM). The PPA and the 2D-DMA can take large 2D blits and fills off the CPU, which
+  an application does next to the library; the 3D renderer cannot use them.
+
 ## Rendering pipeline
 
 ### `beginRender()`
