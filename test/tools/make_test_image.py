@@ -29,7 +29,7 @@ def main():
             img.putpixel((x, y), pixel(x, y))
     png = os.path.join(DATA, "test_image.png")
     img.save(png)
-    for fmt in ("rgb565be", "argb4444", "rgb444", "gray1"):
+    for fmt in ("rgb565be", "rgb565", "argb4444", "rgb444", "gray1"):
         out = os.path.join(DATA, f"test_image_{fmt}.hpp")
         subprocess.check_call([sys.executable, BIN, "-f", fmt, "--namespace", f"test_image_{fmt}",
                                "--name", "texture", png, out])

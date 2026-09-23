@@ -35,6 +35,9 @@
 #ifndef SHAPOGFX_FORMAT_RGB565BE
 #define SHAPOGFX_FORMAT_RGB565BE 1
 #endif
+#ifndef SHAPOGFX_FORMAT_RGB565
+#define SHAPOGFX_FORMAT_RGB565 1
+#endif
 
 // Bits of a screen coordinate and of a surface's width and height (1..15).
 // Surfaces wider or taller than SHAPOGFX_COORD_MAX pixels are rejected

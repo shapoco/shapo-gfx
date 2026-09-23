@@ -6,7 +6,7 @@ ShapoGFX is a set of 2D/3D graphics libraries for embedded systems, written in
 portable C++17 with no platform dependencies.
 
 - Namespaces: `shapoco::gfx2d` (2D API and shared types), `shapoco::gfx3d` (3D renderer)
-- Pixel formats: GRAY1, RGB444, ARGB4444, RGB565BE (see below)
+- Pixel formats: GRAY1, RGB444, ARGB4444, RGB565BE, RGB565 (see below)
 - Low memory: no frame buffer, no Z buffer; the 3D renderer works scanline by scanline
 - No dynamic allocation inside the library; the 3D renderer's working memory comes from
   a user-supplied arena, the 2D API needs none
@@ -36,6 +36,7 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX_FORMAT_RGB444` | 1 | Enable the RGB444 format |
 | `SHAPOGFX_FORMAT_ARGB4444` | 1 | Enable the ARGB4444 format |
 | `SHAPOGFX_FORMAT_RGB565BE` | 1 | Enable the RGB565BE format |
+| `SHAPOGFX_FORMAT_RGB565` | 1 | Enable the RGB565 (native byte order) format |
 | `SHAPOGFX_COORD_BITS` | 11 | Bits of a screen coordinate and of a surface's width and height (1..15). Wider or taller surfaces are rejected (see below) |
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
@@ -136,7 +137,7 @@ The format macros must have the same values in every translation unit.
 ### Pixel formats (`pixel.hpp`)
 
 ```c++
-enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565BE };
+enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565BE, RGB565 };
 ```
 
 | Format | Bits/pixel | Memory layout | Native pixel (in registers) |
@@ -145,13 +146,21 @@ enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565BE };
 | `RGB444` | 12 | 2 pixels in 3 bytes: `R1G1`, `B1R2`, `G2B2` (display order) | `0x0RGB` |
 | `ARGB4444` | 16 | native `uint16_t` | `0xARGB`; A = 15 opaque |
 | `RGB565BE` | 16 | `uint16_t` stored byte-swapped: byte 0 = `RRRRRGGG`, byte 1 = `GGGBBBBB` | `RRRRRGGGGGGBBBBB` (5/6/5) |
+| `RGB565` | 16 | native `uint16_t` | `RRRRRGGGGGGBBBBB` (5/6/5) |
 
 Every row of an image starts on a byte boundary; rows are `stride` bytes apart
 (`minStride(format, width)` gives the smallest legal stride).
 
 RGB565BE and RGB444 are the byte streams expected by common display controllers, so
-a Surface in either format can be transferred without conversion. ARGB4444 is a
-composition format (sprites with alpha), GRAY1 a mask/monochrome format.
+a Surface in either format can be transferred without conversion. RGB565 holds the
+same pixels in the CPU's own byte order, which saves the byte swap of every pixel
+read and write -- one instruction on a Cortex-M3 and up, three or four on Xtensa
+(ESP32-S3) or a RISC-V core without Zbb (ESP32-P4), twice that for a blended pixel.
+It suits a display interface that sends 16-bit words most significant byte first:
+an RP2040/RP2350 SPI in 16-bit mode or a PIO program, the i80 bus of ESP-IDF's
+`esp_lcd` (with `swap_color_bytes`), and any DMA that moves 16-bit units. Only a
+byte-wise SPI transfer needs RGB565BE. ARGB4444 is a composition format (sprites with
+alpha), GRAY1 a mask/monochrome format.
 
 ### Colors
 
@@ -169,7 +178,7 @@ Per-format helpers (all `inline`): pack/unpack (`makeRgb565`, `packRgb565`,
 
 ### Pixel cursors
 
-`CursorGray1`, `CursorRgb444`, `CursorArgb4444`, `CursorRgb565BE` give sequential
+`CursorGray1`, `CursorRgb444`, `CursorArgb4444`, `CursorRgb565BE`, `CursorRgb565` give sequential
 access to one row: `init(line, x)`, `read()`, `write(native)`, `next()`,
 `fill(n, native)`. `FormatTraits<F>` maps a format to its cursor and its Color
 conversions; `blendNative<F>` and `addNative<F>` blend native pixels. These are the
@@ -339,7 +348,7 @@ are counter-clockwise in screen space. All angles are in radians.
 
 ```c++
 using gfx2d::Texture;   // any enabled format; width and height must be powers of two
-using gfx2d::Surface;   // render target: RGB565BE or RGB444
+using gfx2d::Surface;   // render target: RGB565BE, RGB565 or RGB444
 
 struct Vertex {
   vec3f position; vec3f normal; vec2f uv;
@@ -659,7 +668,8 @@ With `ENV_MAP`, `u = 0.5 + 0.5 n.x`, `v = 0.5 - 0.5 n.y` from the view-space nor
 
 Any enabled format. Texels are fetched through a format-specific sampler and
 converted to 5/6/5 before modulation: GRAY1 becomes white or black, RGB444 and
-ARGB4444 are expanded, RGB565BE is byte-swapped. An ARGB4444 texture supplies a
+ARGB4444 are expanded, RGB565BE is byte-swapped, RGB565 is taken as it is. An
+ARGB4444 texture supplies a
 per-texel alpha `a4` (0..15); the triangle becomes translucent, and a material with
 `BlendMode::NONE` is rasterized as `ALPHA` with `opacity = a4 / 15`, while `ALPHA`
 and `ADD` multiply their opacity by `a4 / 15`. Texel alpha 0 skips the pixel.
@@ -775,7 +785,7 @@ primarily determines the compositing order of translucent primitives.
 ### `render()`
 
 The target format selects a rasterizer table and a fill function once per call;
-RGB565BE and RGB444 are supported (others return without drawing). The region is
+RGB565BE, RGB565 and RGB444 are supported (others return without drawing). The region is
 clipped to the screen and to the destination surface.
 
 For every scanline of the region, a list of the triangles that start intersecting on
@@ -862,12 +872,12 @@ coordinates is selected with `SHAPOGFX3D_CORRECT_PERSPECTIVE` (default 1):
   `(u, v)` are interpolated linearly in fixed point in between. Costs one division
   per 16 textured pixels and 12 bytes per textured record.
 
-With `SHAPOGFX3D_RP2_INTERP` (RP2040/RP2350), RGB565BE and ARGB4444 texels of
+With `SHAPOGFX3D_RP2_INTERP` (RP2040/RP2350), RGB565BE, RGB565 and ARGB4444 texels of
 textures with a power-of-two stride are addressed by the SIO interpolator `interp0`:
 lane 0 maps `u` to the byte offset in the row, lane 1 maps `v` to the row offset,
 and one `POP_FULL` per pixel yields the texel address and steps both coordinates.
 Other textures use the software walker. Opaque, untextured, smoothly shaded spans
-into RGB565BE take their red and green from `interp1` (`arch::GouraudRG`): lanes 0
+into RGB565BE or RGB565 take their red and green from `interp1` (`arch::GouraudRG`): lanes 0
 and 1 step r and g (8.16) with `ADD_RAW`, and their shifted and masked values
 (`(r >> 8) & 0xF800`, `(g >> 13) & 0x07E0`) sum to the red and green of the pixel in
 the `FULL` result; blue is stepped in software. Both paths give the same pixels as
@@ -886,10 +896,11 @@ module.
 
 - **img2cpp** `[-f FORMAT] [-d DITHER] [-k COLOR] [--name N] [--namespace NS] [--resize WxH] [--pot] input output.hpp`
   emits an aligned `static const` pixel array and a `static const gfx2d::Texture`.
-  Formats rgb565be (default), argb4444, rgb444, gray1; dithering none / diffusion /
+  Formats rgb565be (default), rgb565, argb4444, rgb444, gray1; dithering none / diffusion /
   pattern; `-k` makes a key color transparent; `--pot` resizes to a power of two.
   Pixels are quantized with rounding; the memory layout matches `pixel.hpp`
-  (RGB565BE and RGB444 are emitted as bytes, ARGB4444 as `uint16_t`).
+  (RGB565BE and RGB444 are emitted as bytes, RGB565 and ARGB4444 as `uint16_t`, which
+  the compiler lays out in the target's byte order).
 - **gltf2cpp** `[--namespace NS] [--vertex-format float|packed] [--texformat auto|...] [--dither D] [--key-color C] [--max-texture-size N] [--no-resize-pot] input.gltf|glb output.hpp`
   (all glTF primitive modes are supported)
   emits, inside a namespace named after the file, `tex<i>` textures, `mat<i>` (and
@@ -934,7 +945,8 @@ served as a static site.
 `test/` builds `shapogfx_tests` (registered with CTest) without any external
 framework. It checks color conversions and cursors for every enabled format, blending
 identities, `Graphics2D` clipping, fills, polygons, lines, ellipses, image blits,
-bitmaps and text metrics, consistency between RGB565BE and RGB444 targets, and for
+bitmaps and text metrics, consistency between RGB565BE and RGB444 targets (and RGB565
+holding exactly the byte-swapped RGB565BE pixels, drawn or blitted), and for
 the 3D renderer: banded versus whole-frame rendering (byte identical), offset
 rendering, transparent clear, all texture formats on both output formats, texel
 alpha, the winding of every shape (culled and double-sided renders must match),

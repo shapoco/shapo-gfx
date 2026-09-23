@@ -9,6 +9,7 @@
 #include "data/test_image_argb4444.hpp"
 #include "data/test_image_gray1.hpp"
 #include "data/test_image_rgb444.hpp"
+#include "data/test_image_rgb565.hpp"
 #include "data/test_image_rgb565be.hpp"
 #include "data/test_model.hpp"
 #include "data/test_model_packed.hpp"
@@ -62,6 +63,11 @@ static void testImg2cpp() {
            (int)g2::PixelFormat::RGB444);
   CHECK_EQ((int)test_image_gray1::texture.format, (int)g2::PixelFormat::GRAY1);
   checkTexture(test_image_rgb565be::texture, 9, 5, 9, false, false);
+#if SHAPOGFX_FORMAT_RGB565
+  CHECK_EQ((int)test_image_rgb565::texture.format,
+           (int)g2::PixelFormat::RGB565);
+  checkTexture(test_image_rgb565::texture, 9, 5, 9, false, false);
+#endif
   checkTexture(test_image_argb4444::texture, 17, 17, 17, true, false);
   checkTexture(test_image_rgb444::texture, 17, 17, 17, false, false);
   checkTexture(test_image_gray1::texture, 0, 0, 0, false, true);

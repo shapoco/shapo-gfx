@@ -10,11 +10,12 @@ import re
 import numpy as np
 from PIL import Image, ImageColor
 
-FORMATS = ("rgb565be", "argb4444", "rgb444", "gray1")
+FORMATS = ("rgb565be", "rgb565", "argb4444", "rgb444", "gray1")
 DITHERS = ("none", "diffusion", "pattern")
 
 PIXEL_FORMAT_ENUM = {
     "rgb565be": "RGB565BE",
+    "rgb565": "RGB565",
     "argb4444": "ARGB4444",
     "rgb444": "RGB444",
     "gray1": "GRAY1",
@@ -131,6 +132,14 @@ def convert(image, fmt, dither="none", key_color=None):
                     row[i + 2] = (g << 4) | b
             data.extend(row)
         return w, h, stride, data, "uint8_t"
+
+    if fmt == "rgb565":
+        # Native byte order: emitted as uint16_t values, which the compiler
+        # lays out for the target
+        arr = np.array(image.convert("RGB"), dtype=np.float64)
+        q = quantize(arr, [5, 6, 5], dither)
+        val = (q[:, :, 0] << 11) | (q[:, :, 1] << 5) | q[:, :, 2]
+        return w, h, w * 2, [int(v) for v in val.flatten()], "uint16_t"
 
     # rgb565be: big-endian byte order in memory, emitted as bytes
     arr = np.array(image.convert("RGB"), dtype=np.float64)

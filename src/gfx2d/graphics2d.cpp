@@ -187,6 +187,11 @@ static void copyRowD(PixelFormat srcFmt, uint8_t *dl, int dx, const uint8_t *sl,
       copyRowT<PixelFormat::RGB565BE, D>(dl, dx, sl, sx, n);
       break;
 #endif
+#if SHAPOGFX_FORMAT_RGB565
+    case PixelFormat::RGB565:
+      copyRowT<PixelFormat::RGB565, D>(dl, dx, sl, sx, n);
+      break;
+#endif
     default: break;
   }
 }
@@ -233,6 +238,11 @@ static void copyRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
       copyRowD<PixelFormat::RGB565BE>(srcFmt, dl, dx, sl, sx, n);
       break;
 #endif
+#if SHAPOGFX_FORMAT_RGB565
+    case PixelFormat::RGB565:
+      copyRowD<PixelFormat::RGB565>(srcFmt, dl, dx, sl, sx, n);
+      break;
+#endif
     default: break;
   }
 }
@@ -260,6 +270,11 @@ static bool blendRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
     case PixelFormat::RGB565BE:
       return blendRowD<PixelFormat::RGB565BE>(srcFmt, dl, dx, sl, sx, n,
                                               opacity64);
+#endif
+#if SHAPOGFX_FORMAT_RGB565
+    case PixelFormat::RGB565:
+      return blendRowD<PixelFormat::RGB565>(srcFmt, dl, dx, sl, sx, n,
+                                            opacity64);
 #endif
     default: return false;
   }
@@ -351,6 +366,12 @@ static void drawGlyphFmt(const Surface &target, const Rect &clip,
                                         native, alpha64);
       break;
 #endif
+#if SHAPOGFX_FORMAT_RGB565
+    case PixelFormat::RGB565:
+      drawGlyphT<PixelFormat::RGB565>(target, clip, g, bits, gx, gy, s, native,
+                                      alpha64);
+      break;
+#endif
     default: break;
   }
 }
@@ -376,6 +397,11 @@ static void fillSpanFmt(PixelFormat fmt, uint8_t *line, int x, int n,
 #if SHAPOGFX_FORMAT_RGB565BE
     case PixelFormat::RGB565BE:
       fillSpanT<PixelFormat::RGB565BE>(line, x, n, native, alpha64);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB565
+    case PixelFormat::RGB565:
+      fillSpanT<PixelFormat::RGB565>(line, x, n, native, alpha64);
       break;
 #endif
     default: break;
@@ -405,6 +431,11 @@ static void fillSpanAddFmt(PixelFormat fmt, uint8_t *line, int x, int n,
       fillSpanAddT<PixelFormat::RGB565BE>(line, x, n, native);
       break;
 #endif
+#if SHAPOGFX_FORMAT_RGB565
+    case PixelFormat::RGB565:
+      fillSpanAddT<PixelFormat::RGB565>(line, x, n, native);
+      break;
+#endif
     default: break;
   }
 }
@@ -430,6 +461,11 @@ static void readColorsFmt(PixelFormat fmt, const uint8_t *line, int x, int n,
 #if SHAPOGFX_FORMAT_RGB565BE
     case PixelFormat::RGB565BE:
       readColorsT<PixelFormat::RGB565BE>(line, x, n, out);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB565
+    case PixelFormat::RGB565:
+      readColorsT<PixelFormat::RGB565>(line, x, n, out);
       break;
 #endif
     default:
@@ -460,6 +496,11 @@ static void writeColorsFmt(PixelFormat fmt, uint8_t *line, int x, int n,
 #if SHAPOGFX_FORMAT_RGB565BE
     case PixelFormat::RGB565BE:
       writeColorsT<PixelFormat::RGB565BE>(line, x, n, src, mode, opacity64);
+      break;
+#endif
+#if SHAPOGFX_FORMAT_RGB565
+    case PixelFormat::RGB565:
+      writeColorsT<PixelFormat::RGB565>(line, x, n, src, mode, opacity64);
       break;
 #endif
     default: break;

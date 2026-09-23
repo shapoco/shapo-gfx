@@ -8,7 +8,7 @@ PixelFormat
 
 .. code-block:: cpp
 
-   enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565BE };
+   enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565BE, RGB565 };
 
 .. csv-table::
    :header: "値", "ビット/px", "メモリ上の配置", "ネイティブピクセル (レジスタ上の表現)"
@@ -17,12 +17,15 @@ PixelFormat
    "``RGB444``", "12", "2 ピクセルを 3 バイトに: ``R1G1``, ``B1R2``, ``G2B2``", "``0x0RGB``"
    "``ARGB4444``", "16", "ネイティブ ``uint16_t``", "``0xARGB``、A = 15 で不透明"
    "``RGB565BE``", "16", "``uint16_t`` をバイトスワップして格納: byte0 = ``RRRRRGGG``, byte1 = ``GGGBBBBB``", "``RRRRRGGGGGGBBBBB`` (5/6/5)"
+   "``RGB565``", "16", "ネイティブ ``uint16_t`` (CPU のバイト順)", "``RRRRRGGGGGGBBBBB`` (5/6/5)"
 
 各行はバイト境界から始まり、行の間隔は ``stride`` バイトです。
 ``minStride(format, width)`` は幅 ``width`` を収める最小の stride を返します。
 
 「ネイティブピクセル」とは、後述のカーソルや変換関数がレジスタ上で扱う 1 ピクセルの値です。
 ``RGB565BE`` はメモリ上ではバイトスワップされていますが、レジスタ上では通常の 5/6/5 ビット並びです。
+``RGB565`` は同じピクセルを CPU のバイト順のまま持つので、読み書きのたびのバイトスワップが要りません
+(バイト反転命令のない Xtensa (ESP32-S3) や RISC-V (ESP32-P4) で特に効きます)。
 
 BlendMode
 --------------------------------------------------------------------------------
@@ -104,7 +107,7 @@ Color (ARGB8888)
 ================================================================================
 
 1 行のピクセルへ順次アクセスするための小さな構造体です。フォーマットごとに
-``CursorGray1``, ``CursorRgb444``, ``CursorArgb4444``, ``CursorRgb565BE`` があり、いずれも同じインターフェイスを持ちます。
+``CursorGray1``, ``CursorRgb444``, ``CursorArgb4444``, ``CursorRgb565BE``, ``CursorRgb565`` があり、いずれも同じインターフェイスを持ちます。
 2D・3D 両方のラスタライザの部品で、アプリケーションからも利用できます。
 
 .. code-block:: cpp

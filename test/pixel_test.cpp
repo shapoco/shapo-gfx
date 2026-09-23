@@ -139,5 +139,8 @@ void testPixel() {
 #if SHAPOGFX_FORMAT_RGB565BE
   testCursor<PixelFormat::RGB565BE>(37);
 #endif
+#if SHAPOGFX_FORMAT_RGB565
+  testCursor<PixelFormat::RGB565>(37);
+#endif
   testBlend();
 }

@@ -210,7 +210,7 @@ Stats
    :header: "メンバー", "説明"
 
    "``void beginRender()``", "三角形を奥から順にソートする"
-   "``void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst, int16_t dstX = 0, int16_t dstY = 0)``", "画面領域 (x, y, w, h) を ``dst`` の (dstX, dstY) に描く。画面と ``dst`` の両方でクリップされる。``dst`` は RGB565BE か RGB444"
+   "``void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst, int16_t dstX = 0, int16_t dstY = 0)``", "画面領域 (x, y, w, h) を ``dst`` の (dstX, dstY) に描く。画面と ``dst`` の両方でクリップされる。``dst`` は RGB565BE、RGB565、RGB444 のいずれか"
    "``void render(int ctx, int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst, int16_t dstX = 0, int16_t dstY = 0)``", "レンダリングコンテキスト ``ctx`` (0〜``Config::renderContexts`` - 1) で描く。コンテキストが異なる呼び出しは同時に実行できる (コアごとに別の帯を描くなど)。同じコンテキストの呼び出しを重ねてはいけない"
    "``void endRender()``", "レンダリングを終える"
    "``Stats getStats() const``", "統計 (``endRender()`` 後に呼ぶとそのフレームの値)"

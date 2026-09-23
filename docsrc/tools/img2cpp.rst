@@ -18,7 +18,7 @@ img2cpp: 画像を C++ コードに変換する
 .. csv-table::
    :header: "オプション", "既定値", "説明"
 
-   "``-f``, ``--format``", "``rgb565be``", "``rgb565be`` / ``argb4444`` / ``rgb444`` / ``gray1``"
+   "``-f``, ``--format``", "``rgb565be``", "``rgb565be`` / ``rgb565`` (ネイティブバイト順、``uint16_t`` で出力) / ``argb4444`` / ``rgb444`` / ``gray1``"
    "``-d``, ``--dither``", "``none``", "``none`` (四捨五入) / ``diffusion`` (Floyd-Steinberg) / ``pattern`` (4x4 Bayer)"
    "``-k``, ``--key-color``", "なし", "この色のピクセルを透明にする (argb4444 向け)。``#FF8000``、``orange``、``F80`` など"
    "``--name``", "出力ファイル名から生成", "``Texture`` の変数名 (配列は ``<name>Data``)"

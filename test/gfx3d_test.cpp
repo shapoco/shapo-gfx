@@ -29,6 +29,8 @@ static const g3::Texture T565 = {g3::PixelFormat::RGB565BE, 16, 16, 32, tex565};
 static const g3::Texture T4444 = {g3::PixelFormat::ARGB4444, 16, 16, 32,
                                   tex4444};
 static const g3::Texture TG1 = {g3::PixelFormat::GRAY1, 16, 16, 2, texG1};
+static uint16_t tex565n[16 * 16];  // tex565 in native byte order
+static const g3::Texture T565N = {g3::PixelFormat::RGB565, 16, 16, 32, tex565n};
 static const g3::Texture T444 = {g3::PixelFormat::RGB444, 16, 16, 24, tex444};
 
 static const g3::Material M_RED = {{0.9f, 0.1f, 0.1f, 1},
@@ -49,6 +51,11 @@ static const g3::Material M_TEX565 = {{1, 1, 1, 1},
 static const g3::Material M_TEX4444 = {{1, 1, 1, 1},
                                        {1, 1, 1, 1},
                                        &T4444,
+                                       g3::BlendMode::NONE,
+                                       g3::MaterialFlags::TEXTURE};
+static const g3::Material M_TEX565N = {{1, 1, 1, 1},
+                                       {1, 1, 1, 1},
+                                       &T565N,
                                        g3::BlendMode::NONE,
                                        g3::MaterialFlags::TEXTURE};
 static const g3::Material M_TEXG1 = {{1, 1, 1, 1},
@@ -72,6 +79,7 @@ static void genTextures() {
       bool on = ((x >> 2) ^ (y >> 2)) & 1;
       tex565[y * 16 + x] =
           g2::packRgb565BE(on ? 1.0f : 0.2f, 0.5f, on ? 0.2f : 1.0f);
+      tex565n[y * 16 + x] = g2::bswap16(tex565[y * 16 + x]);
       tex4444[y * 16 + x] =
           g2::makeArgb4444(on ? 15 : 0, 15, 8, 2);  // alpha holes
       c1.write(on);
@@ -197,6 +205,32 @@ static void testOutputFormats() {
     // A few pixels may differ where blending rounds differently
     CHECK(differing < W * H / 100);
   }
+#if SHAPOGFX_FORMAT_RGB565
+  // Native RGB565 output and textures: the same pixels as RGB565BE,
+  // byte-swapped. The BE-textured scene into a native target, the
+  // native-textured one into a BE target.
+  for (const g3::Material *m : {&M_RED, &M_TEX565, &M_GLASS}) {
+    g2::OwnedSurface be = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+    g2::OwnedSurface nat = g2::createSurface(g2::PixelFormat::RGB565, W, H);
+    g2::OwnedSurface beN = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+    buildScene(r, m, 0.4f);
+    r.beginRender();
+    r.render(0, 0, W, H, be);
+    r.render(0, 0, W, H, nat);
+    r.endRender();
+    buildScene(r, m == &M_TEX565 ? &M_TEX565N : m, 0.4f);
+    r.beginRender();
+    r.render(0, 0, W, H, beN);
+    r.endRender();
+    int bad = 0;
+    const uint16_t *pb = (const uint16_t *)be.pixels();
+    const uint16_t *pn = (const uint16_t *)nat.pixels();
+    for (int i = 0; i < W * H; i++) bad += (pn[i] != g2::bswap16(pb[i]));
+    CHECK_EQ(bad, 0);
+    CHECK(std::memcmp(be.pixels(), beN.pixels(), be.bytes()) == 0);
+  }
+#endif
+
   // Unsupported output format is ignored without touching the buffer
   g2::OwnedSurface gray = g2::createSurface(g2::PixelFormat::GRAY1, W, H);
   std::memset(gray.pixels(), 0xFF, gray.bytes());

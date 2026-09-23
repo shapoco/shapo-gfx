@@ -416,7 +416,8 @@ class Graphics3D {
   void endRender();    // finish rendering
 
   // Render the screen region (x, y, w, h) into dst at (dstX, dstY). dst must be
-  // in RGB565BE or RGB444; other formats are ignored. The region is clipped to
+  // in RGB565BE, RGB565 or RGB444; other formats are ignored. The region is
+  // clipped to
   // the screen and to dst.
   void render(int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst,
               int16_t dstX = 0, int16_t dstY = 0);

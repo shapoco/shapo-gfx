@@ -115,6 +115,37 @@ static void testFormatConsistency() {
       CHECK(std::abs(colorB(ca) - colorB(cb)) <= 17);
     }
   }
+#if SHAPOGFX_FORMAT_RGB565
+  // Native RGB565 holds the same pixels as RGB565BE, byte-swapped, whether
+  // drawn directly or blitted in either direction
+  OwnedSurface n = createSurface(PixelFormat::RGB565, 33, 17);
+  Graphics2D gn(n);
+  gn.clear(makeColor(20, 40, 60));
+  gn.fillEllipse(1, 1, 30, 14, makeColor(200, 100, 50));
+  gn.fillRoundRect(3, 2, 20, 10, 4, makeColor(50, 200, 100, 128));
+  gn.drawRoundRect(3, 2, 20, 10, 4, Colors::WHITE);
+  gn.setFont(&ShapoSansP_s08c07);
+  gn.setTextColor(Colors::YELLOW);
+  gn.drawString(5, 4, "Ab");
+  gn.drawLine(0, 16, 32, 0, Colors::CYAN);
+  auto sameAsBE = [&](const OwnedSurface &nat) {
+    int bad = 0;
+    for (int y = 0; y < 17; y++) {
+      const uint16_t *pn = (const uint16_t *)nat.surface().linePtr(y);
+      const uint16_t *pb = (const uint16_t *)a.surface().linePtr(y);
+      for (int x = 0; x < 33; x++) bad += (pn[x] != bswap16(pb[x]));
+    }
+    return bad;
+  };
+  CHECK_EQ(sameAsBE(n), 0);
+  OwnedSurface n2 = createSurface(PixelFormat::RGB565, 33, 17);
+  Graphics2D(n2).drawImage(a, 0, 0, BlendMode::NONE);
+  CHECK_EQ(sameAsBE(n2), 0);
+  OwnedSurface b2 = createSurface(PixelFormat::RGB565BE, 33, 17);
+  Graphics2D(b2).drawImage(n, 0, 0, BlendMode::NONE);
+  CHECK(std::memcmp(b2.pixels(), a.pixels(), a.bytes()) == 0);
+#endif
+
   // Blit RGB444 -> RGB565BE and compare with drawing directly
   OwnedSurface c = createSurface(PixelFormat::RGB565BE, 33, 17);
   Graphics2D gc(c);
@@ -239,6 +270,9 @@ static void testOwnedSurface() {
 void testGraphics2D() {
 #if SHAPOGFX_FORMAT_RGB565BE
   testFillAndClip(PixelFormat::RGB565BE);
+#endif
+#if SHAPOGFX_FORMAT_RGB565
+  testFillAndClip(PixelFormat::RGB565);
 #endif
 #if SHAPOGFX_FORMAT_RGB444
   testFillAndClip(PixelFormat::RGB444);
