@@ -265,6 +265,7 @@ struct ShadedVertex;
 struct VertexQ;
 struct TriHead;
 struct PlaneSet;
+struct SetupVertex;
 struct RenderContext;
 struct LayerDesc;
 struct Span;
@@ -432,6 +433,15 @@ class Graphics3D {
   // Get statistics (call after endRender() to get the values of that frame).
   Stats getStats() const;
 
+  // Bytes of the triangle buffer one primitive takes -- its record and its
+  // entry -- by what it holds: a depth plane (a layer without
+  // LayerFlags::NO_DEPTH), interpolated colors (its vertex colors differ) and
+  // texture coordinates. The values depend on the build (compiled-out
+  // features, SHAPOGFX3D_DEPTH_BITS, the pointer size) and, through the
+  // entry, on Config::renderContexts, so budget the arena with this rather
+  // than with fixed numbers. Before init() one render context is assumed.
+  size_t primitiveBytes(bool depth, bool smooth, bool textured) const;
+
   int16_t screenWidth() const { return screenW_; }
   int16_t screenHeight() const { return screenH_; }
   bool isInitialized() const { return recBase_ != nullptr; }
@@ -533,6 +543,10 @@ class Graphics3D {
   // Store a primitive whose header and planes are complete (see PlaneSet)
   void storePrimitive(const detail::TriHead &h, const detail::PlaneSet &ps,
                       bool smooth, bool textured);
+  // Float setup: a triangle reaching beyond the guard band, clipped to it
+  void emitClipped(const detail::SetupVertex *sv, const detail::TriHead &h,
+                   detail::PlaneSet &ps, uint32_t attrs, bool smooth,
+                   bool textured);
   uint8_t layerByte();  // id of the current layer, opening one if needed
   void unlitVertex(const Vertex &in, const Material *mat,
                    detail::UnlitVertex &out) const;

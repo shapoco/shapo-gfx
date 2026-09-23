@@ -11,7 +11,16 @@
 //   SHAPOGFX_ARCH_RP2      RP2040 / RP2350 (Pico SDK)
 //   SHAPOGFX_ARCH_ESP32S3  ESP32-S3 (ESP-IDF)
 //   SHAPOGFX_ARCH_ESP32P4  ESP32-P4 (ESP-IDF)
-// Anything else is SHAPOGFX_ARCH_GENERIC.
+// Anything else is SHAPOGFX_ARCH_GENERIC -- including the ESP8266, which the
+// ESP8266_RTOS_SDK builds with ESP_PLATFORM defined as well (its sdkconfig
+// names CONFIG_IDF_TARGET_ESP8266, which selects nothing here).
+//
+// SHAPOGFX_ARCH_SPLIT_MUL64: 1 forms 32 x 32 -> 64-bit products from four
+// 16 x 16-bit ones inline (split_mul.hpp), for a core whose multiplier
+// yields only the low 32 bits of a product and would call a library routine
+// instead. Defaults to 1 on ARMv6-M (Cortex-M0/M0+, RP2040) and on the
+// ESP8266 (Xtensa lx106), else 0; define it by hand for another such core.
+// The results are the same either way.
 
 #if !defined(SHAPOGFX_ARCH_RP2) && !defined(SHAPOGFX_ARCH_ESP32S3) && \
     !defined(SHAPOGFX_ARCH_ESP32P4) && !defined(SHAPOGFX_ARCH_GENERIC)
@@ -33,6 +42,15 @@
 #define SHAPOGFX_ARCH_GENERIC 1
 #endif
 
+#ifndef SHAPOGFX_ARCH_SPLIT_MUL64
+#if defined(__ARM_ARCH_6M__) || defined(CONFIG_IDF_TARGET_ESP8266) || \
+    defined(ESP8266) || defined(ARDUINO_ARCH_ESP8266)
+#define SHAPOGFX_ARCH_SPLIT_MUL64 1
+#else
+#define SHAPOGFX_ARCH_SPLIT_MUL64 0
+#endif
+#endif
+
 // RP2040 / RP2350: fetch 16-bit texels through the SIO interpolator interp0
 // and step Gouraud colors through interp1 (of the core that calls render()).
 // On by default where the Pico SDK's hardware_interp is available; define it
@@ -46,8 +64,8 @@
 #endif
 
 #include "generic.hpp"
-#if defined(__ARM_ARCH_6M__)
-#include "armv6m.hpp"
+#if SHAPOGFX_ARCH_SPLIT_MUL64
+#include "split_mul.hpp"
 #endif
 #if defined(SHAPOGFX_ARCH_RP2)
 #include "rp2.hpp"
@@ -55,10 +73,11 @@
 
 // The hooks gfx3d.cpp calls
 namespace shapoco::gfx3d::arch {
-using generic::mulShift;
-#if defined(__ARM_ARCH_6M__)
-using armv6m::mulShiftU16;
+#if SHAPOGFX_ARCH_SPLIT_MUL64
+using split::mul64;
+using split::mulShiftU16;
 #else
+using generic::mul64;
 using generic::mulShiftU16;
 #endif
 #if defined(SHAPOGFX_ARCH_RP2) && SHAPOGFX3D_RP2_INTERP

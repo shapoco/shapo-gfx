@@ -83,12 +83,14 @@ CMake も PlatformIO も使わない
 .. csv-table::
    :header: "マクロ", "既定値", "効果"
 
-   "``SHAPOGFX_FORMAT_GRAY1`` / ``SHAPOGFX_FORMAT_RGB444`` / ``SHAPOGFX_FORMAT_ARGB4444`` / ``SHAPOGFX_FORMAT_RGB565BE`` / ``SHAPOGFX_FORMAT_RGB565``", "1", "0 にするとそのピクセルフォーマットのコードを 2D・3D 両方から除去する。無効化したフォーマットの Surface / Texture は無視される"
+   "``SHAPOGFX_FORMAT_GRAY1`` / ``SHAPOGFX_FORMAT_RGB444`` / ``SHAPOGFX_FORMAT_ARGB4444`` / ``SHAPOGFX_FORMAT_RGB565BE``", "1", "0 にするとそのピクセルフォーマットのコードを 2D・3D 両方から除去する。無効化したフォーマットの Surface / Texture は無視される"
+   "``SHAPOGFX_FORMAT_RGB565``", "0", "1 でネイティブバイト順の RGB565 を有効にする"
    "``SHAPOGFX3D_CORRECT_PERSPECTIVE``", "1", "テクスチャ座標の透視補正レベル (``gfx3d.cpp`` のコンパイルにのみ影響)"
    "``SHAPOGFX3D_PERSPECTIVE_STEP``", "16", "レベル 2 でテクスチャ座標を正確に求める間隔 (ピクセル、2 の冪。``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_GOURAUD_STEP``", "1", "テクスチャ付き・グーロー補間の線分で、テクセルに乗じる頂点色を更新する間隔 (ピクセル、16 以下の 2 の冪)。4 にするとテクスチャ付きピクセルの処理が少し軽くなり、色は 4 ピクセル単位で一定になる (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX_COORD_BITS``", "11", "スクリーン座標と Surface の幅・高さのビット数 (1〜15)。``2^bits - 1`` ピクセルを超える Surface は 2D の描画先として拒否され、3D の ``init()`` は失敗する。全翻訳単位で同じ値にすること"
    "``SHAPOGFX3D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で 16 ビットテクセルの参照とグーロー補間の色の歩進に SIO interpolator (``interp0`` / ``interp1``) を使う。RP2 と判定され (``PICO_RP2040`` / ``PICO_RP2350``)、``hardware/interp.h`` が見えるとき既定で有効。``hardware_interp`` のリンクが必要。0 で無効 (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX_ARCH_SPLIT_MUL64``", "Cortex-M0/M0+ と ESP8266 で 1、他は 0", "1 にすると 32x32→64 ビットの積をライブラリ呼び出しでなく 16x16 ビットの積 4 つで作る (乗算器が下位 32 ビットしか出さないコア向け。固定小数点の頂点段・セットアップ・透視補正除算)。結果は同じ"
    "``SHAPOGFX3D_DEPTH_BITS``", "32", "レコードの深度の精度 (32 または 16)。16 で深度付きレコードが 4 バイト小さくなる (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_TEXTURE``", "1", "0 でテクスチャ/環境マッピングを除去 (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_GOURAUD``", "1", "0 でフラットシェーディングになる (``gfx3d.cpp`` のみ)"
@@ -103,7 +105,7 @@ CMake も PlatformIO も使わない
 (:doc:`../gfx3d/concepts` の「省略できる機能」参照)。
 
 3D レンダラの出力フォーマット 1 つにつき、ピクセルループが約 14 KB (Cortex-M33) / 20 KB (Cortex-M0+) 増えます。
-16 ビットのフォーマットを片方しか使わないなら、もう片方 (``SHAPOGFX_FORMAT_RGB565`` か ``SHAPOGFX_FORMAT_RGB565BE``) を 0 にしてください。
+このため ``RGB565`` (ネイティブ順) は既定で無効です。``SHAPOGFX_FORMAT_RGB565=1`` で使う場合、``RGB565BE`` を使わないなら ``SHAPOGFX_FORMAT_RGB565BE=0`` にしてください。
 
 フォーマットのマクロと ``SHAPOGFX_COORD_BITS`` は、ヘッダを含む全ての翻訳単位で同じ値にしてください
 (CMake のオプションで指定した ``SHAPOGFX_COORD_BITS`` はライブラリの利用側にも伝わります)。

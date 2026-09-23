@@ -669,6 +669,24 @@ static void testLayersAndConfig() {
   CHECK(bytesPerTri(M_TEX565) > plain);
 #endif
   CHECK(plain < (double)(sizeof(float) * 32));
+  // primitiveBytes() is what a primitive really costs: the lit cube is flat
+  // (equal vertex colors) with depth, the textured one flat with depth and
+  // texture coordinates
+  CHECK_EQ(plain, (double)r.primitiveBytes(true, false, false));
+#if SHAPOGFX3D_TEXTURE
+  CHECK_EQ(bytesPerTri(M_TEX565), (double)r.primitiveBytes(true, false, true));
+#endif
+  CHECK(r.primitiveBytes(false, false, false) <
+        r.primitiveBytes(true, false, false));
+  {
+    // Each further render context adds a 2-byte link per primitive
+    g3::Config cfg2 = cfg;
+    cfg2.renderContexts = 2;
+    g3::Graphics3D r2;
+    r2.init(cfg2);
+    CHECK_EQ(r2.primitiveBytes(true, false, false),
+             r.primitiveBytes(true, false, false) + 2);
+  }
 
   // A span pool too small for the scene drops spans instead of overflowing
   cfg.spanCapacity = 1;

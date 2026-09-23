@@ -214,6 +214,7 @@ Stats
    "``void render(int ctx, int16_t x, int16_t y, int16_t w, int16_t h, const Surface &dst, int16_t dstX = 0, int16_t dstY = 0)``", "レンダリングコンテキスト ``ctx`` (0〜``Config::renderContexts`` - 1) で描く。コンテキストが異なる呼び出しは同時に実行できる (コアごとに別の帯を描くなど)。同じコンテキストの呼び出しを重ねてはいけない"
    "``void endRender()``", "レンダリングを終える"
    "``Stats getStats() const``", "統計 (``endRender()`` 後に呼ぶとそのフレームの値)"
+   "``size_t primitiveBytes(bool depth, bool smooth, bool textured) const``", "プリミティブ 1 個が三角形バッファで使うバイト数 (レコード + エントリ)。深度平面・補間色・テクスチャ座標の有無ごと。ビルド設定と ``Config::renderContexts`` で変わるので、アリーナの見積もりにはこれを使う"
 
 形状と静的シーン
 ================================================================================

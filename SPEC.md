@@ -36,14 +36,15 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX_FORMAT_RGB444` | 1 | Enable the RGB444 format |
 | `SHAPOGFX_FORMAT_ARGB4444` | 1 | Enable the ARGB4444 format |
 | `SHAPOGFX_FORMAT_RGB565BE` | 1 | Enable the RGB565BE format |
-| `SHAPOGFX_FORMAT_RGB565` | 1 | Enable the RGB565 (native byte order) format |
+| `SHAPOGFX_FORMAT_RGB565` | 0 | Enable the RGB565 (native byte order) format |
 | `SHAPOGFX_COORD_BITS` | 11 | Bits of a screen coordinate and of a surface's width and height (1..15). Wider or taller surfaces are rejected (see below) |
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
 | `SHAPOGFX3D_GOURAUD_STEP` | 1 | Pixels between two updates of the vertex color that modulates the texels of a textured, smoothly shaded span (power of two up to 16). 4 saves a few instructions per textured pixel; the color is then constant over groups of 4 pixels (in demo3d 1.3% of the pixels change, mostly by a shade) |
 | `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` and step Gouraud colors through `interp1`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
-| `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise) |
+| `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise); see "Placing the rasterization side" |
+| `SHAPOGFX_ARCH_SPLIT_MUL64` | 1 on Cortex-M0/M0+ and ESP8266, else 0 | 1 forms 32x32 -> 64-bit products from four 16x16-bit ones inline instead of calling a library routine, for a core whose multiplier yields only the low 32 bits (fixed-point vertex stage, setup, perspective division); same results either way |
 | `SHAPOGFX3D_FIXED_POINT` | 0 | Vertex stage and primitive setup in fixed point, for cores without an FPU (see "Fixed-point vertex stage") |
 | `SHAPOGFX3D_DEPTH_BITS` | 32 | Depth resolution of the records: 32 (8.24) or 16 (1.15, 4 bytes less per record with depth; see "Memory management") |
 | `SHAPOGFX3D_TEXTURE` | 1 | Texture and environment mapping |
@@ -73,11 +74,16 @@ The 3D renderer's architecture-specific code lives in `src/gfx3d/arch/`, behind 
 few hooks with a portable implementation that is always present (`generic.hpp`);
 `arch.hpp` detects the target (`SHAPOGFX_ARCH_RP2`, `SHAPOGFX_ARCH_ESP32S3`,
 `SHAPOGFX_ARCH_ESP32P4`, else `SHAPOGFX_ARCH_GENERIC`; any of them may be defined
-by hand) and selects the implementation; the instruction set selects some too
-(`armv6m.hpp` for a Cortex-M0/M0+, `__ARM_ARCH_6M__`). The hooks: `mulShift` and
-`mulShiftU16` (a product shifted right, used by the perspective division), the
-texture walker (`InterpTex` on RP2) and `RenderState` (hardware state that
-`render()` saves and restores). With `SHAPOGFX3D_RP2_INTERP` the target
+by hand) and selects the implementation. The ESP8266 is `SHAPOGFX_ARCH_GENERIC`:
+the ESP8266_RTOS_SDK defines `ESP_PLATFORM` too, but its `CONFIG_IDF_TARGET_ESP8266`
+selects nothing. `SHAPOGFX_ARCH_SPLIT_MUL64` (on by default for `__ARM_ARCH_6M__` and
+the ESP8266 -- `CONFIG_IDF_TARGET_ESP8266`, `ESP8266` or `ARDUINO_ARCH_ESP8266` --
+and settable by hand for any other core without a 32x32 -> 64 multiply) selects
+`split_mul.hpp`. The hooks: `mul64` (a 32x32 -> 64-bit product, used by the
+fixed-point vertex stage and setup) and `mulShiftU16` (a 32x16-bit product shifted
+right, used by the perspective division), the texture walker (`InterpTex` on RP2),
+`GouraudRG` (red and green of a smooth span, interp1 on RP2) and `RenderState`
+(hardware state that `render()` saves and restores). With `SHAPOGFX3D_RP2_INTERP` the target
 must link `hardware_interp`; `render()` saves and restores `interp0` and `interp1` of
 the calling core, so interrupt handlers running during `render()` must not use them.
 
@@ -134,9 +140,9 @@ rasterizer table. Surfaces or textures in a disabled format are ignored at run t
 An output format of the 3D renderer is the largest item: its rasterizer table
 instantiates the pixel loop for every texture format, blend mode and shading, about
 14 KB of code on a Cortex-M33 and 20 KB on a Cortex-M0+ (the part that
-`SHAPOGFX3D_HOT_ATTR` places in RAM). An application that draws into one 16-bit
-format should disable the other: `SHAPOGFX_FORMAT_RGB565=0` when it uses RGB565BE,
-or `SHAPOGFX_FORMAT_RGB565BE=0` when it uses RGB565.
+`SHAPOGFX3D_HOT_ATTR` places in RAM). This is why RGB565 is off by default: an
+application that draws into it enables it with `SHAPOGFX_FORMAT_RGB565=1` and
+should then disable RGB565BE (`SHAPOGFX_FORMAT_RGB565BE=0`) unless it uses both.
 The format macros must have the same values in every translation unit.
 
 ## `shapoco::gfx2d`
@@ -153,7 +159,7 @@ enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565BE, RGB565 };
 | `RGB444` | 12 | 2 pixels in 3 bytes: `R1G1`, `B1R2`, `G2B2` (display order) | `0x0RGB` |
 | `ARGB4444` | 16 | native `uint16_t` | `0xARGB`; A = 15 opaque |
 | `RGB565BE` | 16 | `uint16_t` stored byte-swapped: byte 0 = `RRRRRGGG`, byte 1 = `GGGBBBBB` | `RRRRRGGGGGGBBBBB` (5/6/5) |
-| `RGB565` | 16 | native `uint16_t` | `RRRRRGGGGGGBBBBB` (5/6/5) |
+| `RGB565` | 16 | native `uint16_t` (opt-in, `SHAPOGFX_FORMAT_RGB565=1`) | `RRRRRGGGGGGBBBBB` (5/6/5) |
 
 Every row of an image starts on a byte boundary; rows are `stride` bytes apart
 (`minStride(format, width)` gives the smallest legal stride).
@@ -527,6 +533,9 @@ class Graphics3D {
               const Surface &dst, int16_t dstX = 0, int16_t dstY = 0);
 
   Stats getStats() const;
+  // Triangle-buffer bytes one primitive takes (record + entry), by what it holds;
+  // depends on the build and on Config::renderContexts
+  size_t primitiveBytes(bool depth, bool smooth, bool textured) const;
   int16_t screenWidth() const; int16_t screenHeight() const; bool isInitialized() const;
 };
 ```
@@ -708,7 +717,9 @@ contiguous; `beginRender()` places the links of every context in the space
 between them and the records, which the entry size reserves.
 `Stats::triBytes` and `Stats::triBytesTotal` report both ends of it. Records are
 addressed by a 4-byte-unit offset, which caps the region at 256 KB; a larger arena
-leaves the excess unused.
+leaves the excess unused. `primitiveBytes(depth, smooth, textured)` returns what one
+primitive takes (its record and its entry) in the build and configuration at hand,
+for applications that size their arena from a scene budget.
 
 `SHAPOGFX3D_STACK_DEPTH` and `SHAPOGFX3D_VCACHE_SIZE` size the fixed part (about
 1.1 KB and 2.8 KB at their defaults). A smaller vertex cache costs re-transformed
@@ -776,6 +787,44 @@ Measured on the same scenes, one 240x240 frame of a game differs in 90 pixels
 on average (worst 811) and a lit, textured, translucent test scene in 7% of its
 pixels, almost all by one shading step; both look the same. The test suite
 passes in either build.
+
+### Placing the rasterization side
+
+With `SHAPOGFX3D_HOT_ATTR` (and `SHAPOGFX3D_HOT_INSTANTIATE=1` for the templates) the
+following get the attribute, for example to run them from RAM
+(`.time_critical.*` on the Pico SDK, `.iram1.*` on the ESP8266):
+
+- `Graphics3D::render()`, both overloads;
+- the span-list functions of `gfx3d.cpp`: `allocSpan`, `cutSpan`, `appendTranslucent`,
+  `insertOpaque`, `insertTranslucent`, `clipTranslucent`, `mergeLists` (static
+  functions taking the render context; they were members before the render
+  contexts);
+- the rasterizers `rasterSpanT<blend, texture format, flat, output format>`, one per
+  non-null entry of the rasterizer table of each enabled output format (blend modes
+  NONE/ALPHA/ADD, the flat variant always and the smooth one with
+  `SHAPOGFX3D_GOURAUD`, the blending ones only with `SHAPOGFX3D_BLEND`, texture
+  format NONE plus each enabled texture format with `SHAPOGFX3D_TEXTURE`), and
+  `fillLineT<output format>`; these are the explicit instantiations.
+
+Everything else `render()` runs -- the span builders, `fragNearer`/`depthAt`, the
+attribute evaluation (`spanAttrs`, `PerspDiv`) and the pixel loop (`rasterLoop`) -- is
+inlined into them. The only calls from this code to code without the attribute are
+`memset` (GCC turns the reset of the scanline buckets, once per `render()` call, into
+it), the integer division helpers of the target (textured spans) and, on a core
+without `clz`, `__clzsi2`. To list them for a build, disassemble the section with
+relocations (`arm-none-eabi-objdump -dr -j .time_critical.gfx3d gfx3d.o`) and look
+for the call relocations (`R_ARM_THM_CALL`). With `SHAPOGFX3D_TEXTURE=0` the attributed code is about
+7.3 KB on a Cortex-M0+ in the fixed-point build (12.3 KB before the span stage was
+reworked).
+
+### Stack
+
+`render()` needs about 170 bytes of stack plus a rasterizer's frame (48 to 96 bytes
+on ARM). The deepest path of scene building goes through `putPrimitive()` into the
+triangle setup: on ARM with `SHAPOGFX3D_TEXTURE=0` about 550 bytes in the float build
+(960 when a triangle has to be clipped to the guard band) and 890 bytes in the
+fixed-point build; lines take about 660 / 860. Measure the target's own compiler
+with `-fstack-usage`; Xtensa frames are larger than ARM's.
 
 ### Platform notes
 

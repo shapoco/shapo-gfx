@@ -21,7 +21,8 @@
 //
 // Each pixel format can be disabled (define the macro as 0 before including the
 // headers, or on the compiler command line) to remove its code paths from both
-// the 2D and the 3D renderer.
+// the 2D and the 3D renderer. RGB565 (native byte order) is off by default: as
+// a 3D output format it costs as much code as RGB565BE; enable it with 1.
 
 #ifndef SHAPOGFX_FORMAT_GRAY1
 #define SHAPOGFX_FORMAT_GRAY1 1
@@ -36,7 +37,7 @@
 #define SHAPOGFX_FORMAT_RGB565BE 1
 #endif
 #ifndef SHAPOGFX_FORMAT_RGB565
-#define SHAPOGFX_FORMAT_RGB565 1
+#define SHAPOGFX_FORMAT_RGB565 0
 #endif
 
 // Bits of a screen coordinate and of a surface's width and height (1..15).

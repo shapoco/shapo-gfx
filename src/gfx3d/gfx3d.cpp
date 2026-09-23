@@ -426,7 +426,18 @@ struct Span {
 // Attributes of a primitive that are linear in screen space, as its setup
 // computes them (in the record formats), and the planes it hands to
 // storePrimitive(). The flat color replaces r, g, b where they are equal.
-enum : int { A_Z, A_R, A_G, A_B, A_T0, A_T1, A_T2, A_COUNT };
+// Without texturing the texture attributes take no room (A_COUNT stops
+// before them).
+enum : int {
+  A_Z,
+  A_R,
+  A_G,
+  A_B,
+  A_T0,
+  A_T1,
+  A_T2,
+  A_COUNT = SHAPOGFX3D_TEXTURE ? 7 : 4
+};
 struct PlaneSet {
   Plane p[A_COUNT];  // A_T*: (u/w, v/w, 1/w), or (u, v) at level 0
   uint8_t fr, fg, fb;
@@ -564,6 +575,17 @@ static inline int32_t clampFix(int64_t v, int32_t maxAbs) {
   return v < -maxAbs ? -maxAbs : (v > maxAbs ? maxAbs : (int32_t)v);
 }
 
+// a * b for 64-bit operands that nearly always fit 32 bits (the setup's
+// coordinate differences and gradients): with SHAPOGFX_ARCH_SPLIT_MUL64 the
+// product is formed inline when they do, instead of by a library call
+static inline int64_t mulFit(int64_t a, int64_t b) {
+#if SHAPOGFX_ARCH_SPLIT_MUL64
+  if (a == (int32_t)a && b == (int32_t)b)
+    return arch::mul64((int32_t)a, (int32_t)b);
+#endif
+  return a * b;
+}
+
 // floor(log2(v)) of a positive float, from its bits (no library call)
 static inline int floatExponent(float v) {
   uint32_t i;
@@ -665,8 +687,8 @@ static inline int32_t mulRcp(int64_t num, const Rcp &d, int shift,
   if (r > (uint64_t)maxAbs) r = (uint64_t)maxAbs;
   return neg ? -(int32_t)r : (int32_t)r;
 }
-static inline int32_t divQ(int64_t num, int64_t den, int shift,
-                           int32_t maxAbs) {
+__attribute__((noinline)) static int32_t divQ(int64_t num, int64_t den,
+                                              int shift, int32_t maxAbs) {
   return mulRcp(num, makeRcp(den), shift, maxAbs);
 }
 
@@ -1066,28 +1088,32 @@ bool Graphics3D::projectQ(int32_t vx, int32_t vy, int32_t vz, ShadedVertex &sv,
       const int32_t w = -vz;
       if (w <= 0) return false;
       invW = divQ(1, w, IW_SHIFT + FP_SHIFT, INT32_MAX);  // 2^26 / (w units)
-      const int64_t xr = clampFix(((int64_t)vx * invW) >> IW_SHIFT, 1 << 27);
-      const int64_t yr = clampFix(((int64_t)vy * invW) >> IW_SHIFT, 1 << 27);
-      sv.sx = clampFix(p.cx + ((xr * p.fx) >> 8), SCREEN_MAX);
-      sv.sy = clampFix(p.cy - ((yr * p.fy) >> 8), SCREEN_MAX);
-      sv.z = clampFix((int64_t)p.zA + (((int64_t)p.zB * invW) >>
+      const int64_t xr = clampFix((arch::mul64(vx, invW)) >> IW_SHIFT, 1 << 27);
+      const int64_t yr = clampFix((arch::mul64(vy, invW)) >> IW_SHIFT, 1 << 27);
+      sv.sx =
+          clampFix(p.cx + (arch::mul64((int32_t)xr, p.fx) >> 8), SCREEN_MAX);
+      sv.sy =
+          clampFix(p.cy - (arch::mul64((int32_t)yr, p.fy) >> 8), SCREEN_MAX);
+      sv.z = clampFix((int64_t)p.zA + ((arch::mul64(p.zB, invW)) >>
                                        (FP_SHIFT + IW_SHIFT - 24)),
                       Z_MAX_FP);
       return true;
     }
     case ProjKind::ORTHOGRAPHIC: {
-      sv.sx = clampFix((((int64_t)vx * p.sxScale) >> 16) + p.sxOff, SCREEN_MAX);
-      sv.sy = clampFix((((int64_t)vy * p.syScale) >> 16) + p.syOff, SCREEN_MAX);
-      sv.z =
-          clampFix((((int64_t)vz * p.zScale) >> FP_SHIFT) + p.zOff, Z_MAX_FP);
+      sv.sx =
+          clampFix(((arch::mul64(vx, p.sxScale)) >> 16) + p.sxOff, SCREEN_MAX);
+      sv.sy =
+          clampFix(((arch::mul64(vy, p.syScale)) >> 16) + p.syOff, SCREEN_MAX);
+      sv.z = clampFix(((arch::mul64(vz, p.zScale)) >> FP_SHIFT) + p.zOff,
+                      Z_MAX_FP);
       invW = 1 << IW_SHIFT;
       return true;
     }
     default: {
       // Any matrix: Q18 entries on a 16.16 point
       auto row = [&](int r) -> int64_t {
-        return (((int64_t)p.m[r] * vx + (int64_t)p.m[4 + r] * vy +
-                 (int64_t)p.m[8 + r] * vz) >>
+        return ((arch::mul64(p.m[r], vx) + arch::mul64(p.m[4 + r], vy) +
+                 arch::mul64(p.m[8 + r], vz)) >>
                 MAT_SHIFT) +
                ((int64_t)p.m[12 + r] >> (MAT_SHIFT - FP_SHIFT));
       };
@@ -1095,8 +1121,8 @@ bool Graphics3D::projectQ(int32_t vx, int32_t vy, int32_t vz, ShadedVertex &sv,
       if (w <= 0) return false;
       const int32_t rx = divQ(cx, w, FP_SHIFT, 1 << 27);
       const int32_t ry = divQ(cy, w, FP_SHIFT, 1 << 27);
-      sv.sx = clampFix(p.cx + (((int64_t)rx * screenW_) >> 1), SCREEN_MAX);
-      sv.sy = clampFix(p.cy - (((int64_t)ry * screenH_) >> 1), SCREEN_MAX);
+      sv.sx = clampFix(p.cx + ((arch::mul64(rx, screenW_)) >> 1), SCREEN_MAX);
+      sv.sy = clampFix(p.cy - ((arch::mul64(ry, screenH_)) >> 1), SCREEN_MAX);
       sv.z = divQ(cz, w, 24, Z_MAX_FP);
       invW = divQ(1, w, IW_SHIFT + FP_SHIFT, INT32_MAX);
       return true;
@@ -1108,16 +1134,16 @@ bool Graphics3D::projectQ(int32_t vx, int32_t vy, int32_t vz, ShadedVertex &sv,
 static inline void transformQ(const MatQ &m, const int32_t p[3], int32_t &vx,
                               int32_t &vy, int32_t &vz) {
   const int32_t px = p[0], py = p[1], pz = p[2];
-  vx = (int32_t)((((int64_t)m.r[0] * px + (int64_t)m.r[3] * py +
-                   (int64_t)m.r[6] * pz) >>
+  vx = (int32_t)(((arch::mul64(m.r[0], px) + arch::mul64(m.r[3], py) +
+                   arch::mul64(m.r[6], pz)) >>
                   MAT_SHIFT) +
                  m.t[0]);
-  vy = (int32_t)((((int64_t)m.r[1] * px + (int64_t)m.r[4] * py +
-                   (int64_t)m.r[7] * pz) >>
+  vy = (int32_t)(((arch::mul64(m.r[1], px) + arch::mul64(m.r[4], py) +
+                   arch::mul64(m.r[7], pz)) >>
                   MAT_SHIFT) +
                  m.t[1]);
-  vz = (int32_t)((((int64_t)m.r[2] * px + (int64_t)m.r[5] * py +
-                   (int64_t)m.r[8] * pz) >>
+  vz = (int32_t)(((arch::mul64(m.r[2], px) + arch::mul64(m.r[5], py) +
+                   arch::mul64(m.r[8], pz)) >>
                   MAT_SHIFT) +
                  m.t[2]);
 }
@@ -1126,8 +1152,9 @@ static inline void transformQ(const MatQ &m, const int32_t p[3], int32_t &vx,
 static inline int32_t vertexColorQ(int32_t unitQ8, uint32_t c8, bool useVertex,
                                    bool add, int32_t alpha256) {
   int32_t r = unitQ8 * 255;  // Q8 of 0..1 -> 8.8 of 0..255
-  if (useVertex) r = (int32_t)(((int64_t)r * c8 * 257) >> 16);  // x c / 255
-  if (add) r = (int32_t)(((int64_t)r * alpha256) >> 8);
+  if (useVertex)
+    r = (int32_t)(arch::mul64(r, (int32_t)(c8 * 257)) >> 16);  // x c / 255
+  if (add) r = (int32_t)((arch::mul64(r, alpha256)) >> 8);
   return clampColorFP(r);
 }
 
@@ -1213,26 +1240,26 @@ void Graphics3D::shadeVertexQ(const VertexQ &in, const PrimSetup &ps,
   int32_t n[3] = {0, 0, 0};
   if (ps.viewNormal) {
     const MatQ &m = curQ_;
-    normalizeQ15(((int64_t)m.r[0] * nq[0] + (int64_t)m.r[3] * nq[1] +
-                  (int64_t)m.r[6] * nq[2]) >>
+    normalizeQ15((arch::mul64(m.r[0], nq[0]) + arch::mul64(m.r[3], nq[1]) +
+                  arch::mul64(m.r[6], nq[2])) >>
                      MAT_SHIFT,
-                 ((int64_t)m.r[1] * nq[0] + (int64_t)m.r[4] * nq[1] +
-                  (int64_t)m.r[7] * nq[2]) >>
+                 (arch::mul64(m.r[1], nq[0]) + arch::mul64(m.r[4], nq[1]) +
+                  arch::mul64(m.r[7], nq[2])) >>
                      MAT_SHIFT,
-                 ((int64_t)m.r[2] * nq[0] + (int64_t)m.r[5] * nq[1] +
-                  (int64_t)m.r[8] * nq[2]) >>
+                 (arch::mul64(m.r[2], nq[0]) + arch::mul64(m.r[5], nq[1]) +
+                  arch::mul64(m.r[8], nq[2])) >>
                      MAT_SHIFT,
                  n);
     if (lightEnabled_) {
-      d = -(int32_t)(((int64_t)n[0] * lightQ_.dir[0] +
-                      (int64_t)n[1] * lightQ_.dir[1] +
-                      (int64_t)n[2] * lightQ_.dir[2]) >>
+      d = -(int32_t)((arch::mul64(n[0], lightQ_.dir[0]) +
+                      arch::mul64(n[1], lightQ_.dir[1]) +
+                      arch::mul64(n[2], lightQ_.dir[2])) >>
                      NORMAL_SHIFT);
     }
   } else if (lightEnabled_) {
-    d = (int32_t)(((int64_t)nq[0] * ps.lightModelQ[0] +
-                   (int64_t)nq[1] * ps.lightModelQ[1] +
-                   (int64_t)nq[2] * ps.lightModelQ[2]) >>
+    d = (int32_t)((arch::mul64(nq[0], ps.lightModelQ[0]) +
+                   arch::mul64(nq[1], ps.lightModelQ[1]) +
+                   arch::mul64(nq[2], ps.lightModelQ[2])) >>
                   LIGHT_SHIFT);
   }
 
@@ -1241,13 +1268,13 @@ void Graphics3D::shadeVertexQ(const VertexQ &in, const PrimSetup &ps,
     if (ps.envMap) {
       // Environment map UV from the view-space normal: (n + 1) / 2 in Q16
       // times the texture size is 16.16 texels
-      sv.u = clampFix((int64_t)(n[0] + (1 << NORMAL_SHIFT)) * ps.texWq,
+      sv.u = clampFix(arch::mul64(n[0] + (1 << NORMAL_SHIFT), ps.texWq),
                       TEX_MAX_FP);
-      sv.v = clampFix((int64_t)((1 << NORMAL_SHIFT) - n[1]) * ps.texHq,
+      sv.v = clampFix(arch::mul64((1 << NORMAL_SHIFT) - n[1], ps.texHq),
                       TEX_MAX_FP);
     } else {
-      sv.u = clampFix((int64_t)in.u * ps.texWq, TEX_MAX_FP);
-      sv.v = clampFix((int64_t)in.v * ps.texHq, TEX_MAX_FP);
+      sv.u = clampFix(arch::mul64(in.u, ps.texWq), TEX_MAX_FP);
+      sv.v = clampFix(arch::mul64(in.v, ps.texHq), TEX_MAX_FP);
     }
   } else {
     sv.u = sv.v = 0;
@@ -1265,14 +1292,20 @@ void Graphics3D::shadeVertexQ(const VertexQ &in, const PrimSetup &ps,
       b += (ps.amb[2] * lightQ_.env[2]) >> COLOR_SHIFT;
     }
     if (lightEnabled_ && d > 0) {
-      r += (int32_t)((((int64_t)ps.dif[0] * lightQ_.col[0]) >> COLOR_SHIFT) *
-                         d >>
+      r += (int32_t)(arch::mul64(
+                         (int32_t)(arch::mul64(ps.dif[0], lightQ_.col[0]) >>
+                                   COLOR_SHIFT),
+                         d) >>
                      NORMAL_SHIFT);
-      g += (int32_t)((((int64_t)ps.dif[1] * lightQ_.col[1]) >> COLOR_SHIFT) *
-                         d >>
+      g += (int32_t)(arch::mul64(
+                         (int32_t)(arch::mul64(ps.dif[1], lightQ_.col[1]) >>
+                                   COLOR_SHIFT),
+                         d) >>
                      NORMAL_SHIFT);
-      b += (int32_t)((((int64_t)ps.dif[2] * lightQ_.col[2]) >> COLOR_SHIFT) *
-                         d >>
+      b += (int32_t)(arch::mul64(
+                         (int32_t)(arch::mul64(ps.dif[2], lightQ_.col[2]) >>
+                                   COLOR_SHIFT),
+                         d) >>
                      NORMAL_SHIFT);
     }
   } else {
@@ -1490,15 +1523,11 @@ static inline void packDepth(const Plane &p, PartZ &out) {
 // Write the record of a primitive whose header and planes are complete. A
 // smooth primitive whose color gradients do not fit the record is stored
 // flat, in the color of its first vertex.
-void Graphics3D::storePrimitive(const TriHead &head, const PlaneSet &ps,
+void Graphics3D::storePrimitive(const TriHead &h, const PlaneSet &ps,
                                 bool smooth, bool textured) {
-  TriHead h = head;
   PartSmooth sm = {};
-  if (smooth && !packSmooth(ps, sm)) {
-    smooth = false;
-    h.flags |= TriFlags::FLAT;
-    h.rasterFn |= 1;
-  }
+  const bool flattened = smooth && !packSmooth(ps, sm);
+  if (flattened) smooth = false;
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
   uint8_t *rec = allocRecord(TRI_REC_SIZE[recIndex(depth, smooth, textured)]);
   if (!rec) {  // buffer overflow: drop for this frame
@@ -1507,6 +1536,10 @@ void Graphics3D::storePrimitive(const TriHead &head, const PlaneSet &ps,
   }
   makeRecord(rec, h, depth, smooth, textured, [&](auto &t) {
     using R = std::remove_reference_t<decltype(t)>;
+    if (flattened) {
+      t.flags |= TriFlags::FLAT;
+      t.rasterFn |= 1;
+    }
     if constexpr (R::HAS_DEPTH) packDepth(ps.p[A_Z], t);
     if constexpr (R::SMOOTH) {
       static_cast<PartSmooth &>(t) = sm;
@@ -1589,15 +1622,18 @@ static inline int16_t referenceColumn(int32_t x) {
 // each starts it from, and no pixel center falls between them.
 static inline int32_t edgeX(int32_t xs, int32_t ys, int32_t s, int row) {
   const int64_t oy = (((int64_t)row << FP_SHIFT) + FP_HALF) - ys;
-  return clampFix(xs + (((int64_t)s * oy) >> FP_SHIFT), SCREEN_MAX);
+  return clampFix(xs + (mulFit(s, oy) >> FP_SHIFT), SCREEN_MAX);
 }
 
 // Rows, edges and reference column of a triangle whose vertices (16.16 px,
 // within the guard band) are sorted by y, given the slopes of its edges
 // top->middle, middle->bottom and top->bottom (16.16 px per row, 0 where
 // horizontal). False when it covers no pixel row of the screen.
-static bool triangleGeometry(const int32_t *x, const int32_t *y,
-                             const int32_t *slopes, int screenH, TriHead &h) {
+__attribute__((noinline)) static bool triangleGeometry(const int32_t *x,
+                                                       const int32_t *y,
+                                                       const int32_t *slopes,
+                                                       int screenH,
+                                                       TriHead &h) {
   // Rows whose centers the triangle covers: ceil(y - 0.5) .. floor(y - 0.5)
   auto ceilRow = [](int32_t v) -> int {
     return (v - FP_HALF + 0xFFFF) >> FP_SHIFT;
@@ -1616,8 +1652,7 @@ static bool triangleGeometry(const int32_t *x, const int32_t *y,
   g.x[1] = edgeX(x[1], y[1], g.slope[1], yMid);
   g.x[2] = edgeX(x[0], y[0], g.slope[2], yMin);
   // The long edge is on the left when the middle vertex lies to its right
-  if (x[0] + (((int64_t)g.slope[2] * ((int64_t)y[1] - y[0])) >> FP_SHIFT) <
-      x[1]) {
+  if (x[0] + (mulFit(g.slope[2], (int64_t)y[1] - y[0]) >> FP_SHIFT) < x[1]) {
     h.flags |= TriFlags::LEFT_LONG;
   }
   h.xa = referenceColumn(g.x[2]);
@@ -1626,12 +1661,14 @@ static bool triangleGeometry(const int32_t *x, const int32_t *y,
 
 #if !SHAPOGFX3D_FIXED_POINT
 
+namespace detail {
 // A vertex of the float setup: screen position in pixels and the attributes
 // that are linear in screen space, in the record formats (A_*)
 struct SetupVertex {
   float x, y;
   float a[A_COUNT];
 };
+}  // namespace detail
 
 // Planes through the attributes of three setup vertices, evaluated at the
 // reference pixel
@@ -1653,9 +1690,11 @@ struct PlaneSolver {
 
 // Geometry and planes of the triangle p0 p1 p2 (any order; within the guard
 // band). False when it covers no pixel row of the screen.
-static bool setupTriangle(const SetupVertex *p0, const SetupVertex *p1,
-                          const SetupVertex *p2, int screenH, uint32_t attrs,
-                          TriHead &h, PlaneSet &ps) {
+__attribute__((noinline)) static bool setupTriangle(const SetupVertex *p0,
+                                                    const SetupVertex *p1,
+                                                    const SetupVertex *p2,
+                                                    int screenH, uint32_t attrs,
+                                                    TriHead &h, PlaneSet &ps) {
   if (p1->y < p0->y) std::swap(p0, p1);
   if (p2->y < p1->y) std::swap(p1, p2);
   if (p1->y < p0->y) std::swap(p0, p1);
@@ -1689,24 +1728,29 @@ static bool setupTriangle(const SetupVertex *p0, const SetupVertex *p1,
   return true;
 }
 
+// A vertex of a triangle clipped to the guard band: its position and its
+// weights of the triangle's vertices 1 and 2 (the attributes follow from
+// them, being linear in screen space)
+struct ClipVertex {
+  float x, y, w1, w2;
+};
+
 // Clip the polygon `in` (n vertices) against the half plane where
 // sign * (coordinate `axis`) <= lim; returns the vertex count of `out`
-static int clipPolygon(const SetupVertex *in, int n, SetupVertex *out, int axis,
+static int clipPolygon(const ClipVertex *in, int n, ClipVertex *out, int axis,
                        float sign, float lim) {
-  auto coord = [&](const SetupVertex &v) {
+  auto coord = [&](const ClipVertex &v) {
     return sign * (axis ? v.y : v.x) - lim;
   };
   int m = 0;
   for (int i = 0; i < n; i++) {
-    const SetupVertex &a = in[i], &b = in[(i + 1) % n];
+    const ClipVertex &a = in[i], &b = in[(i + 1) % n];
     const float da = coord(a), db = coord(b);
     if (da <= 0.0f) out[m++] = a;
     if ((da < 0.0f && db > 0.0f) || (da > 0.0f && db < 0.0f)) {
       const float t = da / (da - db);
-      SetupVertex &c = out[m++];
-      c.x = a.x + (b.x - a.x) * t;
-      c.y = a.y + (b.y - a.y) * t;
-      for (int k = 0; k < A_COUNT; k++) c.a[k] = a.a[k] + (b.a[k] - a.a[k]) * t;
+      out[m++] = {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+                  a.w1 + (b.w1 - a.w1) * t, a.w2 + (b.w2 - a.w2) * t};
     }
   }
   return m;
@@ -1809,26 +1853,45 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
     return std::fabs(v.x) <= GUARD && std::fabs(v.y) <= GUARD;
   };
   if (inside(sv[0]) && inside(sv[1]) && inside(sv[2])) {
-    TriHead t = h;
-    if (setupTriangle(&sv[0], &sv[1], &sv[2], screenH, attrs, t, ps)) {
-      storePrimitive(t, ps, smooth, textured);
+    if (setupTriangle(&sv[0], &sv[1], &sv[2], screenH, attrs, h, ps)) {
+      storePrimitive(h, ps, smooth, textured);
     }
-    return;
+  } else {
+    emitClipped(sv, h, ps, attrs, smooth, textured);
   }
+}
 
-  // A vertex beyond the guard band: clip the triangle to it in screen space,
-  // where every stored attribute is linear, and store the pieces
-  SetupVertex bufA[9], bufB[9];
+// A triangle with a vertex beyond the guard band: clip it to the band in
+// screen space, where every stored attribute is linear, and store the
+// pieces. Out of line, so that the clip buffers take stack only here.
+__attribute__((noinline)) void Graphics3D::emitClipped(
+    const SetupVertex *sv, const TriHead &h, PlaneSet &ps, uint32_t attrs,
+    bool smooth, bool textured) {
+  ClipVertex bufA[7], bufB[7];  // 3 vertices + one per clip plane
+  bufA[0] = {sv[0].x, sv[0].y, 0.0f, 0.0f};
+  bufA[1] = {sv[1].x, sv[1].y, 1.0f, 0.0f};
+  bufA[2] = {sv[2].x, sv[2].y, 0.0f, 1.0f};
   int n = 3;
-  for (int i = 0; i < 3; i++) bufA[i] = sv[i];
   n = clipPolygon(bufA, n, bufB, 0, 1.0f, GUARD);
   n = clipPolygon(bufB, n, bufA, 0, -1.0f, GUARD);
   n = clipPolygon(bufA, n, bufB, 1, 1.0f, GUARD);
   n = clipPolygon(bufB, n, bufA, 1, -1.0f, GUARD);
+  // Fan triangles, their attributes from the weights
+  auto vertexAt = [&](const ClipVertex &c, SetupVertex &out) {
+    out.x = c.x;
+    out.y = c.y;
+    for (int k = 0; k < A_COUNT; k++) {
+      out.a[k] = sv[0].a[k] + (sv[1].a[k] - sv[0].a[k]) * c.w1 +
+                 (sv[2].a[k] - sv[0].a[k]) * c.w2;
+    }
+  };
+  SetupVertex p[3];
+  vertexAt(bufA[0], p[0]);
   for (int i = 1; i + 1 < n; i++) {
+    vertexAt(bufA[i], p[1]);
+    vertexAt(bufA[i + 1], p[2]);
     TriHead t = h;
-    if (setupTriangle(&bufA[0], &bufA[i], &bufA[i + 1], screenH, attrs, t,
-                      ps)) {
+    if (setupTriangle(&p[0], &p[1], &p[2], screenH_, attrs, t, ps)) {
       storePrimitive(t, ps, smooth, textured);
     }
   }
@@ -1836,12 +1899,14 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 
 #else  // SHAPOGFX3D_FIXED_POINT
 
+namespace detail {
 // A vertex of the fixed-point setup: screen position (16.16 px) and the
 // attributes in the record formats (A_*)
 struct SetupVertex {
   int32_t x, y;
   int32_t a[A_COUNT];
 };
+}  // namespace detail
 
 // Cramer's rule works on 14.14 px, so that the products of the guard band's
 // coordinate differences and the attribute differences fit 64 bits
@@ -1850,55 +1915,75 @@ static constexpr int CR_DROP = 2;
 // Planes through the attributes of three setup vertices, evaluated at the
 // reference pixel
 struct PlaneSolver {
-  int64_t x10, y10, x20, y20;  // 14.14 px
+  int32_t x10, y10, x20, y20;  // 14.14 px (fit 32 bits for any COORD_BITS)
   Rcp rd;                      // 1 / det
   int64_t rx, ry;  // center of the reference pixel minus vertex 0, 16.16 px
-  Plane operator()(int32_t a0, int32_t a1, int32_t a2) const {
+  __attribute__((noinline)) Plane operator()(int32_t a0, int32_t a1,
+                                             int32_t a2) const {
     const int64_t d1 = (int64_t)a1 - a0, d2 = (int64_t)a2 - a0;
-    const int32_t dx =
-        mulRcp(d1 * y20 - d2 * y10, rd, FP_SHIFT - CR_DROP, GRAD_LIMIT);
-    const int32_t dy =
-        mulRcp(d2 * x10 - d1 * x20, rd, FP_SHIFT - CR_DROP, GRAD_LIMIT);
+    const int32_t dx = mulRcp(mulFit(d1, y20) - mulFit(d2, y10), rd,
+                              FP_SHIFT - CR_DROP, GRAD_LIMIT);
+    const int32_t dy = mulRcp(mulFit(d2, x10) - mulFit(d1, x20), rd,
+                              FP_SHIFT - CR_DROP, GRAD_LIMIT);
     if (dx == GRAD_LIMIT || dx == -GRAD_LIMIT || dy == GRAD_LIMIT ||
         dy == -GRAD_LIMIT) {
       return {a0 / 3 + a1 / 3 + a2 / 3, 0, 0};
     }
-    return {clampFix(a0 + (((int64_t)dx * rx + (int64_t)dy * ry) >> FP_SHIFT),
+    return {clampFix(a0 + ((mulFit(dx, rx) + mulFit(dy, ry)) >> FP_SHIFT),
                      INT32_MAX),
             dx, dy};
   }
 };
 
+// The coordinate differences and the reciprocal of the determinant of a
+// triangle sorted by y; false when it is degenerate. The steps of the
+// fixed-point setup are separate functions, which keeps their 64-bit
+// temporaries out of each other's stack frames (on a Cortex-M0+ an inlined
+// chain of them costs hundreds of bytes of stack).
+__attribute__((noinline)) static bool makeSolver(const int32_t *x,
+                                                 const int32_t *y,
+                                                 PlaneSolver &s) {
+  s.x10 = (int32_t)(((int64_t)x[1] - x[0]) >> CR_DROP);
+  s.y10 = (int32_t)(((int64_t)y[1] - y[0]) >> CR_DROP);
+  s.x20 = (int32_t)(((int64_t)x[2] - x[0]) >> CR_DROP);
+  s.y20 = (int32_t)(((int64_t)y[2] - y[0]) >> CR_DROP);
+  const int64_t det = arch::mul64(s.x10, s.y20) - arch::mul64(s.x20, s.y10);
+  if (det == 0) return false;
+  s.rd = makeRcp(det);
+  return true;
+}
+
+// Slopes of the edges top->middle, middle->bottom and top->bottom
+__attribute__((noinline)) static void edgeSlopes(const int32_t *x,
+                                                 const int32_t *y,
+                                                 int32_t *slopes) {
+  static const uint8_t EDGE[3][2] = {{0, 1}, {1, 2}, {0, 2}};
+  for (int k = 0; k < 3; k++) {
+    const int i = EDGE[k][0], j = EDGE[k][1];
+    slopes[k] = y[j] > y[i] ? divQ((int64_t)x[j] - x[i], (int64_t)y[j] - y[i],
+                                   FP_SHIFT, SLOPE_MAX)
+                            : 0;
+  }
+}
+
 // Geometry and planes of the triangle p0 p1 p2 (any order). False when it
 // covers no pixel row of the screen.
-static bool setupTriangle(const SetupVertex *p0, const SetupVertex *p1,
-                          const SetupVertex *p2, int screenH, uint32_t attrs,
-                          TriHead &h, PlaneSet &ps) {
+__attribute__((noinline)) static bool setupTriangle(const SetupVertex *p0,
+                                                    const SetupVertex *p1,
+                                                    const SetupVertex *p2,
+                                                    int screenH, uint32_t attrs,
+                                                    TriHead &h, PlaneSet &ps) {
   if (p1->y < p0->y) std::swap(p0, p1);
   if (p2->y < p1->y) std::swap(p1, p2);
   if (p1->y < p0->y) std::swap(p0, p1);
   const int32_t x[3] = {p0->x, p1->x, p2->x}, y[3] = {p0->y, p1->y, p2->y};
-  const int64_t x10 = ((int64_t)x[1] - x[0]) >> CR_DROP;
-  const int64_t y10 = ((int64_t)y[1] - y[0]) >> CR_DROP;
-  const int64_t x20 = ((int64_t)x[2] - x[0]) >> CR_DROP;
-  const int64_t y20 = ((int64_t)y[2] - y[0]) >> CR_DROP;
-  const int64_t det = x10 * y20 - x20 * y10;
-  if (det == 0) return false;
-  auto slope = [&](int i, int j) {
-    return y[j] > y[i] ? divQ((int64_t)x[j] - x[i], (int64_t)y[j] - y[i],
-                              FP_SHIFT, SLOPE_MAX)
-                       : 0;
-  };
-  const int32_t slopes[3] = {slope(0, 1), slope(1, 2), slope(0, 2)};
+  PlaneSolver solve;
+  if (!makeSolver(x, y, solve)) return false;
+  int32_t slopes[3];
+  edgeSlopes(x, y, slopes);
   if (!triangleGeometry(x, y, slopes, screenH, h)) return false;
-
-  const PlaneSolver solve = {x10,
-                             y10,
-                             x20,
-                             y20,
-                             makeRcp(det),
-                             ((int64_t)h.xa * (1 << FP_SHIFT) + FP_HALF) - x[0],
-                             (((int64_t)h.yMin << FP_SHIFT) + FP_HALF) - y[0]};
+  solve.rx = ((int64_t)h.xa * (1 << FP_SHIFT) + FP_HALF) - x[0];
+  solve.ry = (((int64_t)h.yMin << FP_SHIFT) + FP_HALF) - y[0];
   for (int k = 0; k < A_COUNT; k++) {
     if (attrs & (1u << k)) ps.p[k] = solve(p0->a[k], p1->a[k], p2->a[k]);
   }
@@ -1911,8 +1996,11 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   if (!a.ok || !b.ok || !c.ok) return;
 
   // Back-face culling (screen y points down, so front-facing = negative area)
-  const int64_t area2 = (int64_t)(b.sv.sx - a.sv.sx) * (c.sv.sy - a.sv.sy) -
-                        (int64_t)(c.sv.sx - a.sv.sx) * (b.sv.sy - a.sv.sy);
+  // (in the 14.14 px of the setup, whose differences fit 32 bits for any
+  // SHAPOGFX_COORD_BITS)
+  auto d = [](int32_t p, int32_t q) { return ((int64_t)p - q) >> CR_DROP; };
+  const int64_t area2 = mulFit(d(b.sv.sx, a.sv.sx), d(c.sv.sy, a.sv.sy)) -
+                        mulFit(d(c.sv.sx, a.sv.sx), d(b.sv.sy, a.sv.sy));
   if (area2 == 0) return;
   if (area2 > 0 && !(mat->flags & MaterialFlags::DOUBLE_SIDED)) return;
 
@@ -1987,8 +2075,8 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
     const int sh = __builtin_clz((uint32_t)iwMax) - (31 - IW_NORM);
     for (int i = 0; i < 3; i++) {
       const int32_t iw = sh >= 0 ? cv[i]->invW << sh : cv[i]->invW >> -sh;
-      sv[i].a[A_T0] = (int32_t)(((int64_t)u[i] * iw) >> UW_SHIFT);
-      sv[i].a[A_T1] = (int32_t)(((int64_t)v[i] * iw) >> UW_SHIFT);
+      sv[i].a[A_T0] = (int32_t)(arch::mul64(u[i], iw) >> UW_SHIFT);
+      sv[i].a[A_T1] = (int32_t)(arch::mul64(v[i], iw) >> UW_SHIFT);
       sv[i].a[A_T2] = iw;
     }
 #else
@@ -2074,9 +2162,12 @@ struct LineEnd {
 
 // Geometry and planes of the segment p -> q (end points within the guard
 // band). False when it misses the screen.
-static bool setupLine(LineEnd p, LineEnd q, int screenW, int screenH,
-                      uint32_t attrs, TriHead &h, PlaneSet &ps) {
-  if (q.y < p.y) std::swap(p, q);
+__attribute__((noinline)) static bool setupLine(const LineEnd &e0,
+                                                const LineEnd &e1, int screenW,
+                                                int screenH, uint32_t attrs,
+                                                TriHead &h, PlaneSet &ps) {
+  const bool swap = e1.y < e0.y;
+  const LineEnd &p = swap ? e1 : e0, &q = swap ? e0 : e1;
   // Rows containing the end points; nothing to do when fully off screen
   const int yMin = std::max((int)(p.y >> FP_SHIFT), 0);
   const int yMax = std::min((int)(q.y >> FP_SHIFT), screenH - 1);
@@ -2126,7 +2217,7 @@ static bool setupLine(LineEnd p, LineEnd q, int screenW, int screenH,
       continue;
     }
     const int32_t a0 = clampFix(
-        p.a[k] + (((int64_t)grad * (steep ? oy : ox)) >> FP_SHIFT), INT32_MAX);
+        p.a[k] + (mulFit(grad, steep ? oy : ox) >> FP_SHIFT), INT32_MAX);
     ps.p[k] = steep ? Plane{a0, 0, grad} : Plane{a0, grad, 0};
   }
   return true;
@@ -3797,6 +3888,17 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int ctx, int16_t x, int16_t y,
 
 // ---------------------------------------------------------------------------
 // Statistics
+
+size_t Graphics3D::primitiveBytes(bool depth, bool smooth,
+                                  bool textured) const {
+#if !SHAPOGFX3D_GOURAUD
+  smooth = false;
+#endif
+#if !SHAPOGFX3D_TEXTURE
+  textured = false;
+#endif
+  return TRI_REC_SIZE[recIndex(depth, smooth, textured)] + (size_t)entryBytes_;
+}
 
 Stats Graphics3D::getStats() const {
   Stats st;
