@@ -108,11 +108,13 @@
 #define SHAPOGFX3D_FIXED_POINT 0
 #endif
 
-// RP2040 / RP2350 (Pico SDK): fetch 16-bit texels through the SIO
-// interpolator (interp0 of the core that calls render()). Opt-in.
-#ifndef SHAPOGFX3D_RP2_INTERP
-#define SHAPOGFX3D_RP2_INTERP 0
+// Depth resolution: 32 (8.24 fixed point, the default) or 16 bits (1.15,
+// smaller records; see PartZ)
+#ifndef SHAPOGFX3D_DEPTH_BITS
+#define SHAPOGFX3D_DEPTH_BITS 32
 #endif
+static_assert(SHAPOGFX3D_DEPTH_BITS == 32,
+              "SHAPOGFX3D_DEPTH_BITS must be 32 (16 is not implemented yet)");
 
 // Attribute put on the rasterization side -- render() and everything it
 // calls per span -- so that a platform can place just that code somewhere
@@ -125,9 +127,8 @@
 #ifndef SHAPOGFX3D_HOT_ATTR
 #define SHAPOGFX3D_HOT_ATTR
 #endif
-#if SHAPOGFX3D_RP2_INTERP
-#include "hardware/interp.h"
-#endif
+// Architecture hooks (SHAPOGFX3D_RP2_INTERP is decided there)
+#include "arch/arch.hpp"
 
 namespace shapoco::gfx3d {
 
@@ -151,6 +152,12 @@ static constexpr float Z_ONE = 16777216.0f;       // 8.24 fixed point depth
 static constexpr float Z_MAX = 120.0f;
 static constexpr float Z_DELTA_MAX = 64.0f;
 
+// Screen coordinates as stored (SHAPOGFX_COORD_BITS): a pixel position on
+// the screen, and one that may be negative (clipped values, differences)
+static constexpr int COORD_BITS = SHAPOGFX_COORD_BITS;
+using ucoord_t = std::conditional_t<(COORD_BITS <= 8), uint8_t, uint16_t>;
+using coord_t = std::conditional_t<(COORD_BITS <= 7), int8_t, int16_t>;
+
 static constexpr int PERSPECTIVE_STEP = SHAPOGFX3D_PERSPECTIVE_STEP;
 static_assert(PERSPECTIVE_STEP >= 2 &&
                   (PERSPECTIVE_STEP & (PERSPECTIVE_STEP - 1)) == 0,
@@ -163,7 +170,10 @@ static_assert(PERSPECTIVE_STEP >= 2 &&
 // Q18, normals Q15, the light direction in model space Q24.
 static constexpr int FP_SHIFT = 16;
 static constexpr int32_t FP_HALF = 1 << 15;
-static constexpr int32_t SCREEN_MAX = 8191 << FP_SHIFT;
+// Guard band of the screen coordinates: at least twice the largest screen,
+// and no more than 16.16 can hold
+static constexpr int32_t SCREEN_MAX = (COORD_BITS <= 12 ? 8191 : 32767)
+                                      << FP_SHIFT;
 static constexpr int COLOR_SHIFT = 8;
 static constexpr int32_t COLOR_MAX = 255 << COLOR_SHIFT;
 static constexpr int IW_SHIFT = 26;
@@ -278,7 +288,7 @@ struct TriHead {
 #endif
   const Material *mat;
   int32_t sortKey;     // ascending = farther first
-  int16_t yMin, yMax;  // range of scanlines crossed (inclusive)
+  coord_t yMin, yMax;  // range of scanlines crossed (inclusive)
   uint8_t flags;       // TriFlags
   uint8_t alpha64;     // opacity (0..64)
   uint8_t rasterFn;    // index of the rasterizer (tex * 6 + blend * 2 + flat)
@@ -665,7 +675,8 @@ void Graphics3D::init(const Config &cfg) {
   screenW_ = w;
   screenH_ = h;
   arenaSize_ = cfg.arenaSize;
-  if (w <= 0 || h <= 0 || !cfg.arena) {
+  if (w <= 0 || h <= 0 || w > SHAPOGFX_COORD_MAX || h > SHAPOGFX_COORD_MAX ||
+      !cfg.arena) {
     *this = Graphics3D();
     return;
   }
@@ -1391,8 +1402,8 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 
   h.mat = mat;
   h.sortKey = (a.viewZ >> 2) + (b.viewZ >> 2) + (c.viewZ >> 2);
-  h.yMin = (int16_t)yMin;
-  h.yMax = (int16_t)yMax;
+  h.yMin = (coord_t)yMin;
+  h.yMax = (coord_t)yMax;
   h.flags = flags;
   h.alpha64 = materialAlpha64(mat);
   h.rasterFn =
@@ -1541,8 +1552,8 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 
   h.mat = mat;
   h.sortKey = floatSortKey(a.viewZ + b.viewZ + c.viewZ);
-  h.yMin = (int16_t)yMin;
-  h.yMax = (int16_t)yMax;
+  h.yMin = (coord_t)yMin;
+  h.yMax = (coord_t)yMax;
   h.flags = flags;
   h.alpha64 = materialAlpha64(mat);
   h.rasterFn =
@@ -1745,8 +1756,8 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
   flags |= opaqueFlag(mat);
   h.mat = mat;
   h.sortKey = (a.vz >> 1) + (b.vz >> 1);
-  h.yMin = (int16_t)yMin;
-  h.yMax = (int16_t)yMax;
+  h.yMin = (coord_t)yMin;
+  h.yMax = (coord_t)yMax;
   h.flags = flags;
   h.alpha64 = materialAlpha64(mat);
   h.rasterFn = unlitRasterFn(mat, !smooth);
@@ -1835,8 +1846,8 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
   flags |= opaqueFlag(mat);
   h.mat = mat;
   h.sortKey = floatSortKey(a.view.z + b.view.z);
-  h.yMin = (int16_t)yMin;
-  h.yMax = (int16_t)yMax;
+  h.yMin = (coord_t)yMin;
+  h.yMax = (coord_t)yMax;
   h.flags = flags;
   h.alpha64 = materialAlpha64(mat);
   h.rasterFn = unlitRasterFn(mat, !smooth);
@@ -1891,8 +1902,8 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   flags |= opaqueFlag(mat);
   h.mat = mat;
   h.sortKey = a.vz;
-  h.yMin = (int16_t)yMin;
-  h.yMax = (int16_t)yMax;
+  h.yMin = (coord_t)yMin;
+  h.yMax = (coord_t)yMax;
   h.flags = flags;
   h.alpha64 = materialAlpha64(mat);
   h.rasterFn = unlitRasterFn(mat, true);
@@ -1942,8 +1953,8 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   flags |= opaqueFlag(mat);
   h.mat = mat;
   h.sortKey = floatSortKey(a.view.z);
-  h.yMin = (int16_t)yMin;
-  h.yMax = (int16_t)yMax;
+  h.yMin = (coord_t)yMin;
+  h.yMax = (coord_t)yMax;
   h.flags = flags;
   h.alpha64 = materialAlpha64(mat);
   h.rasterFn = unlitRasterFn(mat, true);
@@ -3045,54 +3056,6 @@ struct SoftTex {
   }
 };
 
-#if SHAPOGFX3D_RP2_INTERP && SHAPOGFX3D_TEXTURE
-// Same, through the SIO interpolator: lane 0 turns u into the byte offset of
-// the texel in its row, lane 1 turns v into the byte offset of the row, and
-// POP_FULL returns the texel address and steps both accumulators. Only for
-// 16-bit texels with a power-of-two stride.
-template <TexFmt T>
-struct InterpTex {
-  static bool usable(const Texture &tex) {
-    const uint32_t s = tex.stride;
-    return tex.width >= 2 && tex.height >= 2 && s >= 2 && (s & (s - 1)) == 0 &&
-           gfx2d::log2Floor((int)s) <= FIX_SHIFT;
-  }
-  void init(const Texture &tex, int32_t u0, int32_t v0, int32_t du0,
-            int32_t dv0) {
-    const int log2w = gfx2d::log2Floor(tex.width);
-    const int log2h = gfx2d::log2Floor(tex.height);
-    const int log2s = gfx2d::log2Floor((int)tex.stride);
-    interp_config c = interp_default_config();
-    interp_config_set_add_raw(&c, true);
-    interp_config_set_shift(&c, FIX_SHIFT - 1);  // texel index x 2 bytes
-    interp_config_set_mask(&c, 1, log2w);
-    interp_set_config(interp0, 0, &c);
-    interp_config_set_shift(&c, FIX_SHIFT - log2s);  // row index x stride
-    interp_config_set_mask(&c, log2s, log2s + log2h - 1);
-    interp_set_config(interp0, 1, &c);
-    interp0->base[0] = (uint32_t)du0;
-    interp0->base[1] = (uint32_t)dv0;
-    interp0->base[2] = (uintptr_t)tex.pixels;
-    interp0->accum[0] = (uint32_t)u0;
-    interp0->accum[1] = (uint32_t)v0;
-  }
-  void setStep(int32_t du0, int32_t dv0) {
-    interp0->base[0] = (uint32_t)du0;
-    interp0->base[1] = (uint32_t)dv0;
-  }
-  inline uint32_t fetchNext(uint32_t &a4) {
-    const uint32_t p = *(const uint16_t *)(uintptr_t)(interp0->pop[2]);
-    if constexpr (T == TexFmt::ARGB4444) {
-      a4 = p >> 12;
-      return gfx2d::rgb444ToRgb565((uint16_t)(p & 0x0FFFu));
-    } else {
-      a4 = 15;
-      return gfx2d::bswap16((uint16_t)p);
-    }
-  }
-};
-#endif
-
 // Output format: pixel cursor, packing from 5/6/5 components, blending
 template <PixelFormat OUT>
 struct OutTraits;
@@ -3304,8 +3267,9 @@ static SHAPOGFX3D_HOT_ATTR void rasterSpanT(uint8_t *line, int x, int n,
 #endif
 #if SHAPOGFX3D_RP2_INTERP && SHAPOGFX3D_TEXTURE
     if constexpr (T == TexFmt::RGB565BE || T == TexFmt::ARGB4444) {
-      if (InterpTex<T>::usable(tex)) {
-        InterpTex<T> tx;
+      using InterpTex = arch::rp2::InterpTex<T == TexFmt::ARGB4444>;
+      if (InterpTex::usable(tex)) {
+        InterpTex tx;
         tx.init(tex, u0, v0, du0, dv0);
         rasterLoop<B, T, FLAT, OUT>(cur, sp, n, tx);
         return;
@@ -3538,10 +3502,8 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int16_t x, int16_t y, int16_t w,
   TriEntry *const ent = entries_;
   const uint8_t *const base = recBase_;
 
-#if SHAPOGFX3D_RP2_INTERP
-  interp_hw_save_t interpSave;
-  interp_save(interp0, &interpSave);
-#endif
+  arch::RenderState archState;  // e.g. the RP2 interpolator the caller uses
+  archState.begin();
 
   // For each scanline of the region, build the list of triangles that start
   // intersecting at that line (linked by entry position, i.e. by depth)
@@ -3615,9 +3577,7 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int16_t x, int16_t y, int16_t w,
 #endif
   }
 
-#if SHAPOGFX3D_RP2_INTERP
-  interp_restore(interp0, &interpSave);
-#endif
+  archState.end();
 }
 
 // ---------------------------------------------------------------------------

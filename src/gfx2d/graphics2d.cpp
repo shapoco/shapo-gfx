@@ -472,6 +472,9 @@ static void writeColorsFmt(PixelFormat fmt, uint8_t *line, int x, int n,
 void Graphics2D::setTarget(const Surface &target) {
   target_ = target;
   if (!isFormatEnabled(target_.format)) target_.pixels = nullptr;
+  // Larger than SHAPOGFX_COORD_BITS allows: treated like a disabled format
+  if (target_.width > SHAPOGFX_COORD_MAX || target_.height > SHAPOGFX_COORD_MAX)
+    target_.pixels = nullptr;
   resetClipRect();
 }
 
@@ -736,35 +739,93 @@ void Graphics2D::drawRoundRect(const Rect &rect, int radius, Color c) {
 // ---------------------------------------------------------------------------
 // Lines and polygons
 
+// Lines and polygons are walked in coordinates relative to the center of the
+// clip rectangle, where the clip rectangle (at most SHAPOGFX_COORD_MAX <
+// 32768 pixels wide) lies within +-LINE_SAFE. Within that range every 16.16
+// value and every product the walkers form fits 32 bits.
+static constexpr int LINE_SAFE = (1 << 14) - 1;
+static constexpr int LINE_INPUT_MAX = 1 << 29;  // inputs are clamped to this
+static inline int clampInput(int v) {
+  return v < -LINE_INPUT_MAX ? -LINE_INPUT_MAX
+                             : (v > LINE_INPUT_MAX ? LINE_INPUT_MAX : v);
+}
+static inline bool lineSafe(int v) { return v >= -LINE_SAFE && v <= LINE_SAFE; }
+
 void Graphics2D::drawLine(int x0, int y0, int x1, int y1, Color c) {
   if (!hasTarget()) return;
   const uint32_t a = colorAlpha64(c);
   if (a == 0) return;
-  const uint32_t native = colorToNative(target_.format, c);
   const Rect &clip = state_.clip;
+  if (clip.isEmpty()) return;
+  const uint32_t native = colorToNative(target_.format, c);
+  const int ox = clip.x + clip.width / 2, oy = clip.y + clip.height / 2;
+  // The clip rectangle, relative
+  const int cx0 = clip.x - ox, cx1 = clip.right() - 1 - ox;
+  const int cy0 = clip.y - oy, cy1 = clip.bottom() - 1 - oy;
 
+  // A segment reaching beyond +-LINE_SAFE is halved until its parts either
+  // miss the clip rectangle or fit (a split point is rounded to a whole
+  // pixel, which a line reaching thousands of pixels off screen does not
+  // show). Each level leaves one half pending, so the stack stays short.
+  struct Seg {
+    int x0, y0, x1, y1;
+  };
+  Seg stack[40];
+  int sp = 0;
+  stack[sp++] = {clampInput(x0) - ox, clampInput(y0) - oy, clampInput(x1) - ox,
+                 clampInput(y1) - oy};
+  while (sp > 0) {
+    Seg s = stack[--sp];
+    if (std::max(s.x0, s.x1) < cx0 || std::min(s.x0, s.x1) > cx1 ||
+        std::max(s.y0, s.y1) < cy0 || std::min(s.y0, s.y1) > cy1)
+      continue;
+    if (!lineSafe(s.x0) || !lineSafe(s.y0) || !lineSafe(s.x1) ||
+        !lineSafe(s.y1)) {
+      if (std::abs(s.x1 - s.x0) <= 2 && std::abs(s.y1 - s.y0) <= 2) {
+        // A few pixels at the far edge of a clip rectangle nearly 32768
+        // pixels wide: clamping cannot bend it visibly
+        auto cl = [](int v) {
+          return std::max(-LINE_SAFE, std::min(LINE_SAFE, v));
+        };
+        s = {cl(s.x0), cl(s.y0), cl(s.x1), cl(s.y1)};
+      } else if (sp + 2 <= (int)(sizeof(stack) / sizeof(stack[0]))) {
+        const int mx = (s.x0 >> 1) + (s.x1 >> 1) + (s.x0 & s.x1 & 1);
+        const int my = (s.y0 >> 1) + (s.y1 >> 1) + (s.y0 & s.y1 & 1);
+        stack[sp++] = {mx, my, s.x1, s.y1};
+        stack[sp++] = {s.x0, s.y0, mx, my};
+        continue;
+      } else {
+        continue;  // unreachable: every split halves the extent
+      }
+    }
+    drawLineSafe(s.x0, s.y0, s.x1, s.y1, ox, oy, native, a);
+  }
+}
+
+// A segment within +-LINE_SAFE of (ox, oy)
+void Graphics2D::drawLineSafe(int x0, int y0, int x1, int y1, int ox, int oy,
+                              uint32_t native, uint32_t a) {
+  const Rect &clip = state_.clip;
   // Walk the major axis (i) with a 16.16 fixed-point minor coordinate (j),
   // skipping the parts outside the clip rectangle along the major axis.
   const bool steep = std::abs(y1 - y0) > std::abs(x1 - x0);
+  int oi = ox, oj = oy;
   if (steep) {
     std::swap(x0, y0);
     std::swap(x1, y1);
+    std::swap(oi, oj);
   }
   if (x0 > x1) {
     std::swap(x0, x1);
     std::swap(y0, y1);
   }
-  const int iMin = steep ? clip.y : clip.x;
-  const int iMax = (steep ? clip.bottom() : clip.right()) - 1;
-  const int jMin = steep ? clip.x : clip.y;
-  const int jMax = (steep ? clip.right() : clip.bottom()) - 1;
+  const int iMin = (steep ? clip.y : clip.x) - oi;
+  const int iMax = (steep ? clip.bottom() : clip.right()) - 1 - oi;
+  const int jMin = (steep ? clip.x : clip.y) - oj;
+  const int jMax = (steep ? clip.right() : clip.bottom()) - 1 - oj;
   const int di = x1 - x0;
-  const int dj = y1 - y0;
-  // 32-bit division suffices for |dj| < 32768 (any real screen)
-  const int32_t slope = !di ? 0
-                        : (dj > -32768 && dj < 32768)
-                            ? (int32_t)((dj * 65536) / di)
-                            : (int32_t)(((int64_t)dj * 65536) / di);
+  const int dj = y1 - y0;  // |dj| <= di <= 2 * LINE_SAFE < 32768
+  const int32_t slope = di ? (int32_t)((dj * 65536) / di) : 0;
   int iStart = std::max(x0, iMin), iEnd = std::min(x1, iMax);
   if (iStart > iEnd) return;
   int32_t jf = (int32_t)y0 * 65536 + 0x8000 + slope * (iStart - x0);
@@ -781,9 +842,10 @@ void Graphics2D::drawLine(int x0, int y0, int x1, int y1, Color c) {
     jf += slope;
     if (j >= jMin && j <= jMax) {
       if (steep) {
-        for (int r = i; r <= k; r++) fillSpanRaw(r, j, j + 1, native, a);
+        for (int r = i; r <= k; r++)
+          fillSpanRaw(r + oi, j + oj, j + oj + 1, native, a);
       } else {
-        fillSpanRaw(j, i, k + 1, native, a);
+        fillSpanRaw(j + oj, i + oi, k + oi + 1, native, a);
       }
     }
     i = k + 1;
@@ -805,37 +867,36 @@ void Graphics2D::fillPolygon(const vec2i *pts, int n, Color c) {
   if (!hasTarget() || n < 3) return;
   const uint32_t a = colorAlpha64(c);
   if (a == 0) return;
+  const Rect &clip = state_.clip;
+  if (clip.isEmpty()) return;
   const uint32_t native = colorToNative(target_.format, c);
 
-  int yMin = pts[0].y, yMax = pts[0].y;
-  for (int i = 1; i < n; i++) {
-    yMin = std::min(yMin, pts[i].y);
-    yMax = std::max(yMax, pts[i].y);
-  }
-  yMin = std::max(yMin, state_.clip.y);
-  yMax = std::min(yMax, state_.clip.bottom() - 1);
-
-  // Edges with extents below 32768 use 32-bit arithmetic (the product
-  // (y - p.y) * (q.x - p.x) then fits); larger ones fall back to 64 bits.
-  bool small = true;
-  for (int i = 0; i < n; i++) {
+  // Vertices relative to the center of the clip rectangle and clamped to
+  // +-LINE_SAFE (a vertex that far outside only tilts edges that are off
+  // screen nearly everywhere), so that (y - p.y) * (q.x - p.x) fits 32 bits.
+  const int ox = clip.x + clip.width / 2, oy = clip.y + clip.height / 2;
+  auto vtx = [&](int i) -> vec2i {
     const vec2i &p = pts[i];
-    const vec2i &q = pts[i + 1 < n ? i + 1 : 0];
-    const int dx = q.x - p.x, dy = q.y - p.y;
-    if (dx <= -32768 || dx >= 32768 || dy <= -32768 || dy >= 32768)
-      small = false;
+    return {std::max(-LINE_SAFE, std::min(LINE_SAFE, clampInput(p.x) - ox)),
+            std::max(-LINE_SAFE, std::min(LINE_SAFE, clampInput(p.y) - oy))};
+  };
+
+  int yMin = vtx(0).y, yMax = yMin;
+  for (int i = 1; i < n; i++) {
+    yMin = std::min(yMin, vtx(i).y);
+    yMax = std::max(yMax, vtx(i).y);
   }
+  yMin = std::max(yMin, clip.y - oy);
+  yMax = std::min(yMax, clip.bottom() - 1 - oy);
 
   int xs[MAX_CROSSES];
   for (int y = yMin; y <= yMax; y++) {
     int m = 0;
     for (int i = 0; i < n && m < MAX_CROSSES; i++) {
-      const vec2i &p = pts[i];
-      const vec2i &q = pts[i + 1 < n ? i + 1 : 0];
+      const vec2i p = vtx(i);
+      const vec2i q = vtx(i + 1 < n ? i + 1 : 0);
       if ((p.y <= y && q.y > y) || (q.y <= y && p.y > y)) {
-        const int x =
-            small ? p.x + (y - p.y) * (q.x - p.x) / (q.y - p.y)
-                  : p.x + (int)((int64_t)(y - p.y) * (q.x - p.x) / (q.y - p.y));
+        const int x = p.x + (y - p.y) * (q.x - p.x) / (q.y - p.y);
         // Insertion sort (m is small)
         int k = m++;
         while (k > 0 && xs[k - 1] > x) {
@@ -845,7 +906,8 @@ void Graphics2D::fillPolygon(const vec2i *pts, int n, Color c) {
         xs[k] = x;
       }
     }
-    for (int i = 0; i + 1 < m; i += 2) fillSpan(y, xs[i], xs[i + 1], native, a);
+    for (int i = 0; i + 1 < m; i += 2)
+      fillSpan(y + oy, xs[i] + ox, xs[i + 1] + ox, native, a);
   }
 }
 

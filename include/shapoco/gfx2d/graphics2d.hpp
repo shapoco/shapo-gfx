@@ -189,6 +189,8 @@ class Graphics2D {
 
   // Fill [x0, x1) on row y with a native color; already clipped.
   void fillSpanRaw(int y, int x0, int x1, uint32_t native, uint32_t alpha64);
+  void drawLineSafe(int x0, int y0, int x1, int y1, int ox, int oy,
+                    uint32_t native, uint32_t alpha64);
   // Clip against the clip rect and fill
   void fillSpan(int y, int x0, int x1, uint32_t native, uint32_t alpha64);
   void plot(int x, int y, uint32_t native, uint32_t alpha64);

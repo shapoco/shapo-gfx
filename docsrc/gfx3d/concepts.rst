@@ -162,8 +162,9 @@
 スキャンラインに沿って奥行きが変わる面 (横に伸びる壁) では線分内部に歪みが残るので、
 分割するかレベル 2 を使ってください。
 
-RP2040 / RP2350 では ``SHAPOGFX3D_RP2_INTERP=1`` で、RGB565BE と ARGB4444 のテクスチャ
-(stride が 2 の冪のもの) のテクセルアドレス計算を SIO interpolator (``interp0``) に任せられます。
+RP2040 / RP2350 では ``SHAPOGFX3D_RP2_INTERP`` (Pico SDK の ``hardware_interp`` が使えれば既定で有効) により、
+RGB565BE と ARGB4444 のテクスチャ (stride が 2 の冪のもの) のテクセルアドレス計算を
+SIO interpolator (``interp0``) に任せます。
 ``render()`` は呼び出したコアの ``interp0`` を保存・復元するので、``render()`` 中に動く
 割り込みハンドラでは ``interp0`` を使わないでください。
 

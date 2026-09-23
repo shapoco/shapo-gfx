@@ -86,7 +86,8 @@ CMake も PlatformIO も使わない
    "``SHAPOGFX_FORMAT_GRAY1`` / ``SHAPOGFX_FORMAT_RGB444`` / ``SHAPOGFX_FORMAT_ARGB4444`` / ``SHAPOGFX_FORMAT_RGB565BE``", "1", "0 にするとそのピクセルフォーマットのコードを 2D・3D 両方から除去する。無効化したフォーマットの Surface / Texture は無視される"
    "``SHAPOGFX3D_CORRECT_PERSPECTIVE``", "1", "テクスチャ座標の透視補正レベル (``gfx3d.cpp`` のコンパイルにのみ影響)"
    "``SHAPOGFX3D_PERSPECTIVE_STEP``", "16", "レベル 2 でテクスチャ座標を正確に求める間隔 (ピクセル、2 の冪。``gfx3d.cpp`` のみ)"
-   "``SHAPOGFX3D_RP2_INTERP``", "0", "RP2040 / RP2350 (Pico SDK) で 16 ビットテクセルの参照に SIO interpolator (``interp0``) を使う。``hardware_interp`` のリンクが必要 (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX_COORD_BITS``", "11", "スクリーン座標と Surface の幅・高さのビット数 (1〜15)。``2^bits - 1`` ピクセルを超える Surface は 2D の描画先として拒否され、3D の ``init()`` は失敗する。全翻訳単位で同じ値にすること"
+   "``SHAPOGFX3D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で 16 ビットテクセルの参照に SIO interpolator (``interp0``) を使う。RP2 と判定され (``PICO_RP2040`` / ``PICO_RP2350``)、``hardware/interp.h`` が見えるとき既定で有効。``hardware_interp`` のリンクが必要。0 で無効 (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_TEXTURE``", "1", "0 でテクスチャ/環境マッピングを除去 (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_GOURAUD``", "1", "0 でフラットシェーディングになる (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_BLEND``", "1", "0 で半透明を除去し、全て不透明に描く (``gfx3d.cpp`` のみ)"
@@ -99,7 +100,8 @@ CMake も PlatformIO も使わない
 機能を無効にするとそのコードと作業メモリが減り、同じアリーナにより多くの形状を保持できます
 (:doc:`../gfx3d/concepts` の「省略できる機能」参照)。
 
-フォーマットのマクロは、ヘッダを含む全ての翻訳単位で同じ値にしてください。
+フォーマットのマクロと ``SHAPOGFX_COORD_BITS`` は、ヘッダを含む全ての翻訳単位で同じ値にしてください
+(CMake のオプションで指定した ``SHAPOGFX_COORD_BITS`` はライブラリの利用側にも伝わります)。
 
 最小のサンプル: 2D
 ================================================================================

@@ -36,4 +36,17 @@
 #define SHAPOGFX_FORMAT_RGB565BE 1
 #endif
 
+// Bits of a screen coordinate and of a surface's width and height (1..15).
+// Surfaces wider or taller than SHAPOGFX_COORD_MAX pixels are rejected
+// (Graphics2D::setTarget() leaves the context without a target,
+// Graphics3D::init() fails), which lets the renderers keep coordinates in 16
+// bits and every product of two of them in 32. Like the format macros it must
+// have the same value in every translation unit.
+#ifndef SHAPOGFX_COORD_BITS
+#define SHAPOGFX_COORD_BITS 11
+#endif
+static_assert(SHAPOGFX_COORD_BITS >= 1 && SHAPOGFX_COORD_BITS <= 15,
+              "SHAPOGFX_COORD_BITS must be between 1 and 15");
+#define SHAPOGFX_COORD_MAX ((1 << SHAPOGFX_COORD_BITS) - 1)
+
 #endif

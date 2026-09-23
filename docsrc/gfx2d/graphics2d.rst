@@ -28,7 +28,7 @@ Graphics2D
    :header: "メンバー", "説明"
 
    "``Graphics2D()`` / ``explicit Graphics2D(const Surface &)``", "コンストラクタ"
-   "``void setTarget(const Surface &)``", "描画先を設定し、クリップ矩形をリセットする。無効化されたフォーマットは描画先として拒否される"
+   "``void setTarget(const Surface &)``", "描画先を設定し、クリップ矩形をリセットする。無効化されたフォーマットと、幅・高さが ``SHAPOGFX_COORD_MAX`` を超える Surface は描画先として拒否される"
    "``const Surface &target() const`` / ``bool hasTarget() const``", "描画先の取得 / 有無"
    "``PixelFormat format() const`` / ``Rect bounds() const``", "描画先のフォーマット / 全体矩形"
    "``void setClipRect(const Rect &)`` / ``setClipRect(x, y, w, h)``", "クリップ矩形 (描画先と交差した範囲になる)"

@@ -642,6 +642,14 @@ static void testLayersAndConfig() {
   r.render(0, 0, W, H, s);
   r.endRender();
   CHECK(r.getStats().spanDropped > 0);
+
+  // A screen beyond SHAPOGFX_COORD_MAX is refused
+#if SHAPOGFX_COORD_MAX < 32767
+  r.init((int16_t)(SHAPOGFX_COORD_MAX + 1), 8, arena, sizeof(arena));
+  CHECK(!r.isInitialized());
+#endif
+  r.init((int16_t)SHAPOGFX_COORD_MAX, 8, arena, sizeof(arena));
+  CHECK(r.isInitialized());
 }
 
 void testGfx3D() {

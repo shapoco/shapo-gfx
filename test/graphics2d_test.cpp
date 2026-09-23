@@ -173,6 +173,56 @@ static void testBitmapAndText() {
   CHECK_EQ(g.cursor().x, g.charAdvance('b'));
 }
 
+// Lines and polygons with vertices far outside the target: the walkers work
+// in 32 bits within a range around the clip rectangle, so such a line is
+// split and such a polygon vertex clamped, but what is on screen stays put.
+static void testFarGeometry() {
+  OwnedSurface s = createSurface(PixelFormat::RGB565BE, 40, 30);
+  Graphics2D g(s);
+  g.clear(Colors::BLACK);
+  g.drawLine(-1000000, 10, 1000000, 10, Colors::WHITE);
+  CHECK_EQ(countColor(g, Colors::WHITE), 40);
+  for (int x = 0; x < 40; x++) CHECK_EQ(g.getPixel(x, 10), Colors::WHITE);
+
+  // A diagonal through (20, 15) whose ends are 100000 pixels away covers
+  // the same pixels as the part of it on screen, give or take the rounding
+  // of the split points
+  g.clear(Colors::BLACK);
+  g.drawLine(20 - 100001, 15 - 100001, 20 + 99999, 15 + 99999, Colors::WHITE);
+  int lit = 0;
+  for (int x = 0; x < 40; x++) {
+    for (int y = 0; y < 30; y++) {
+      if (g.getPixel(x, y) != Colors::WHITE) continue;
+      lit++;
+      CHECK(std::abs(y - (x - 5)) <= 1);
+    }
+  }
+  CHECK(lit >= 29 && lit <= 31);
+  CHECK_EQ(g.getPixel(20, 15), Colors::WHITE);
+
+  // A triangle with one vertex a million pixels below: every row is crossed
+  g.clear(Colors::BLACK);
+  const vec2i tri[3] = {{0, 0}, {39, 0}, {20, 1000000}};
+  g.fillPolygon(tri, 3, Colors::WHITE);
+  for (int y = 0; y < 30; y++) {
+    CHECK_EQ(g.getPixel(19, y), Colors::WHITE);
+    CHECK_EQ(g.getPixel(0, y), y == 0 ? Colors::WHITE : Colors::BLACK);
+  }
+}
+
+// A surface beyond SHAPOGFX_COORD_MAX is no target
+static void testCoordLimit() {
+  static uint16_t px[4];
+#if SHAPOGFX_COORD_MAX < 32767
+  const Surface big = {PixelFormat::RGB565BE, (int16_t)(SHAPOGFX_COORD_MAX + 1),
+                       1, 2, px};
+  CHECK(!Graphics2D(big).hasTarget());
+#endif
+  const Surface ok = {PixelFormat::RGB565BE, (int16_t)SHAPOGFX_COORD_MAX, 1, 2,
+                      px};
+  CHECK(Graphics2D(ok).hasTarget());
+}
+
 static void testOwnedSurface() {
   OwnedSurface a = createSurface(PixelFormat::RGB444, 5, 3);
   CHECK(a.valid());
@@ -202,5 +252,7 @@ void testGraphics2D() {
   testBlending();
   testFormatConsistency();
   testBitmapAndText();
+  testFarGeometry();
+  testCoordLimit();
   testOwnedSurface();
 }

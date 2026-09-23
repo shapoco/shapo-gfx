@@ -29,12 +29,21 @@ set(SHAPOGFX3D_FIXED_POINT "" CACHE STRING
     "Fixed-point vertex stage and setup, for cores without an FPU (0/1)")
 set_property(CACHE SHAPOGFX3D_FIXED_POINT PROPERTY STRINGS "" 0 1)
 
+set(SHAPOGFX3D_DEPTH_BITS "" CACHE STRING
+    "Depth resolution of the span records: 32 or 16 bits")
+set_property(CACHE SHAPOGFX3D_DEPTH_BITS PROPERTY STRINGS "" 32 16)
+
+# Shared by gfx2d and gfx3d and read by config.hpp, so it has to be the same
+# in every translation unit: it is passed on to the users of the library.
+set(SHAPOGFX_COORD_BITS "" CACHE STRING
+    "Bits of a screen coordinate and of a surface size (1..15, default 11)")
+
 set(SHAPOGFX3D_OPTIONS
     SHAPOGFX3D_CORRECT_PERSPECTIVE SHAPOGFX3D_PERSPECTIVE_STEP
     SHAPOGFX3D_TEXTURE SHAPOGFX3D_GOURAUD SHAPOGFX3D_BLEND
     SHAPOGFX3D_LINES SHAPOGFX3D_POINTS
     SHAPOGFX3D_STACK_DEPTH SHAPOGFX3D_VCACHE_SIZE SHAPOGFX3D_LAYER_MAX
-    SHAPOGFX3D_FIXED_POINT)
+    SHAPOGFX3D_FIXED_POINT SHAPOGFX3D_DEPTH_BITS)
 set(SHAPOGFX_FEATURE_DEFS "")
 foreach(opt IN LISTS SHAPOGFX3D_OPTIONS)
     if(NOT "${${opt}}" STREQUAL "")
@@ -60,6 +69,10 @@ target_include_directories(shapogfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(shapogfx PUBLIC cxx_std_17)
 if(SHAPOGFX_FEATURE_DEFS)
     target_compile_definitions(shapogfx PRIVATE ${SHAPOGFX_FEATURE_DEFS})
+endif()
+if(NOT "${SHAPOGFX_COORD_BITS}" STREQUAL "")
+    target_compile_definitions(shapogfx PUBLIC
+        SHAPOGFX_COORD_BITS=${SHAPOGFX_COORD_BITS})
 endif()
 
 if(SHAPOGFX_BUILD_EXAMPLES AND NOT EMSCRIPTEN)

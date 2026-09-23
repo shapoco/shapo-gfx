@@ -18,6 +18,7 @@ portable C++17 with no platform dependencies.
 include/shapoco/gfx2d/   2D API and shared types
 include/shapoco/gfx3d/   3D renderer
 src/gfx2d/, src/gfx3d/   implementation
+src/gfx3d/arch/          architecture hooks of the 3D renderer (internal; generic + RP2)
 example/wasm/            sample programs (WASM and native)
 docs/example/            browser pages for the samples
 test/                    self-checking tests
@@ -35,9 +36,10 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX_FORMAT_RGB444` | 1 | Enable the RGB444 format |
 | `SHAPOGFX_FORMAT_ARGB4444` | 1 | Enable the ARGB4444 format |
 | `SHAPOGFX_FORMAT_RGB565BE` | 1 | Enable the RGB565BE format |
+| `SHAPOGFX_COORD_BITS` | 11 | Bits of a screen coordinate and of a surface's width and height (1..15). Wider or taller surfaces are rejected (see below) |
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
-| `SHAPOGFX3D_RP2_INTERP` | 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` |
+| `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise) |
 | `SHAPOGFX3D_FIXED_POINT` | 0 | Vertex stage, primitive setup and span builders in fixed point, for cores without an FPU (see "Fixed-point vertex stage") |
@@ -51,10 +53,26 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX3D_LAYER_MAX` | 8 | Layers a scene can hold (1..128) |
 
 Every macro below `SHAPOGFX3D_` is read by `src/gfx3d/*.cpp` only and changes no
-public type, so translation units cannot disagree about them. With
-`SHAPOGFX3D_RP2_INTERP` the target must link `hardware_interp`; `render()` saves
-and restores `interp0` of the calling core, so interrupt handlers running during
-`render()` must not use it.
+public type, so translation units cannot disagree about them. `SHAPOGFX_COORD_BITS`
+lives in `config.hpp` like the format macros and must have the same value in every
+translation unit (the CMake option passes it on as a public definition).
+
+`SHAPOGFX_COORD_BITS` bounds what the renderers have to handle: a surface or a 3D
+screen wider or taller than `SHAPOGFX_COORD_MAX` (`2^bits - 1`) pixels is rejected
+-- `Graphics2D::setTarget()` leaves the context without a target, like a surface in
+a disabled format, and `Graphics3D::init()` leaves the renderer uninitialized.
+Within the limit every screen coordinate fits 16 bits and every product of two
+coordinate differences 32 bits, which is what lets the 2D line and polygon walkers
+and the 3D span stage do without 64-bit arithmetic. The public types (`int`,
+`Rect`, `vec2i`, `Surface::width`) do not change.
+
+The 3D renderer's architecture-specific code lives in `src/gfx3d/arch/`, behind a
+few hooks with a portable implementation that is always present (`generic.hpp`);
+`arch.hpp` detects the target (`SHAPOGFX_ARCH_RP2`, `SHAPOGFX_ARCH_ESP32S3`,
+`SHAPOGFX_ARCH_ESP32P4`, else `SHAPOGFX_ARCH_GENERIC`; any of them may be defined
+by hand) and selects the implementation. With `SHAPOGFX3D_RP2_INTERP` the target
+must link `hardware_interp`; `render()` saves and restores `interp0` of the calling
+core, so interrupt handlers running during `render()` must not use it.
 
 ### Optional features of the 3D renderer
 
@@ -237,10 +255,15 @@ Semantics:
   before.
 - **Lines** walk the major axis with a 16.16 fixed-point minor coordinate and are
   clipped along the major axis before stepping; runs of pixels on the same row are
-  filled as spans. Both end points are drawn.
+  filled as spans. Both end points are drawn. The walk is 32-bit only: it works
+  relative to the center of the clip rectangle, within +-16383 pixels of it, and a
+  line reaching further is halved (split points rounded to whole pixels) until its
+  parts either miss the clip rectangle or fit.
 - **Polygons** are filled per scanline with the even-odd rule using the same
   half-open convention as Xiamocon-style rasterizers (an edge covers `y` when
-  `y0 <= y < y1`).
+  `y0 <= y < y1`). Vertices are taken relative to the center of the clip rectangle
+  and clamped to +-16383 pixels of it, so that the crossings are computed in 32
+  bits; only a vertex that far off screen moves.
 - **drawImage** converts between formats. `BlendMode::NONE` copies (ARGB4444 alpha is
   copied into an ARGB4444 target and ignored otherwise); `ALPHA` blends with the
   source alpha (only ARGB4444 has one; other formats are copied unless `opacity` is
