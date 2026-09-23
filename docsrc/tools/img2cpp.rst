@@ -6,10 +6,10 @@ img2cpp: 画像を C++ コードに変換する
 .. code-block:: sh
 
    python3 -m pip install -r bin/requirements.txt      # Pillow, numpy
-   bin/img2cpp sprite.png sprite.hpp                    # RGB565BE
+   bin/img2cpp sprite.png sprite.hpp                    # RGB565_SWAPPED
    bin/img2cpp -f argb4444 -k "#FF00FF" -d diffusion icon.png icon.hpp
    bin/img2cpp -f gray1 --name logoBits logo.png logo.hpp
-   bin/img2cpp -f rgb565be --pot photo.jpg photo.hpp    # 3D テクスチャ向けに 2 の冪へリサイズ
+   bin/img2cpp -f rgb565_swapped --pot photo.jpg photo.hpp    # 3D テクスチャ向けに 2 の冪へリサイズ
    uv run bin/img2cpp ...                               # uv があれば依存の導入なしで実行できる
 
 オプション
@@ -18,7 +18,7 @@ img2cpp: 画像を C++ コードに変換する
 .. csv-table::
    :header: "オプション", "既定値", "説明"
 
-   "``-f``, ``--format``", "``rgb565be``", "``rgb565be`` / ``rgb565`` (ネイティブバイト順、``uint16_t`` で出力) / ``argb4444`` / ``rgb444`` / ``gray1``"
+   "``-f``, ``--format``", "``rgb565_swapped``", "``rgb565_swapped`` (バイトスワップ済みの値を ``uint16_t`` で出力) / ``rgb565`` (ネイティブバイト順、``uint16_t`` で出力) / ``argb4444`` / ``rgb444`` / ``gray1``"
    "``-d``, ``--dither``", "``none``", "``none`` (四捨五入) / ``diffusion`` (Floyd-Steinberg) / ``pattern`` (4x4 Bayer)"
    "``-k``, ``--key-color``", "なし", "この色のピクセルを透明にする (argb4444 向け)。``#FF8000``、``orange``、``F80`` など"
    "``--name``", "出力ファイル名から生成", "``Texture`` の変数名 (配列は ``<name>Data``)"
@@ -55,8 +55,9 @@ img2cpp: 画像を C++ コードに変換する
 
    #endif
 
-- メモリ配置は :doc:`../gfx2d/pixel` の定義と一致します。``rgb565be`` と ``rgb444`` は
-  バイト列 (``uint8_t``) として、``argb4444`` はネイティブの ``uint16_t`` として出力されます。
+- メモリ配置は :doc:`../gfx2d/pixel` の定義と一致します。``rgb444`` はバイト列 (``uint8_t``) として、
+  ``rgb565`` と ``argb4444`` は ``uint16_t`` の値として、``rgb565_swapped`` はバイトスワップ済みの ``uint16_t`` の値として
+  出力されるので、ターゲットのバイト順によらず定義どおりの配置になります。
   配列は ``alignas(4)`` で 16bit アクセス可能に揃えられます。
 - 量子化は四捨五入です (ライブラリの実行時変換は切り捨て)。
 - 使う側は ``#include "sprite.hpp"`` して ``g.drawImage(assets::sprite, x, y)`` のように参照するだけです。

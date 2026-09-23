@@ -65,7 +65,7 @@ static void testFillAndClip(PixelFormat fmt) {
 }
 
 static void testBlending() {
-  OwnedSurface s = createSurface(PixelFormat::RGB565BE, 8, 8);
+  OwnedSurface s = createSurface(PixelFormat::RGB565_SWAPPED, 8, 8);
   Graphics2D g(s);
   g.clear(Colors::BLACK);
   g.fillRect(0, 0, 8, 8, makeColor(255, 255, 255, 128));
@@ -91,10 +91,10 @@ static void testBlending() {
   CHECK_EQ(g.getPixel(4, 4), Colors::WHITE);
 }
 
-// Drawing the same content into RGB444 and RGB565BE targets gives matching
-// pixels within the 4-bit quantization
+// Drawing the same content into RGB444 and RGB565_SWAPPED targets gives
+// matching pixels within the 4-bit quantization
 static void testFormatConsistency() {
-  OwnedSurface a = createSurface(PixelFormat::RGB565BE, 33, 17);
+  OwnedSurface a = createSurface(PixelFormat::RGB565_SWAPPED, 33, 17);
   OwnedSurface b = createSurface(PixelFormat::RGB444, 33, 17);
   Graphics2D ga(a), gb(b);
   for (Graphics2D *g : {&ga, &gb}) {
@@ -116,8 +116,8 @@ static void testFormatConsistency() {
     }
   }
 #if SHAPOGFX_FORMAT_RGB565
-  // Native RGB565 holds the same pixels as RGB565BE, byte-swapped, whether
-  // drawn directly or blitted in either direction
+  // Native RGB565 holds the same pixels as RGB565_SWAPPED, byte-swapped,
+  // whether drawn directly or blitted in either direction
   OwnedSurface n = createSurface(PixelFormat::RGB565, 33, 17);
   Graphics2D gn(n);
   gn.clear(makeColor(20, 40, 60));
@@ -141,13 +141,13 @@ static void testFormatConsistency() {
   OwnedSurface n2 = createSurface(PixelFormat::RGB565, 33, 17);
   Graphics2D(n2).drawImage(a, 0, 0, BlendMode::NONE);
   CHECK_EQ(sameAsBE(n2), 0);
-  OwnedSurface b2 = createSurface(PixelFormat::RGB565BE, 33, 17);
+  OwnedSurface b2 = createSurface(PixelFormat::RGB565_SWAPPED, 33, 17);
   Graphics2D(b2).drawImage(n, 0, 0, BlendMode::NONE);
   CHECK(std::memcmp(b2.pixels(), a.pixels(), a.bytes()) == 0);
 #endif
 
-  // Blit RGB444 -> RGB565BE and compare with drawing directly
-  OwnedSurface c = createSurface(PixelFormat::RGB565BE, 33, 17);
+  // Blit RGB444 -> RGB565_SWAPPED and compare with drawing directly
+  OwnedSurface c = createSurface(PixelFormat::RGB565_SWAPPED, 33, 17);
   Graphics2D gc(c);
   gc.drawImage(b, 0, 0, BlendMode::NONE);
   for (int y = 0; y < 17; y++) {
@@ -159,7 +159,7 @@ static void testFormatConsistency() {
 }
 
 static void testBitmapAndText() {
-  OwnedSurface s = createSurface(PixelFormat::RGB565BE, 64, 32);
+  OwnedSurface s = createSurface(PixelFormat::RGB565_SWAPPED, 64, 32);
   Graphics2D g(s);
   g.clear(Colors::BLACK);
   // 8x2 bitmap: 10101010 / 11110000
@@ -208,7 +208,7 @@ static void testBitmapAndText() {
 // in 32 bits within a range around the clip rectangle, so such a line is
 // split and such a polygon vertex clamped, but what is on screen stays put.
 static void testFarGeometry() {
-  OwnedSurface s = createSurface(PixelFormat::RGB565BE, 40, 30);
+  OwnedSurface s = createSurface(PixelFormat::RGB565_SWAPPED, 40, 30);
   Graphics2D g(s);
   g.clear(Colors::BLACK);
   g.drawLine(-1000000, 10, 1000000, 10, Colors::WHITE);
@@ -245,12 +245,12 @@ static void testFarGeometry() {
 static void testCoordLimit() {
   static uint16_t px[4];
 #if SHAPOGFX_COORD_MAX < 32767
-  const Surface big = {PixelFormat::RGB565BE, (int16_t)(SHAPOGFX_COORD_MAX + 1),
-                       1, 2, px};
+  const Surface big = {PixelFormat::RGB565_SWAPPED,
+                       (int16_t)(SHAPOGFX_COORD_MAX + 1), 1, 2, px};
   CHECK(!Graphics2D(big).hasTarget());
 #endif
-  const Surface ok = {PixelFormat::RGB565BE, (int16_t)SHAPOGFX_COORD_MAX, 1, 2,
-                      px};
+  const Surface ok = {PixelFormat::RGB565_SWAPPED, (int16_t)SHAPOGFX_COORD_MAX,
+                      1, 2, px};
   CHECK(Graphics2D(ok).hasTarget());
 }
 
@@ -268,8 +268,8 @@ static void testOwnedSurface() {
 }
 
 void testGraphics2D() {
-#if SHAPOGFX_FORMAT_RGB565BE
-  testFillAndClip(PixelFormat::RGB565BE);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+  testFillAndClip(PixelFormat::RGB565_SWAPPED);
 #endif
 #if SHAPOGFX_FORMAT_RGB565
   testFillAndClip(PixelFormat::RGB565);

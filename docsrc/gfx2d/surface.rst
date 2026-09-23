@@ -23,8 +23,8 @@ Texture (読み取り専用画像)
 
 .. code-block:: cpp
 
-   alignas(4) static const uint8_t checkerData[64 * 64 * 2] = { /* RGB565BE */ };
-   static const g2::Texture checker = {g2::PixelFormat::RGB565BE, 64, 64, 128, checkerData};
+   alignas(4) static const uint16_t checkerData[64 * 64] = { /* RGB565_SWAPPED */ };
+   static const g2::Texture checker = {g2::PixelFormat::RGB565_SWAPPED, 64, 64, 128, checkerData};
 
 3D レンダラで使う場合、幅と高さは 2 の冪でなければなりません。
 ``bin/img2cpp`` は画像ファイルからこの形式のヘッダを生成します (:doc:`../tools/img2cpp`)。

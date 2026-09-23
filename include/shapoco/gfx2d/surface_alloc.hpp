@@ -57,7 +57,8 @@ class OwnedSurface {
   }
 
  private:
-  static constexpr Surface EMPTY = {PixelFormat::RGB565BE, 0, 0, 0, nullptr};
+  static constexpr Surface EMPTY = {PixelFormat::RGB565_SWAPPED, 0, 0, 0,
+                                    nullptr};
   std::unique_ptr<uint8_t[]> storage_;
   Surface surface_ = EMPTY;
 };

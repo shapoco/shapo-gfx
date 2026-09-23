@@ -184,9 +184,9 @@ static void copyRowD(PixelFormat srcFmt, uint8_t *dl, int dx, const uint8_t *sl,
       copyRowT<PixelFormat::ARGB4444, D>(dl, dx, sl, sx, n);
       break;
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      copyRowT<PixelFormat::RGB565BE, D>(dl, dx, sl, sx, n);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      copyRowT<PixelFormat::RGB565_SWAPPED, D>(dl, dx, sl, sx, n);
       break;
 #endif
 #if SHAPOGFX_FORMAT_RGB565
@@ -235,9 +235,9 @@ static void copyRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
       copyRowD<PixelFormat::ARGB4444>(srcFmt, dl, dx, sl, sx, n);
       break;
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      copyRowD<PixelFormat::RGB565BE>(srcFmt, dl, dx, sl, sx, n);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      copyRowD<PixelFormat::RGB565_SWAPPED>(srcFmt, dl, dx, sl, sx, n);
       break;
 #endif
 #if SHAPOGFX_FORMAT_RGB565
@@ -268,10 +268,10 @@ static bool blendRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
       return blendRowD<PixelFormat::ARGB4444>(srcFmt, dl, dx, sl, sx, n,
                                               opacity64);
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      return blendRowD<PixelFormat::RGB565BE>(srcFmt, dl, dx, sl, sx, n,
-                                              opacity64);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      return blendRowD<PixelFormat::RGB565_SWAPPED>(srcFmt, dl, dx, sl, sx, n,
+                                                    opacity64);
 #endif
 #if SHAPOGFX_FORMAT_RGB565
     case PixelFormat::RGB565:
@@ -362,10 +362,10 @@ static void drawGlyphFmt(const Surface &target, const Rect &clip,
                                         native, alpha64);
       break;
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      drawGlyphT<PixelFormat::RGB565BE>(target, clip, g, bits, gx, gy, s,
-                                        native, alpha64);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      drawGlyphT<PixelFormat::RGB565_SWAPPED>(target, clip, g, bits, gx, gy, s,
+                                              native, alpha64);
       break;
 #endif
 #if SHAPOGFX_FORMAT_RGB565
@@ -396,9 +396,9 @@ static void fillSpanFmt(PixelFormat fmt, uint8_t *line, int x, int n,
       fillSpanT<PixelFormat::ARGB4444>(line, x, n, native, alpha64);
       break;
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      fillSpanT<PixelFormat::RGB565BE>(line, x, n, native, alpha64);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      fillSpanT<PixelFormat::RGB565_SWAPPED>(line, x, n, native, alpha64);
       break;
 #endif
 #if SHAPOGFX_FORMAT_RGB565
@@ -428,9 +428,9 @@ static void fillSpanAddFmt(PixelFormat fmt, uint8_t *line, int x, int n,
       fillSpanAddT<PixelFormat::ARGB4444>(line, x, n, native);
       break;
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      fillSpanAddT<PixelFormat::RGB565BE>(line, x, n, native);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      fillSpanAddT<PixelFormat::RGB565_SWAPPED>(line, x, n, native);
       break;
 #endif
 #if SHAPOGFX_FORMAT_RGB565
@@ -460,9 +460,9 @@ static void readColorsFmt(PixelFormat fmt, const uint8_t *line, int x, int n,
       readColorsT<PixelFormat::ARGB4444>(line, x, n, out);
       break;
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      readColorsT<PixelFormat::RGB565BE>(line, x, n, out);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      readColorsT<PixelFormat::RGB565_SWAPPED>(line, x, n, out);
       break;
 #endif
 #if SHAPOGFX_FORMAT_RGB565
@@ -495,9 +495,10 @@ static void writeColorsFmt(PixelFormat fmt, uint8_t *line, int x, int n,
       writeColorsT<PixelFormat::ARGB4444>(line, x, n, src, mode, opacity64);
       break;
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      writeColorsT<PixelFormat::RGB565BE>(line, x, n, src, mode, opacity64);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      writeColorsT<PixelFormat::RGB565_SWAPPED>(line, x, n, src, mode,
+                                                opacity64);
       break;
 #endif
 #if SHAPOGFX_FORMAT_RGB565

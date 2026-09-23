@@ -6,7 +6,7 @@
 """Convert an image file to a C++ header containing a shapoco::gfx2d::Texture.
 
 Examples:
-  img2cpp sprite.png sprite.hpp                       # RGB565BE
+  img2cpp sprite.png sprite.hpp                       # RGB565_SWAPPED
   img2cpp -f argb4444 -k "#FF00FF" -d diffusion icon.png icon.hpp
   img2cpp -f gray1 --name logoBits logo.png logo.hpp
 """
@@ -55,8 +55,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input", help="input image (any format Pillow can read)")
     ap.add_argument("output", help="output C++ header (.hpp)")
-    ap.add_argument("-f", "--format", choices=conv.FORMATS, default="rgb565be",
-                    help="pixel format (default: rgb565be)")
+    ap.add_argument("-f", "--format", choices=conv.FORMATS, default="rgb565_swapped",
+                    help="pixel format (default: rgb565_swapped)")
     ap.add_argument("-d", "--dither", choices=conv.DITHERS, default="none",
                     help="dithering (default: none)")
     ap.add_argument("-k", "--key-color", type=conv.parse_key_color, default=None,

@@ -27,8 +27,8 @@ namespace g3 = shapoco::gfx3d;
 static constexpr int SCREEN_W = 480;
 static constexpr int SCREEN_H = 320;
 
-static uint16_t fb[SCREEN_W * SCREEN_H];  // RGB565BE
-static const g2::Surface fbSurface = {g2::PixelFormat::RGB565BE, SCREEN_W,
+static uint16_t fb[SCREEN_W * SCREEN_H];  // RGB565_SWAPPED
+static const g2::Surface fbSurface = {g2::PixelFormat::RGB565_SWAPPED, SCREEN_W,
                                       SCREEN_H, SCREEN_W * 2, fb};
 static uint8_t arena[128 * 1024];
 static g3::Graphics3D g3d;
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
   }
   std::fprintf(fp, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
   for (int i = 0; i < SCREEN_W * SCREEN_H; i++) {
-    uint16_t p = g2::bswap16(fb[i]);  // RGB565BE -> native
+    uint16_t p = g2::bswap16(fb[i]);  // RGB565_SWAPPED -> native
     uint8_t rgb[3] = {
         (uint8_t)(((p >> 11) & 31) * 255 / 31),
         (uint8_t)(((p >> 5) & 63) * 255 / 63),

@@ -184,7 +184,7 @@ class Graphics2D {
       const;  // vertical distance between lines (font yAdvance x scale)
 
  private:
-  Surface target_ = {PixelFormat::RGB565BE, 0, 0, 0, nullptr};
+  Surface target_ = {PixelFormat::RGB565_SWAPPED, 0, 0, 0, nullptr};
   GraphicsState2D state_;
 
   // Fill [x0, x1) on row y with a native color; already clipped.

@@ -42,7 +42,7 @@ static void testRoundTrips() {
   CHECK_EQ(rgb565ToRgb444(0xFFFF), 0x0FFF);
   CHECK_EQ(bswap16(0x1234), 0x3412);
   CHECK_EQ(packRgb565(1.0f, 1.0f, 1.0f), 0xFFFF);
-  CHECK_EQ(packRgb565BE(1.0f, 0.0f, 0.0f), bswap16(0xF800));
+  CHECK_EQ(packRgb565Swapped(1.0f, 0.0f, 0.0f), bswap16(0xF800));
 }
 
 // Writing a row through a cursor and reading it back reproduces the values, for
@@ -118,7 +118,7 @@ static void testBlend() {
   // Byte-order independent helpers
   CHECK_EQ(minStride(PixelFormat::GRAY1, 13), 2u);
   CHECK_EQ(minStride(PixelFormat::RGB444, 3), 5u);
-  CHECK_EQ(minStride(PixelFormat::RGB565BE, 7), 14u);
+  CHECK_EQ(minStride(PixelFormat::RGB565_SWAPPED, 7), 14u);
   CHECK_EQ(makeColorHsv(0, 255, 255), Colors::RED);
   CHECK_EQ(makeColorHsv(120, 255, 255), Colors::GREEN);
   CHECK_EQ(makeColorHsv(240, 255, 255), Colors::BLUE);
@@ -136,8 +136,8 @@ void testPixel() {
 #if SHAPOGFX_FORMAT_ARGB4444
   testCursor<PixelFormat::ARGB4444>(37);
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-  testCursor<PixelFormat::RGB565BE>(37);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+  testCursor<PixelFormat::RGB565_SWAPPED>(37);
 #endif
 #if SHAPOGFX_FORMAT_RGB565
   testCursor<PixelFormat::RGB565>(37);

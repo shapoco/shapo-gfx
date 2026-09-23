@@ -8,7 +8,7 @@ PixelFormat
 
 .. code-block:: cpp
 
-   enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565BE, RGB565 };
+   enum class PixelFormat : uint8_t { GRAY1, RGB444, ARGB4444, RGB565_SWAPPED, RGB565 };
 
 .. csv-table::
    :header: "値", "ビット/px", "メモリ上の配置", "ネイティブピクセル (レジスタ上の表現)"
@@ -16,14 +16,17 @@ PixelFormat
    "``GRAY1``", "1", "バイト内 MSB ファースト、1 = 白", "0 または 1"
    "``RGB444``", "12", "2 ピクセルを 3 バイトに: ``R1G1``, ``B1R2``, ``G2B2``", "``0x0RGB``"
    "``ARGB4444``", "16", "ネイティブ ``uint16_t``", "``0xARGB``、A = 15 で不透明"
-   "``RGB565BE``", "16", "``uint16_t`` をバイトスワップして格納: byte0 = ``RRRRRGGG``, byte1 = ``GGGBBBBB``", "``RRRRRGGGGGGBBBBB`` (5/6/5)"
+   "``RGB565_SWAPPED``", "16", "``uint16_t`` を CPU のバイト順に対してバイトスワップして格納。リトルエンディアンの CPU では byte0 = ``RRRRRGGG``, byte1 = ``GGGBBBBB``", "``RRRRRGGGGGGBBBBB`` (5/6/5)"
    "``RGB565``", "16", "ネイティブ ``uint16_t`` (CPU のバイト順)", "``RRRRRGGGGGGBBBBB`` (5/6/5)"
 
 各行はバイト境界から始まり、行の間隔は ``stride`` バイトです。
 ``minStride(format, width)`` は幅 ``width`` を収める最小の stride を返します。
 
 「ネイティブピクセル」とは、後述のカーソルや変換関数がレジスタ上で扱う 1 ピクセルの値です。
-``RGB565BE`` はメモリ上ではバイトスワップされていますが、レジスタ上では通常の 5/6/5 ビット並びです。
+``RGB565_SWAPPED`` はメモリ上ではバイトスワップされていますが、レジスタ上では通常の 5/6/5 ビット並びです。
+2 つの 16 ビット形式の名前は固定のバイト順ではなく CPU との関係を表します (``RGB565`` は CPU の順のまま、
+``RGB565_SWAPPED`` はアクセスのたびに 2 バイトを入れ替える)。対象の CPU (ARM、Xtensa、RISC-V、x86、WebAssembly) は
+すべてリトルエンディアンなので、``RGB565_SWAPPED`` はメモリ上で上位バイトが先になり、8 ビットバスのディスプレイ転送順と一致します。
 ``RGB565`` (既定で無効。``SHAPOGFX_FORMAT_RGB565=1`` で有効) は同じピクセルを CPU のバイト順のまま持つので、読み書きのたびのバイトスワップが要りません
 (バイト反転命令のない Xtensa (ESP32-S3) や RISC-V (ESP32-P4) で特に効きます)。
 
@@ -93,7 +96,7 @@ Color (ARGB8888)
    "``uint32_t colorToNative(PixelFormat, Color)`` / ``Color nativeToColor(PixelFormat, uint32_t)``", "任意フォーマットとの相互変換"
    "``makeRgb565(r5, g6, b5)``, ``colorToRgb565``, ``rgb565ToColor``", "RGB565 (5/6/5)"
    "``packRgb565(float r, g, b)`` / ``packRgb565(colorf)``", "float から RGB565 へ (四捨五入)"
-   "``packRgb565BE(...)``", "同上、ただし RGB565BE のメモリ順 (バイトスワップ済み) で返す"
+   "``packRgb565Swapped(...)``", "同上、ただし RGB565_SWAPPED のメモリ順 (バイトスワップ済み) で返す"
    "``blendAlphaRgb565(dst, src, alpha64)``", "α ブレンド (α は 0..64)"
    "``addSaturateRgb565(dst, r5, g6, b5)`` / ``addSaturateRgb565(dst, src)``", "飽和加算"
    "``makeRgb444``, ``colorToRgb444``, ``rgb444ToColor``, ``rgb565ToRgb444``, ``rgb444ToRgb565``, ``blendAlphaRgb444``, ``addSaturateRgb444``", "RGB444"
@@ -107,12 +110,12 @@ Color (ARGB8888)
 ================================================================================
 
 1 行のピクセルへ順次アクセスするための小さな構造体です。フォーマットごとに
-``CursorGray1``, ``CursorRgb444``, ``CursorArgb4444``, ``CursorRgb565BE``, ``CursorRgb565`` があり、いずれも同じインターフェイスを持ちます。
+``CursorGray1``, ``CursorRgb444``, ``CursorArgb4444``, ``CursorRgb565Swapped``, ``CursorRgb565`` があり、いずれも同じインターフェイスを持ちます。
 2D・3D 両方のラスタライザの部品で、アプリケーションからも利用できます。
 
 .. code-block:: cpp
 
-   struct CursorRgb565BE {
+   struct CursorRgb565Swapped {
      void init(void *line, int x);   // 行の先頭 line のピクセル x に位置付ける
      uint32_t read() const;          // 現在のピクセル (ネイティブ表現)
      void write(uint32_t native);    // 現在のピクセルに書く
@@ -137,9 +140,9 @@ Color (ARGB8888)
 
 .. code-block:: cpp
 
-   uint16_t pixels[64 * 64];  // RGB565BE
+   uint16_t pixels[64 * 64];  // RGB565_SWAPPED
    for (int y = 0; y < 64; y++) {
-     g2::CursorRgb565BE cur;
+     g2::CursorRgb565Swapped cur;
      cur.init(pixels + y * 64, 0);
      for (int x = 0; x < 64; x++) {
        bool c = ((x >> 3) ^ (y >> 3)) & 1;

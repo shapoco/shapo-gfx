@@ -15,7 +15,7 @@ takes its working memory from an arena you hand it.
 
 ## Highlights
 
-- Pixel formats GRAY1, RGB444, ARGB4444, RGB565BE (byte-swapped, ready for
+- Pixel formats GRAY1, RGB444, ARGB4444, RGB565_SWAPPED (byte-swapped, ready for
   DMA to display controllers) and, opt-in, RGB565 (native byte order, for 16-bit
   display interfaces); unused formats can be compiled out
 - `Graphics2D`: shapes, lines, polygons, blits with alpha/additive blending,

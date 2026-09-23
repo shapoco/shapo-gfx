@@ -83,7 +83,7 @@ CMake も PlatformIO も使わない
 .. csv-table::
    :header: "マクロ", "既定値", "効果"
 
-   "``SHAPOGFX_FORMAT_GRAY1`` / ``SHAPOGFX_FORMAT_RGB444`` / ``SHAPOGFX_FORMAT_ARGB4444`` / ``SHAPOGFX_FORMAT_RGB565BE``", "1", "0 にするとそのピクセルフォーマットのコードを 2D・3D 両方から除去する。無効化したフォーマットの Surface / Texture は無視される"
+   "``SHAPOGFX_FORMAT_GRAY1`` / ``SHAPOGFX_FORMAT_RGB444`` / ``SHAPOGFX_FORMAT_ARGB4444`` / ``SHAPOGFX_FORMAT_RGB565_SWAPPED``", "1", "0 にするとそのピクセルフォーマットのコードを 2D・3D 両方から除去する。無効化したフォーマットの Surface / Texture は無視される"
    "``SHAPOGFX_FORMAT_RGB565``", "0", "1 でネイティブバイト順の RGB565 を有効にする"
    "``SHAPOGFX3D_CORRECT_PERSPECTIVE``", "1", "テクスチャ座標の透視補正レベル (``gfx3d.cpp`` のコンパイルにのみ影響)"
    "``SHAPOGFX3D_PERSPECTIVE_STEP``", "16", "レベル 2 でテクスチャ座標を正確に求める間隔 (ピクセル、2 の冪。``gfx3d.cpp`` のみ)"
@@ -105,7 +105,7 @@ CMake も PlatformIO も使わない
 (:doc:`../gfx3d/concepts` の「省略できる機能」参照)。
 
 3D レンダラの出力フォーマット 1 つにつき、ピクセルループが約 14 KB (Cortex-M33) / 20 KB (Cortex-M0+) 増えます。
-このため ``RGB565`` (ネイティブ順) は既定で無効です。``SHAPOGFX_FORMAT_RGB565=1`` で使う場合、``RGB565BE`` を使わないなら ``SHAPOGFX_FORMAT_RGB565BE=0`` にしてください。
+このため ``RGB565`` (ネイティブ順) は既定で無効です。``SHAPOGFX_FORMAT_RGB565=1`` で使う場合、``RGB565_SWAPPED`` を使わないなら ``SHAPOGFX_FORMAT_RGB565_SWAPPED=0`` にしてください。
 
 フォーマットのマクロと ``SHAPOGFX_COORD_BITS`` は、ヘッダを含む全ての翻訳単位で同じ値にしてください
 (CMake のオプションで指定した ``SHAPOGFX_COORD_BITS`` はライブラリの利用側にも伝わります)。
@@ -134,8 +134,8 @@ CMake も PlatformIO も使わない
 
    namespace g2 = shapoco::gfx2d;
 
-   static uint16_t fb[320 * 240];  // RGB565BE のフレームバッファ
-   static const g2::Surface screen = {g2::PixelFormat::RGB565BE, 320, 240, 320 * 2, fb};
+   static uint16_t fb[320 * 240];  // RGB565_SWAPPED のフレームバッファ
+   static const g2::Surface screen = {g2::PixelFormat::RGB565_SWAPPED, 320, 240, 320 * 2, fb};
 
    void draw() {
      g2::Graphics2D g(screen);
@@ -159,8 +159,8 @@ CMake も PlatformIO も使わない
    namespace g3 = shapoco::gfx3d;
 
    static uint8_t arena[64 * 1024];   // 3D レンダラの作業メモリ
-   static uint16_t band[320 * 40];    // 40 ライン分の転送バッファ (RGB565BE)
-   static const g2::Surface bandSurface = {g2::PixelFormat::RGB565BE, 320, 40, 320 * 2, band};
+   static uint16_t band[320 * 40];    // 40 ライン分の転送バッファ (RGB565_SWAPPED)
+   static const g2::Surface bandSurface = {g2::PixelFormat::RGB565_SWAPPED, 320, 40, 320 * 2, band};
    static g3::Graphics3D g3d;
 
    static const g3::Material matRed = {

@@ -16,8 +16,8 @@
 //   GRAY1     0 or 1
 //   RGB444    0x0RGB (4 bits per channel)
 //   ARGB4444  0xARGB (4 bits per channel)
-//   RGB565BE  RRRRRGGGGGGBBBBB (5/6/5 bits; byte-swapped only in memory)
-//   RGB565    RRRRRGGGGGGBBBBB (the same, in the CPU's own byte order)
+//   RGB565_SWAPPED  RRRRRGGGGGGBBBBB (5/6/5 bits; byte-swapped only in memory)
+//   RGB565          RRRRRGGGGGGBBBBB (the same, in the CPU's own byte order)
 
 namespace shapoco::gfx2d {
 
@@ -26,10 +26,14 @@ enum class PixelFormat : uint8_t {
   RGB444,    // 12 bits per pixel, 2 pixels in 3 bytes: R1G1 B1R2 G2B2 (display
              // order)
   ARGB4444,  // 16 bits per pixel, native uint16_t 0xARGB; A = 15 is opaque
-  RGB565BE,  // 16 bits per pixel, big-endian byte order in memory (display
-             // order)
-  RGB565,    // 16 bits per pixel, native uint16_t (no byte swap on access):
-             // for displays or DMA that take 16-bit words
+  // 16 bits per pixel, the uint16_t RGB565 value with its two bytes swapped
+  // relative to the CPU's order. On a little-endian CPU (every target so
+  // far) the high byte comes first in memory: RRRRRGGG GGGBBBBB, the order a
+  // display controller takes over an 8-bit bus.
+  RGB565_SWAPPED,
+  // 16 bits per pixel, the uint16_t RGB565 value in the CPU's order (no swap
+  // on access): for displays or DMA that take 16-bit words
+  RGB565,
 };
 
 enum class BlendMode : uint8_t {
@@ -163,11 +167,11 @@ static inline uint16_t packRgb565(const colorf &c) {
   return packRgb565(c.r, c.g, c.b);
 }
 
-// Same, but in the byte order stored in memory for PixelFormat::RGB565BE
-static inline uint16_t packRgb565BE(float r, float g, float b) {
+// Same, byte-swapped as stored for PixelFormat::RGB565_SWAPPED
+static inline uint16_t packRgb565Swapped(float r, float g, float b) {
   return bswap16(packRgb565(r, g, b));
 }
-static inline uint16_t packRgb565BE(const colorf &c) {
+static inline uint16_t packRgb565Swapped(const colorf &c) {
   return bswap16(packRgb565(c));
 }
 
@@ -464,8 +468,8 @@ struct CursorArgb4444 {
 };
 #endif
 
-#if SHAPOGFX_FORMAT_RGB565BE
-struct CursorRgb565BE {
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+struct CursorRgb565Swapped {
   uint16_t *p;
   void init(void *line, int x) { p = (uint16_t *)line + x; }
   uint32_t read() const { return bswap16(*p); }
@@ -518,10 +522,11 @@ inline uint32_t blendNative<PixelFormat::ARGB4444>(uint32_t dst, uint32_t src,
   return blendAlphaArgb4444((uint16_t)dst, (uint16_t)src, alpha64);
 }
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
 template <>
-inline uint32_t blendNative<PixelFormat::RGB565BE>(uint32_t dst, uint32_t src,
-                                                   uint32_t alpha64) {
+inline uint32_t blendNative<PixelFormat::RGB565_SWAPPED>(uint32_t dst,
+                                                         uint32_t src,
+                                                         uint32_t alpha64) {
   return blendAlphaRgb565((uint16_t)dst, (uint16_t)src, alpha64);
 }
 #endif
@@ -557,9 +562,10 @@ inline uint32_t addNative<PixelFormat::ARGB4444>(uint32_t dst, uint32_t src) {
                              src & 15u);
 }
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
 template <>
-inline uint32_t addNative<PixelFormat::RGB565BE>(uint32_t dst, uint32_t src) {
+inline uint32_t addNative<PixelFormat::RGB565_SWAPPED>(uint32_t dst,
+                                                       uint32_t src) {
   return addSaturateRgb565((uint16_t)dst, (uint16_t)src);
 }
 #endif
@@ -601,10 +607,10 @@ struct FormatTraits<PixelFormat::ARGB4444> {
   static uint32_t fromRgb565(uint16_t p) { return 0xF000u | rgb565ToRgb444(p); }
 };
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
 template <>
-struct FormatTraits<PixelFormat::RGB565BE> {
-  using Cursor = CursorRgb565BE;
+struct FormatTraits<PixelFormat::RGB565_SWAPPED> {
+  using Cursor = CursorRgb565Swapped;
   static uint32_t fromColor(Color c) { return colorToRgb565(c); }
   static Color toColor(uint32_t p) { return rgb565ToColor((uint16_t)p); }
   static uint32_t fromRgb565(uint16_t p) { return p; }
@@ -625,7 +631,8 @@ constexpr bool isFormatEnabled(PixelFormat f) {
     case PixelFormat::GRAY1: return SHAPOGFX_FORMAT_GRAY1 != 0;
     case PixelFormat::RGB444: return SHAPOGFX_FORMAT_RGB444 != 0;
     case PixelFormat::ARGB4444: return SHAPOGFX_FORMAT_ARGB4444 != 0;
-    case PixelFormat::RGB565BE: return SHAPOGFX_FORMAT_RGB565BE != 0;
+    case PixelFormat::RGB565_SWAPPED:
+      return SHAPOGFX_FORMAT_RGB565_SWAPPED != 0;
     case PixelFormat::RGB565: return SHAPOGFX_FORMAT_RGB565 != 0;
   }
   return false;

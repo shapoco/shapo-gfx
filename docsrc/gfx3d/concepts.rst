@@ -163,8 +163,8 @@
 分割するかレベル 2 を使ってください。
 
 RP2040 / RP2350 では ``SHAPOGFX3D_RP2_INTERP`` (Pico SDK の ``hardware_interp`` が使えれば既定で有効) により、
-RGB565BE、RGB565、ARGB4444 のテクスチャ (stride が 2 の冪のもの) のテクセルアドレス計算を
-SIO interpolator (``interp0``) に任せます。不透明・テクスチャなし・グーロー補間の線分 (RGB565BE / RGB565 出力) では、
+RGB565_SWAPPED、RGB565、ARGB4444 のテクスチャ (stride が 2 の冪のもの) のテクセルアドレス計算を
+SIO interpolator (``interp0``) に任せます。不透明・テクスチャなし・グーロー補間の線分 (RGB565_SWAPPED / RGB565 出力) では、
 ``interp1`` が赤と緑を歩進して RGB565 の赤緑部分を 1 回の読み出しで返します。
 ``render()`` は呼び出したコアの ``interp0`` と ``interp1`` を保存・復元するので、``render()`` 中に動く
 割り込みハンドラではこれらを使わないでください。

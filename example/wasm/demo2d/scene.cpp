@@ -274,7 +274,7 @@ static void drawText(g2::Graphics2D &g, float t) {
   g.setTextColor(Colors::WHITE);
   g.drawString(x, y,
                "ShapoSansP_s08c07: proportional 8 px\nGRAY1 / RGB444 / "
-               "ARGB4444 / RGB565BE");
+               "ARGB4444 / RGB565_SWAPPED");
   y += g.lineAdvance() * 2 + 2;
 
   g.setFont(&ShapoSansMono_s08c07);

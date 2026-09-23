@@ -4,7 +4,7 @@
 //   <prefix>_init()
 //   <prefix>_frame(t [, yaw, pitch, dist])   -- camera arguments only when opts.camera is set
 //   <prefix>_get_fb(), <prefix>_get_width(), <prefix>_get_height()
-// and copies its RGB565BE frame buffer to the <canvas id="screen"> every frame.
+// and copies its RGB565_SWAPPED frame buffer to the <canvas id="screen"> every frame.
 //
 // startDemoViewer({ wasm: 'demo3d.wasm', prefix: 'demo3d', scale: 2,
 //                   camera: { yaw, pitch, dist, pitchMin, pitchMax, distMin, distMax } })
@@ -77,7 +77,8 @@ async function startDemoViewer(opts) {
       }
 
       // Re-create the view every frame in case the memory grows.
-      // RGB565BE: byte 0 = RRRRRGGG, byte 1 = GGGBBBBB
+      // RGB565_SWAPPED on little-endian WebAssembly: byte 0 = RRRRRGGG,
+      // byte 1 = GGGBBBBB
       const fb = new Uint8Array(ex.memory.buffer, fbPtr, W * H * 2);
       for (let i = 0, j = 0; i < W * H * 2; i += 2, j += 4) {
         const b0 = fb[i], b1 = fb[i + 1];

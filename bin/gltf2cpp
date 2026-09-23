@@ -195,7 +195,7 @@ class Generator:
         has_alpha = img.mode in ("RGBA", "LA", "P") and img.convert("RGBA").getextrema()[3][0] < 255
         fmt = self.args.texformat
         if fmt == "auto":
-            fmt = "argb4444" if (has_alpha or alpha_hint) else "rgb565be"
+            fmt = "argb4444" if (has_alpha or alpha_hint) else "rgb565_swapped"
         w, h = img.size
         if not (conv.is_power_of_two(w) and conv.is_power_of_two(h)):
             if self.args.no_resize_pot:
@@ -484,7 +484,7 @@ def main():
     ap.add_argument("--namespace", default=None,
                     help="namespace of the generated objects (default: from the input file name)")
     ap.add_argument("--texformat", choices=("auto",) + conv.FORMATS, default="auto",
-                    help="texture format; auto = argb4444 when the image or material uses alpha, else rgb565be")
+                    help="texture format; auto = argb4444 when the image or material uses alpha, else rgb565_swapped")
     ap.add_argument("--dither", choices=conv.DITHERS, default="none", help="texture dithering")
     ap.add_argument("--key-color", type=conv.parse_key_color, default=None,
                     help="color to make transparent in textures")

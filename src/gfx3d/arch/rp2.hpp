@@ -15,7 +15,7 @@ namespace shapoco::gfx3d::arch::rp2 {
 // Texture coordinate walker through interp0: lane 0 turns u (16.16 texels)
 // into the byte offset of the texel in its row, lane 1 turns v into the byte
 // offset of the row, and POP_FULL returns the texel address and steps both
-// accumulators. Only for 16-bit texels (ARGB4444 when ARGB, else RGB565BE
+// accumulators. Only for 16-bit texels (ARGB4444 when ARGB, else RGB565_SWAPPED
 // when SWAP or native RGB565) with a power-of-two stride; returns the texel
 // as native RGB565 and its 4-bit alpha, like the portable walker.
 template <bool ARGB, bool SWAP>

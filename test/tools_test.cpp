@@ -10,7 +10,7 @@
 #include "data/test_image_gray1.hpp"
 #include "data/test_image_rgb444.hpp"
 #include "data/test_image_rgb565.hpp"
-#include "data/test_image_rgb565be.hpp"
+#include "data/test_image_rgb565_swapped.hpp"
 #include "data/test_model.hpp"
 #include "data/test_model_packed.hpp"
 #include "shapoco/gfx2d/surface_alloc.hpp"
@@ -55,14 +55,14 @@ static void checkTexture(const g2::Texture &t, int stepR, int stepG, int stepB,
 }
 
 static void testImg2cpp() {
-  CHECK_EQ((int)test_image_rgb565be::texture.format,
-           (int)g2::PixelFormat::RGB565BE);
+  CHECK_EQ((int)test_image_rgb565_swapped::texture.format,
+           (int)g2::PixelFormat::RGB565_SWAPPED);
   CHECK_EQ((int)test_image_argb4444::texture.format,
            (int)g2::PixelFormat::ARGB4444);
   CHECK_EQ((int)test_image_rgb444::texture.format,
            (int)g2::PixelFormat::RGB444);
   CHECK_EQ((int)test_image_gray1::texture.format, (int)g2::PixelFormat::GRAY1);
-  checkTexture(test_image_rgb565be::texture, 9, 5, 9, false, false);
+  checkTexture(test_image_rgb565_swapped::texture, 9, 5, 9, false, false);
 #if SHAPOGFX_FORMAT_RGB565
   CHECK_EQ((int)test_image_rgb565::texture.format,
            (int)g2::PixelFormat::RGB565);
@@ -126,8 +126,8 @@ static void testPackedVertices() {
   static constexpr int W = 96, H = 64;
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
-  g2::OwnedSurface a = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
-  g2::OwnedSurface b = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface a = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
+  g2::OwnedSurface b = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   const int triA = renderSceneOf(r, a, test_model::scene, nullptr);
   const int triB = renderSceneOf(r, b, test_model_packed::scene, nullptr);
   CHECK_EQ(triA, triB);
@@ -192,8 +192,10 @@ static void testGltf2cpp() {
   g3::Graphics3D r;
   r.init(96, 64, arena, sizeof(arena));
   r.setClearColor({0, 0, 0, 1});
-  g2::OwnedSurface a = g2::createSurface(g2::PixelFormat::RGB565BE, 96, 64);
-  g2::OwnedSurface b = g2::createSurface(g2::PixelFormat::RGB565BE, 96, 64);
+  g2::OwnedSurface a =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, 96, 64);
+  g2::OwnedSurface b =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, 96, 64);
   int all = renderScene(r, a, nullptr);
   CHECK(all > 0);
   CHECK_EQ(r.getStats().badIndices, 0);
@@ -226,7 +228,8 @@ static void testDeepTree() {
   }
   g3::Graphics3D r;
   r.init(32, 32, arena, sizeof(arena));
-  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, 32, 32);
+  g2::OwnedSurface s =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, 32, 32);
   r.setOrthographicProjection(-4, 4, -4, 4, 0.1f, 10);
   r.beginScene();
   r.translate(0, 0, -5);

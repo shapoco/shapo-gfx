@@ -262,7 +262,7 @@ enum class TexFmt : uint8_t {
   GRAY1,
   RGB444,
   ARGB4444,
-  RGB565BE,
+  RGB565_SWAPPED,
   RGB565,
 #endif
   COUNT
@@ -734,8 +734,8 @@ static inline TexFmt texFmtOf(const Texture *tex) {
 #if SHAPOGFX_FORMAT_ARGB4444
     case PixelFormat::ARGB4444: return TexFmt::ARGB4444;
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE: return TexFmt::RGB565BE;
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED: return TexFmt::RGB565_SWAPPED;
 #endif
 #if SHAPOGFX_FORMAT_RGB565
     case PixelFormat::RGB565: return TexFmt::RGB565;
@@ -3126,9 +3126,9 @@ struct TexSampler<TexFmt::ARGB4444> {
   }
 };
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
 template <>
-struct TexSampler<TexFmt::RGB565BE> {
+struct TexSampler<TexFmt::RGB565_SWAPPED> {
   static inline uint32_t fetch(const uint8_t *row, uint32_t u, uint32_t &a4) {
     a4 = 15;
     return gfx2d::bswap16(((const uint16_t *)row)[u]);
@@ -3186,10 +3186,10 @@ struct SoftTex {
 template <PixelFormat OUT>
 struct OutTraits;
 
-#if SHAPOGFX_FORMAT_RGB565BE
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
 template <>
-struct OutTraits<PixelFormat::RGB565BE> {
-  using Cursor = gfx2d::CursorRgb565BE;
+struct OutTraits<PixelFormat::RGB565_SWAPPED> {
+  using Cursor = gfx2d::CursorRgb565Swapped;
   static inline uint32_t pack(uint32_t r5, uint32_t g6, uint32_t b5) {
     return gfx2d::makeRgb565(r5, g6, b5);
   }
@@ -3390,7 +3390,8 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
   // packed from arch::GouraudRG (the SIO interpolator on RP2), blue is
   // stepped here
   if constexpr (B == BlendMode::NONE && !TEX && !FLAT &&
-                (OUT == PixelFormat::RGB565BE || OUT == PixelFormat::RGB565)) {
+                (OUT == PixelFormat::RGB565_SWAPPED ||
+                 OUT == PixelFormat::RGB565)) {
     arch::GouraudRG rg;
     rg.init(col.r, col.g, col.dr, col.dg);
     int32_t b = col.b;
@@ -3548,10 +3549,10 @@ static SHAPOGFX3D_HOT_ATTR void rasterSpanT(uint8_t *line, int x, int n,
     const int32_t u0 = st.u, v0 = st.v, du0 = st.du, dv0 = st.dv;
 #endif
 #if SHAPOGFX3D_RP2_INTERP
-    if constexpr (T == TexFmt::RGB565BE || T == TexFmt::RGB565 ||
+    if constexpr (T == TexFmt::RGB565_SWAPPED || T == TexFmt::RGB565 ||
                   T == TexFmt::ARGB4444) {
-      using InterpTex =
-          arch::rp2::InterpTex<T == TexFmt::ARGB4444, T == TexFmt::RGB565BE>;
+      using InterpTex = arch::rp2::InterpTex<T == TexFmt::ARGB4444,
+                                             T == TexFmt::RGB565_SWAPPED>;
       if (InterpTex::usable(tex)) {
         InterpTex tx;
         tx.init(tex, u0, v0, du0, dv0);
@@ -3624,11 +3625,11 @@ static SHAPOGFX3D_HOT_ATTR void fillLineT(uint8_t *line, int x, int n,
 #else
 #define SHAPOGFX3D_HOT_ROW_ARGB4444(OUT)
 #endif
-#if SHAPOGFX3D_TEXTURE && SHAPOGFX_FORMAT_RGB565BE
-#define SHAPOGFX3D_HOT_ROW_RGB565BE(OUT) \
-  SHAPOGFX3D_HOT_ROW(OUT, TexFmt::RGB565BE)
+#if SHAPOGFX3D_TEXTURE && SHAPOGFX_FORMAT_RGB565_SWAPPED
+#define SHAPOGFX3D_HOT_ROW_RGB565_SWAPPED(OUT) \
+  SHAPOGFX3D_HOT_ROW(OUT, TexFmt::RGB565_SWAPPED)
 #else
-#define SHAPOGFX3D_HOT_ROW_RGB565BE(OUT)
+#define SHAPOGFX3D_HOT_ROW_RGB565_SWAPPED(OUT)
 #endif
 #if SHAPOGFX3D_TEXTURE && SHAPOGFX_FORMAT_RGB565
 #define SHAPOGFX3D_HOT_ROW_RGB565(OUT) SHAPOGFX3D_HOT_ROW(OUT, TexFmt::RGB565)
@@ -3640,12 +3641,12 @@ static SHAPOGFX3D_HOT_ATTR void fillLineT(uint8_t *line, int x, int n,
   SHAPOGFX3D_HOT_ROW_GRAY1(OUT)                                         \
   SHAPOGFX3D_HOT_ROW_RGB444(OUT)                                        \
   SHAPOGFX3D_HOT_ROW_ARGB4444(OUT)                                      \
-  SHAPOGFX3D_HOT_ROW_RGB565BE(OUT)                                      \
+  SHAPOGFX3D_HOT_ROW_RGB565_SWAPPED(OUT)                                \
   SHAPOGFX3D_HOT_ROW_RGB565(OUT)                                        \
   template SHAPOGFX3D_HOT_ATTR void fillLineT<OUT>(uint8_t *, int, int, \
                                                    uint32_t);
-#if SHAPOGFX_FORMAT_RGB565BE
-SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB565BE)
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB565_SWAPPED)
 #endif
 #if SHAPOGFX_FORMAT_RGB565
 SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB565)
@@ -3696,11 +3697,11 @@ SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB444)
 #else
 #define SHAPOGFX3D_RASTER_ROW_ARGB4444(OUT) SHAPOGFX3D_RASTER_NULL_ROW
 #endif
-#if SHAPOGFX_FORMAT_RGB565BE
-#define SHAPOGFX3D_RASTER_ROW_RGB565BE(OUT) \
-  SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::RGB565BE)
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+#define SHAPOGFX3D_RASTER_ROW_RGB565_SWAPPED(OUT) \
+  SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::RGB565_SWAPPED)
 #else
-#define SHAPOGFX3D_RASTER_ROW_RGB565BE(OUT) SHAPOGFX3D_RASTER_NULL_ROW
+#define SHAPOGFX3D_RASTER_ROW_RGB565_SWAPPED(OUT) SHAPOGFX3D_RASTER_NULL_ROW
 #endif
 #if SHAPOGFX_FORMAT_RGB565
 #define SHAPOGFX3D_RASTER_ROW_RGB565(OUT) \
@@ -3714,7 +3715,7 @@ SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB444)
     SHAPOGFX3D_RASTER_ROW(OUT, TexFmt::NONE),                                \
         SHAPOGFX3D_RASTER_ROW_GRAY1(OUT), SHAPOGFX3D_RASTER_ROW_RGB444(OUT), \
         SHAPOGFX3D_RASTER_ROW_ARGB4444(OUT),                                 \
-        SHAPOGFX3D_RASTER_ROW_RGB565BE(OUT),                                 \
+        SHAPOGFX3D_RASTER_ROW_RGB565_SWAPPED(OUT),                           \
         SHAPOGFX3D_RASTER_ROW_RGB565(OUT),                                   \
   }
 #else
@@ -3724,9 +3725,9 @@ SHAPOGFX3D_HOT_TABLE(PixelFormat::RGB444)
 
 static constexpr int RASTER_TABLE_SIZE = (int)TexFmt::COUNT * RASTER_PER_TEX;
 
-#if SHAPOGFX_FORMAT_RGB565BE
-static const RasterFn RASTER_FNS_RGB565BE[RASTER_TABLE_SIZE] =
-    SHAPOGFX3D_RASTER_TABLE(PixelFormat::RGB565BE);
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+static const RasterFn RASTER_FNS_RGB565_SWAPPED[RASTER_TABLE_SIZE] =
+    SHAPOGFX3D_RASTER_TABLE(PixelFormat::RGB565_SWAPPED);
 #endif
 #if SHAPOGFX_FORMAT_RGB565
 static const RasterFn RASTER_FNS_RGB565[RASTER_TABLE_SIZE] =
@@ -3777,10 +3778,10 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int ctx, int16_t x, int16_t y,
   const RasterFn *table = nullptr;
   FillFn fillFn = nullptr;
   switch (dst.format) {
-#if SHAPOGFX_FORMAT_RGB565BE
-    case PixelFormat::RGB565BE:
-      table = RASTER_FNS_RGB565BE;
-      fillFn = fillLineT<PixelFormat::RGB565BE>;
+#if SHAPOGFX_FORMAT_RGB565_SWAPPED
+    case PixelFormat::RGB565_SWAPPED:
+      table = RASTER_FNS_RGB565_SWAPPED;
+      fillFn = fillLineT<PixelFormat::RGB565_SWAPPED>;
       break;
 #endif
 #if SHAPOGFX_FORMAT_RGB565

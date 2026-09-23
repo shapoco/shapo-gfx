@@ -10,11 +10,11 @@ import re
 import numpy as np
 from PIL import Image, ImageColor
 
-FORMATS = ("rgb565be", "rgb565", "argb4444", "rgb444", "gray1")
+FORMATS = ("rgb565_swapped", "rgb565", "argb4444", "rgb444", "gray1")
 DITHERS = ("none", "diffusion", "pattern")
 
 PIXEL_FORMAT_ENUM = {
-    "rgb565be": "RGB565BE",
+    "rgb565_swapped": "RGB565_SWAPPED",
     "rgb565": "RGB565",
     "argb4444": "ARGB4444",
     "rgb444": "RGB444",
@@ -141,14 +141,13 @@ def convert(image, fmt, dither="none", key_color=None):
         val = (q[:, :, 0] << 11) | (q[:, :, 1] << 5) | q[:, :, 2]
         return w, h, w * 2, [int(v) for v in val.flatten()], "uint16_t"
 
-    # rgb565be: big-endian byte order in memory, emitted as bytes
+    # rgb565_swapped: the uint16_t value with its bytes swapped (relative to
+    # the CPU's order, whatever the target's: emitted as uint16_t values)
     arr = np.array(image.convert("RGB"), dtype=np.float64)
     q = quantize(arr, [5, 6, 5], dither)
     val = (q[:, :, 0] << 11) | (q[:, :, 1] << 5) | q[:, :, 2]
-    hi = (val >> 8) & 0xFF
-    lo = val & 0xFF
-    data = np.stack([hi, lo], axis=-1).flatten()
-    return w, h, w * 2, [int(v) for v in data], "uint8_t"
+    val = ((val & 0xFF) << 8) | ((val >> 8) & 0xFF)
+    return w, h, w * 2, [int(v) for v in val.flatten()], "uint16_t"
 
 
 def is_power_of_two(n):

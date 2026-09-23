@@ -25,7 +25,8 @@ static uint16_t tex565[16 * 16];
 static uint16_t tex4444[16 * 16];
 static uint8_t texG1[16 * 2];
 static uint8_t tex444[24 * 16];
-static const g3::Texture T565 = {g3::PixelFormat::RGB565BE, 16, 16, 32, tex565};
+static const g3::Texture T565 = {g3::PixelFormat::RGB565_SWAPPED, 16, 16, 32,
+                                 tex565};
 static const g3::Texture T4444 = {g3::PixelFormat::ARGB4444, 16, 16, 32,
                                   tex4444};
 static const g3::Texture TG1 = {g3::PixelFormat::GRAY1, 16, 16, 2, texG1};
@@ -78,7 +79,7 @@ static void genTextures() {
     for (int x = 0; x < 16; x++) {
       bool on = ((x >> 2) ^ (y >> 2)) & 1;
       tex565[y * 16 + x] =
-          g2::packRgb565BE(on ? 1.0f : 0.2f, 0.5f, on ? 0.2f : 1.0f);
+          g2::packRgb565Swapped(on ? 1.0f : 0.2f, 0.5f, on ? 0.2f : 1.0f);
       tex565n[y * 16 + x] = g2::bswap16(tex565[y * 16 + x]);
       tex4444[y * 16 + x] =
           g2::makeArgb4444(on ? 15 : 0, 15, 8, 2);  // alpha holes
@@ -120,8 +121,10 @@ static void testBandsAndClear() {
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   CHECK(r.isInitialized());
-  g2::OwnedSurface whole = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
-  g2::OwnedSurface banded = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface whole =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
+  g2::OwnedSurface banded =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   r.setClearColor({0.1f, 0.2f, 0.3f, 1});
   buildScene(r, &M_RED, 0.7f);
   r.beginRender();
@@ -133,7 +136,8 @@ static void testBandsAndClear() {
   CHECK(st.triCount > 0 && st.triDropped == 0 && st.spanDropped == 0);
 
   // Rendering only a sub-rectangle into an offset target
-  g2::OwnedSurface part = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface part =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   g2::Graphics2D gp(part);
   gp.clear(g2::Colors::MAGENTA);
   r.beginRender();
@@ -149,7 +153,8 @@ static void testBandsAndClear() {
   CHECK_EQ(pixelAt(part, 42, 14), g2::Colors::MAGENTA);
 
   // Transparent clear keeps the background where nothing is drawn
-  g2::OwnedSurface bg = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface bg =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   g2::Graphics2D gb(bg);
   gb.clear(g2::Colors::GREEN);
   r.disableClear();
@@ -182,7 +187,8 @@ static void testOutputFormats() {
   const g3::Material *mats[] = {&M_RED, &M_TEX565, &M_TEX4444, &M_TEXG1,
                                 &M_TEX444};
   for (const g3::Material *m : mats) {
-    g2::OwnedSurface s565 = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+    g2::OwnedSurface s565 =
+        g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
     g2::OwnedSurface s444 = g2::createSurface(g2::PixelFormat::RGB444, W, H);
     buildScene(r, m, 0.4f);
     r.beginRender();
@@ -206,13 +212,15 @@ static void testOutputFormats() {
     CHECK(differing < W * H / 100);
   }
 #if SHAPOGFX_FORMAT_RGB565
-  // Native RGB565 output and textures: the same pixels as RGB565BE,
+  // Native RGB565 output and textures: the same pixels as RGB565_SWAPPED,
   // byte-swapped. The BE-textured scene into a native target, the
   // native-textured one into a BE target.
   for (const g3::Material *m : {&M_RED, &M_TEX565, &M_GLASS}) {
-    g2::OwnedSurface be = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+    g2::OwnedSurface be =
+        g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
     g2::OwnedSurface nat = g2::createSurface(g2::PixelFormat::RGB565, W, H);
-    g2::OwnedSurface beN = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+    g2::OwnedSurface beN =
+        g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
     buildScene(r, m, 0.4f);
     r.beginRender();
     r.render(0, 0, W, H, be);
@@ -245,7 +253,7 @@ static void testTextureAlpha() {
   // Holes in an ARGB4444 texture show the background
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
-  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   r.setClearColor({0, 1, 0, 1});
   r.setOrthographicProjection(-1, 1, -1, 1, 0.1f, 10);
   r.beginScene();
@@ -313,8 +321,10 @@ static void testShapeWinding() {
   r.init(W, H, arena, sizeof(arena));
   r.setClearColor({0, 0, 0, 1});
   for (const ShapeCase &sc : cases) {
-    g2::OwnedSurface a = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
-    g2::OwnedSurface b = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+    g2::OwnedSurface a =
+        g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
+    g2::OwnedSurface b =
+        g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
     for (int pass = 0; pass < 2; pass++) {
       r.setPerspectiveProjection(1.0f, (float)W / H, 0.3f, 50.0f);
       r.beginScene();
@@ -367,7 +377,7 @@ static void testVertexColorAndIndices() {
   r.init(W, H, arena, sizeof(arena));
   r.setClearColor({0, 0, 0, 1});
   r.setOrthographicProjection(-2, 2, -2, 2, 0.1f, 10);
-  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   for (int pass = 0; pass < 3; pass++) {
     r.beginScene();
     r.translate(0, 0, -3);
@@ -408,7 +418,7 @@ static void testPointsAndLines() {
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   r.setClearColor({0, 0, 0, 1});
-  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   auto render = [&]() {
     r.beginRender();
     r.render(0, 0, W, H, s);
@@ -574,7 +584,7 @@ static void testLayersAndConfig() {
   CHECK(r.isInitialized());
   CHECK_EQ(r.getStats().spanCapacity, 48);
 
-  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   r.setClearColor({0, 0, 0, 1});
   const float ay = (float)H / W;
   // near: a small blue cube, far: a large red one behind it
@@ -717,7 +727,7 @@ static void testWatertight() {
                                    g3::MaterialFlags::DOUBLE_SIDED};
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
-  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   r.setClearColor({1, 0, 1, 1});
   const g2::Color clear = g2::makeColor(255, 0, 255);
   int gaps = 0, lit = 0;
@@ -770,7 +780,7 @@ static void testFarVertex() {
                                    g3::MaterialFlags::DOUBLE_SIDED};
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
-  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   r.setClearColor({0, 0, 0, 1});
   const float ay = (float)H / W;
   // Orthographic: x in [-1, 1] spans the width
@@ -834,8 +844,10 @@ static void testRenderContexts() {
   g3::Graphics3D r;
   r.init(cfg);
   CHECK(r.isInitialized());
-  g2::OwnedSurface whole = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
-  g2::OwnedSurface split = g2::createSurface(g2::PixelFormat::RGB565BE, W, H);
+  g2::OwnedSurface whole =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
+  g2::OwnedSurface split =
+      g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
   r.setClearColor({0.1f, 0.2f, 0.3f, 1});
   for (int i = 0; i < 4; i++) {
     buildScene(r, &M_RED, 0.3f + 0.9f * (float)i);
