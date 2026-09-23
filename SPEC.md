@@ -42,7 +42,8 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise) |
-| `SHAPOGFX3D_FIXED_POINT` | 0 | Vertex stage, primitive setup and span builders in fixed point, for cores without an FPU (see "Fixed-point vertex stage") |
+| `SHAPOGFX3D_FIXED_POINT` | 0 | Vertex stage and primitive setup in fixed point, for cores without an FPU (see "Fixed-point vertex stage") |
+| `SHAPOGFX3D_DEPTH_BITS` | 32 | Depth resolution of the records: 32 (8.24) or 16 (1.15, 4 bytes less per record with depth; see "Memory management") |
 | `SHAPOGFX3D_TEXTURE` | 1 | Texture and environment mapping |
 | `SHAPOGFX3D_GOURAUD` | 1 | Gouraud shading; 0 selects flat shading |
 | `SHAPOGFX3D_BLEND` | 1 | Translucency |
@@ -97,11 +98,24 @@ costs no more than one of a build without the feature. Bytes per record on a
 
 | Record | Bytes | Selected by |
 |---|---|---|
-| header only | 48 | — |
-| + depth plane | 60 | a layer without `LayerFlags::NO_DEPTH` |
-| + interpolated color | 96 | three differing vertex colors (`SHAPOGFX3D_GOURAUD`) |
-| + texture coordinates | 100 | a textured material (`SHAPOGFX3D_TEXTURE`) |
-| all of them | 132 | |
+| header and flat color | 48 | — |
+| + depth plane | 60 (56) | a layer without `LayerFlags::NO_DEPTH` |
+| + interpolated color | 76 (72) | three differing vertex colors (`SHAPOGFX3D_GOURAUD`) |
+| + texture coordinates | 100 (96) | a textured material (`SHAPOGFX3D_TEXTURE`) |
+| all of them | 116 (112) | |
+
+In parentheses: with `SHAPOGFX3D_DEPTH_BITS=16`. The header (40 bytes) holds the
+edges or end points, a 16-bit sort key, the row range, the reference column of the
+planes and the rasterizer index; the texture pointer lives in the texture part, so
+an untextured record carries no material. The depth plane is 8.24 in 12 bytes, or
+with 16 bits of depth a 2.14 value and two 16-bit gradients whose scale is chosen
+per record in 8 bytes (the gradient is quantized to 2^-15 of its own magnitude, the
+value to 2^-14 NDC: surfaces that cross far from the camera may swap slightly
+earlier or later where they meet). Interpolated colors are 10.6 values and 8.8
+gradients (20 bytes); gradients beyond 127 levels per pixel (a sliver seen edge on)
+do not fit, and such a primitive is stored flat in the color of its first vertex.
+Over a span of 2000 pixels the 8.8 gradient drifts by at most 4 of 255 levels, less
+than a step of RGB565.
 
 Turning a feature off removes the corresponding layouts and their code. A span
 is 16 bytes in every configuration -- its pixel range, its layer and pointers to
@@ -515,7 +529,7 @@ front. Inside a layer the usual depth resolution applies. A scene that never cal
   the default flags, still in front of everything before it.
 - `LayerFlags::NO_DEPTH`: the layer carries no depth at all. Its primitives are
   drawn in the order they were added (the later one wins), its records hold no
-  depth plane (12 bytes less each) and it is not sorted. Use it for geometry that
+  depth plane (12 bytes less each, 8 with `SHAPOGFX3D_DEPTH_BITS=16`) and it is not sorted. Use it for geometry that
   is already ordered back to front; `setDepthBias()` has no effect in it.
 
 Layer order is resolved where spans meet (see `render()`), so it also settles cases
@@ -717,9 +731,12 @@ passes in either build.
 
 ### `beginRender()`
 
-Sorts the entries of each layer (never the records) farthest first by the sum of the
-view-space z of the primitive's vertices, as an integer key with the ordering of the
-float; equal keys keep the order the primitives were added in. Layers with
+Sorts the entries of each layer (never the records) farthest first by the average
+view-space z of the primitive's vertices, as a 16-bit key with the ordering of z (the
+float build keeps the sign, the exponent and 7 bits of mantissa, the fixed-point
+build a 5-bit exponent and 10 bits of mantissa of the 16.16 value, so depths within
+1/128 or 1/1024 of each other tie); equal keys keep the order the primitives were
+added in. Layers with
 `LayerFlags::NO_DEPTH` are left in the order they were added. Depth order between
 opaque spans of one layer is resolved by depth comparison in `render()`, so this sort
 primarily determines the compositing order of translucent primitives.

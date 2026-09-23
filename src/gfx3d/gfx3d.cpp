@@ -107,13 +107,16 @@
 #define SHAPOGFX3D_FIXED_POINT 0
 #endif
 
-// Depth resolution: 32 (8.24 fixed point, the default) or 16 bits (1.15,
-// smaller records; see PartZ)
+// Depth resolution of the records: 32 bits (8.24 fixed point, the default) or
+// 16 bits (1.15, 6 bytes instead of 12 per record with depth). With 16 bits
+// the depth gradient is quantized to 2^-15 NDC per pixel, which can shift a
+// depth by up to 0.06 NDC across a span of 2000 pixels: surfaces that cross
+// far from the camera may then swap where they meet.
 #ifndef SHAPOGFX3D_DEPTH_BITS
 #define SHAPOGFX3D_DEPTH_BITS 32
 #endif
-static_assert(SHAPOGFX3D_DEPTH_BITS == 32,
-              "SHAPOGFX3D_DEPTH_BITS must be 32 (16 is not implemented yet)");
+static_assert(SHAPOGFX3D_DEPTH_BITS == 32 || SHAPOGFX3D_DEPTH_BITS == 16,
+              "SHAPOGFX3D_DEPTH_BITS must be 32 or 16");
 
 // Attribute put on the rasterization side -- render() and everything it
 // calls per span -- so that a platform can place just that code somewhere
@@ -298,7 +301,7 @@ struct PointGeo {
 // A triangle, line or point after setup.
 //
 // Only the attributes a primitive actually has are stored, so a record is 44
-// to 128 bytes instead of always 128 (32-bit target, perspective level 1).
+// to 112 bytes instead of always 112 (32-bit target, perspective level 1).
 // Every record starts with the same header, which is all the sort, the
 // scanline buckets and the span builders need; the optional parts follow in
 // a fixed order and are reached through the record type, which the
@@ -309,8 +312,7 @@ struct TriHead {
     LineGeo line;
     PointGeo point;
   } geo;
-  const Material *mat;
-  int32_t sortKey;     // ascending = farther first
+  int16_t sortKey;     // ascending = farther first (see sortKeyOf())
   coord_t yMin, yMax;  // range of scanlines crossed (inclusive), on screen
   coord_t yMid;        // triangles: first row of edge [1]
   int16_t xa;          // column of the planes' reference pixel (row: yMin)
@@ -325,15 +327,30 @@ struct TriHead {
 struct PartNoZ {};
 struct PartNoTex {};
 struct PartZ {
-  Plane z;  // NDC depth
+#if SHAPOGFX3D_DEPTH_BITS == 16
+  // NDC depth: the value at the reference pixel in 2.14 (the reference pixel
+  // may lie just outside the primitive, beyond -1..1) and the gradients in
+  // 1.(15 + zsh), the shift chosen per record so that the larger gradient
+  // uses the 16 bits; evaluated in 1.15 (see depthAt())
+  int16_t z0, zdx, zdy;
+  uint8_t zsh;  // 0..14
+#else
+  Plane z;  // NDC depth, 8.24
+#endif
 };
+// Vertex colors: the values at the reference pixel in 10.6 (0..255 plus the
+// margin of a reference pixel next to the primitive) and the gradients in
+// 8.8, evaluated in 8.8 (see colorAt()). Gradients beyond +-127 per pixel do
+// not fit; such a primitive (a sliver) is stored flat instead.
 struct PartSmooth {
-  Plane r, g, b;  // vertex color 0..255
+  int16_t c0[3];  // r, g, b
+  int16_t dx[3], dy[3];
 };
 struct PartFlat {
   uint8_t r, g, b;  // one color for the whole primitive (0..255)
 };
 struct PartTex {
+  const Texture *tex;
 #if SHAPOGFX3D_PERSPECTIVE >= 1
   Plane uw, vw, iw;  // (u/w, v/w, 1/w), see IW_NORM
 #else
@@ -398,6 +415,7 @@ enum : int { A_Z, A_R, A_G, A_B, A_T0, A_T1, A_T2, A_COUNT };
 struct PlaneSet {
   Plane p[A_COUNT];  // A_T*: (u/w, v/w, 1/w), or (u, v) at level 0
   uint8_t fr, fg, fb;
+  const Texture *tex;  // textured primitives
 };
 
 struct StackEntry {
@@ -530,11 +548,25 @@ static inline float pow2f(int k) {
   return v;
 }
 
-// Integer key with the same ordering as the float (no NaN)
-static inline int32_t floatSortKey(float f) {
+// Sort key of a primitive (TriHead::sortKey) from the average view-space z
+// of its vertices: 16 bits with the ordering of z. The float build keeps the
+// top half of an integer with the ordering of the float (sign, exponent and
+// 7 bits of mantissa); the fixed-point build keeps a 5-bit exponent and 10
+// bits of mantissa of the 16.16 value. Primitives whose keys are equal keep
+// the order they were added in.
+static inline int16_t sortKeyOf(float z) {
   int32_t i;
-  std::memcpy(&i, &f, sizeof(i));
-  return i ^ (int32_t)(((uint32_t)(i >> 31)) >> 1);
+  std::memcpy(&i, &z, sizeof(i));
+  return (int16_t)((i ^ (int32_t)(((uint32_t)(i >> 31)) >> 1)) >> 16);
+}
+static inline int16_t sortKeyOf(int32_t z) {
+  const uint32_t m = z < 0 ? (uint32_t)0 - (uint32_t)z : (uint32_t)z;
+  int code = (int)m;
+  if (m >= 1024) {
+    const int e = 22 - __builtin_clz(m);  // 1..22
+    code = (e << 10) | (int)((m >> (e - 1)) & 0x3FFu);
+  }
+  return (int16_t)(z < 0 ? -code : code);
 }
 
 // --- Fixed-point helpers ----------------------------------------------------
@@ -1367,9 +1399,67 @@ static inline uint32_t attrMask(bool depth, bool smooth, bool textured) {
          (textured ? ATTR_TEX : 0);
 }
 
-// Write the record of a primitive whose header and planes are complete
-void Graphics3D::storePrimitive(const TriHead &h, const PlaneSet &ps,
+// Colors of a smooth primitive in the record format (see PartSmooth); false
+// when a gradient does not fit
+static inline bool packSmooth(const PlaneSet &ps, PartSmooth &out) {
+  auto fits = [](int32_t v) { return v >= INT16_MIN && v <= INT16_MAX; };
+  for (int k = 0; k < 3; k++) {
+    const Plane &p = ps.p[A_R + k];
+    const int32_t c0 = (p.a0 + (1 << 9)) >> 10;  // 8.16 -> 10.6
+    const int32_t dx = (p.dx + (1 << 7)) >> 8;   // 8.16 -> 8.8
+    const int32_t dy = (p.dy + (1 << 7)) >> 8;
+    if (!fits(c0) || !fits(dx) || !fits(dy)) return false;
+    out.c0[k] = (int16_t)c0;
+    out.dx[k] = (int16_t)dx;
+    out.dy[k] = (int16_t)dy;
+  }
+  return true;
+}
+
+// The depth plane (8.24) in the record format
+static inline void packDepth(const Plane &p, PartZ &out) {
+#if SHAPOGFX3D_DEPTH_BITS == 16
+  auto clamp16 = [](int32_t v) {
+    return (int16_t)(v < -32767 ? -32767 : (v > 32767 ? 32767 : v));
+  };
+  out.z0 = clamp16((p.a0 + (1 << 9)) >> 10);  // 8.24 -> 2.14
+  // Gradients 8.24 -> 1.(15 + sh), sh as large as the 16 bits allow. At
+  // most 14, so that a depth difference within the primitive (below 2^16 in
+  // 1.15) times 2^sh stays within 32 bits in depthAt().
+  auto scaled = [](int32_t v, int sh) -> int64_t {
+    return sh < 9 ? ((int64_t)v + ((int64_t)1 << (8 - sh))) >> (9 - sh)
+                  : (int64_t)v * ((int64_t)1 << (sh - 9));
+  };
+  int sh = 14;
+  while (sh > 0 && (std::abs(scaled(p.dx, sh)) > 32767 ||
+                    std::abs(scaled(p.dy, sh)) > 32767))
+    sh--;
+  const int64_t dx = scaled(p.dx, sh), dy = scaled(p.dy, sh);
+  if (dx < -32767 || dx > 32767 || dy < -32767 || dy > 32767) {
+    out.zdx = out.zdy = 0;  // steeper than 1 NDC per pixel: constant
+    out.zsh = 0;
+  } else {
+    out.zdx = (int16_t)dx;
+    out.zdy = (int16_t)dy;
+    out.zsh = (uint8_t)sh;
+  }
+#else
+  out.z = p;
+#endif
+}
+
+// Write the record of a primitive whose header and planes are complete. A
+// smooth primitive whose color gradients do not fit the record is stored
+// flat, in the color of its first vertex.
+void Graphics3D::storePrimitive(const TriHead &head, const PlaneSet &ps,
                                 bool smooth, bool textured) {
+  TriHead h = head;
+  PartSmooth sm = {};
+  if (smooth && !packSmooth(ps, sm)) {
+    smooth = false;
+    h.flags |= TriFlags::FLAT;
+    h.rasterFn |= 1;
+  }
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
   uint8_t *rec = allocRecord(TRI_REC_SIZE[recIndex(depth, smooth, textured)]);
   if (!rec) {  // buffer overflow: drop for this frame
@@ -1378,17 +1468,16 @@ void Graphics3D::storePrimitive(const TriHead &h, const PlaneSet &ps,
   }
   makeRecord(rec, h, depth, smooth, textured, [&](auto &t) {
     using R = std::remove_reference_t<decltype(t)>;
-    if constexpr (R::HAS_DEPTH) t.z = ps.p[A_Z];
+    if constexpr (R::HAS_DEPTH) packDepth(ps.p[A_Z], t);
     if constexpr (R::SMOOTH) {
-      t.r = ps.p[A_R];
-      t.g = ps.p[A_G];
-      t.b = ps.p[A_B];
+      static_cast<PartSmooth &>(t) = sm;
     } else {
       t.r = ps.fr;
       t.g = ps.fg;
       t.b = ps.fb;
     }
     if constexpr (R::TEXTURED) {
+      t.tex = ps.tex;
 #if SHAPOGFX3D_PERSPECTIVE >= 1
       t.uw = ps.p[A_T0];
       t.vw = ps.p[A_T1];
@@ -1420,7 +1509,6 @@ static inline void triangleHeader(TriHead &h, const Material *mat, TexFmt tf,
   const int blend = (int)BlendMode::NONE;
   flags |= TriFlags::OPAQUE;  // translucency compiled out
 #endif
-  h.mat = mat;
   h.flags = flags;
   h.alpha64 = materialAlpha64(mat);
   h.rasterFn =
@@ -1613,11 +1701,12 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 
   TriHead h;
   triangleHeader(h, mat, tf, smooth);
-  h.sortKey = floatSortKey(a.viewZ + b.viewZ + c.viewZ);
+  h.sortKey = sortKeyOf((a.viewZ + b.viewZ + c.viewZ) * (1.0f / 3.0f));
   h.layer = layerByte();
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
 
   PlaneSet ps;
+  ps.tex = tex;
   // Flat: the color of the first vertex as passed in
   ps.fr = (uint8_t)(int)(a.sv.r + 0.5f);
   ps.fg = (uint8_t)(int)(a.sv.g + 0.5f);
@@ -1769,7 +1858,7 @@ static bool setupTriangle(const SetupVertex *p0, const SetupVertex *p1,
                              x20,
                              y20,
                              makeRcp(det),
-                             (((int64_t)h.xa << FP_SHIFT) + FP_HALF) - x[0],
+                             ((int64_t)h.xa * (1 << FP_SHIFT) + FP_HALF) - x[0],
                              (((int64_t)h.yMin << FP_SHIFT) + FP_HALF) - y[0]};
   for (int k = 0; k < A_COUNT; k++) {
     if (attrs & (1u << k)) ps.p[k] = solve(p0->a[k], p1->a[k], p2->a[k]);
@@ -1802,11 +1891,12 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
 
   TriHead h;
   triangleHeader(h, mat, tf, smooth);
-  h.sortKey = (a.viewZ >> 2) + (b.viewZ >> 2) + (c.viewZ >> 2);
+  h.sortKey = sortKeyOf((int32_t)(((int64_t)a.viewZ + b.viewZ + c.viewZ) / 3));
   h.layer = layerByte();
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
 
   PlaneSet ps;
+  ps.tex = tex;
   // Flat: the color of the first vertex as passed in
   ps.fr = (uint8_t)((a.sv.r + 128) >> 8);
   ps.fg = (uint8_t)((a.sv.g + 128) >> 8);
@@ -1842,8 +1932,10 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
     const int32_t vOff =
         (std::min({v[0], v[1], v[2]}) >> FP_SHIFT) & ~(hPot - 1);
     for (int i = 0; i < 3; i++) {
-      u[i] = clampFix((int64_t)u[i] - ((int64_t)uOff << FP_SHIFT), TEX_MAX_FP);
-      v[i] = clampFix((int64_t)v[i] - ((int64_t)vOff << FP_SHIFT), TEX_MAX_FP);
+      u[i] =
+          clampFix((int64_t)u[i] - (int64_t)uOff * (1 << FP_SHIFT), TEX_MAX_FP);
+      v[i] =
+          clampFix((int64_t)v[i] - (int64_t)vOff * (1 << FP_SHIFT), TEX_MAX_FP);
     }
 #if SHAPOGFX3D_PERSPECTIVE >= 1
     // (u/w, v/w, 1/w) are linear in screen space. 1/w (Q26, positive) is
@@ -1922,7 +2014,6 @@ void Graphics3D::unlitVertex(const Vertex &in, const Material *mat,
 static inline void unlitHeader(TriHead &h, const Material *mat, uint8_t kind,
                                bool smooth) {
   h.flags = (uint8_t)(kind | opaqueFlag(mat) | (smooth ? 0 : TriFlags::FLAT));
-  h.mat = mat;
   h.alpha64 = materialAlpha64(mat);
   h.rasterFn = unlitRasterFn(mat, !smooth);
 }
@@ -1971,12 +2062,13 @@ static bool setupLine(LineEnd p, LineEnd q, int screenW, int screenH,
                     SCREEN_MAX);
   };
   const int64_t r0 = p.y >> FP_SHIFT;  // floor(ay)
-  g.xRef = steep ? xAt((r0 << FP_SHIFT) + FP_HALF) : xAt((r0 + 1) << FP_SHIFT);
+  g.xRef = steep ? xAt(r0 * (1 << FP_SHIFT) + FP_HALF)
+                 : xAt((r0 + 1) * (1 << FP_SHIFT));
 
   // Reference pixel: on the segment, in row yMin
   const int64_t yRef = ((int64_t)yMin << FP_SHIFT) + FP_HALF;
   h.xa = referenceColumn(xAt(yRef < p.y ? p.y : (yRef > q.y ? q.y : yRef)));
-  const int64_t ox = (((int64_t)h.xa << FP_SHIFT) + FP_HALF) - p.x;
+  const int64_t ox = ((int64_t)h.xa * (1 << FP_SHIFT) + FP_HALF) - p.x;
   const int64_t oy = yRef - p.y;
 
   // Attributes vary along the major axis: per row for steep lines, per
@@ -2032,7 +2124,7 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
 
   TriHead h;
   unlitHeader(h, mat, TriFlags::LINE, smooth);
-  h.sortKey = (a.vz >> 1) + (b.vz >> 1);
+  h.sortKey = sortKeyOf((int32_t)(((int64_t)a.vz + b.vz) / 2));
   h.layer = layerByte();
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
   PlaneSet ps;
@@ -2106,7 +2198,7 @@ void Graphics3D::emitLine(UnlitVertex a, UnlitVertex b, const Material *mat) {
 
   TriHead h;
   unlitHeader(h, mat, TriFlags::LINE, smooth);
-  h.sortKey = floatSortKey(a.view.z + b.view.z);
+  h.sortKey = sortKeyOf((a.view.z + b.view.z) * 0.5f);
   h.layer = layerByte();
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
   PlaneSet ps;
@@ -2144,7 +2236,7 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   const uint8_t r = (uint8_t)((a.r + 128) >> 8),
                 g = (uint8_t)((a.g + 128) >> 8),
                 b = (uint8_t)((a.b + 128) >> 8);
-  const int32_t sortKey = a.vz;
+  const int16_t sortKey = sortKeyOf(a.vz);
 #else
 void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   if (a.view.z > -zNear_) return;
@@ -2157,7 +2249,7 @@ void Graphics3D::emitPoint(const UnlitVertex &a, const Material *mat) {
   const int y0 = floorInt(sy - size * 0.5f + 0.5f);
   const uint8_t r = (uint8_t)(int)(a.r + 0.5f), g = (uint8_t)(int)(a.g + 0.5f),
                 b = (uint8_t)(int)(a.b + 0.5f);
-  const int32_t sortKey = floatSortKey(a.view.z);
+  const int16_t sortKey = sortKeyOf(a.view.z);
 #endif
   if (x0 + size <= 0 || x0 >= (int)screenW_) return;
   const int yMin = std::max(y0, 0);
@@ -2489,8 +2581,8 @@ void Graphics3D::beginRender() {
     const int last = (i + 1 < layerCount_) ? layers_[i + 1].first : triCount_;
     std::sort(entries_ + first, entries_ + last,
               [base](const TriEntry &a, const TriEntry &b) {
-                const int32_t ka = recOf(base, a)->sortKey;
-                const int32_t kb = recOf(base, b)->sortKey;
+                const int ka = recOf(base, a)->sortKey;
+                const int kb = recOf(base, b)->sortKey;
                 // Equal depth keeps the order the primitives were added in:
                 // records grow downwards, so the earlier one sits higher.
                 if (ka != kb) return ka < kb;
@@ -2514,10 +2606,19 @@ static inline void spanAdvance(Span &sp, int n) {
   sp.x0 = (coord_t)(sp.x0 + n);
 }
 
-// Depth plane of a record whose layer has depth: PartZ directly follows the
-// header in every such layout (TriRec<true, G, T>)
-static inline const Plane &depthPlane(const TriHead &h) {
-  return static_cast<const TriRec<true, false, false> &>(h).z;
+// Depth (8.24, or 1.15 with SHAPOGFX3D_DEPTH_BITS 16) of a record whose layer
+// has depth at pixel (x, yi). PartZ directly follows the header in every such
+// layout (TriRec<true, G, T>).
+static inline int32_t depthAt(const TriHead &h, int x, int yi) {
+  const PartZ &z = static_cast<const TriRec<true, false, false> &>(h);
+  const int ox = x - h.xa, oy = yi - h.yMin;
+#if SHAPOGFX3D_DEPTH_BITS == 16
+  const int32_t d = (int32_t)((uint32_t)(int32_t)z.zdx * (uint32_t)ox +
+                              (uint32_t)(int32_t)z.zdy * (uint32_t)oy);
+  return (int32_t)z.z0 * 2 + (d >> z.zsh);
+#else
+  return z.z.at(ox, oy);
+#endif
 }
 
 // Is frag nearer than e at the pixel at the center of the overlap [ox0, ox1)
@@ -2533,9 +2634,7 @@ static inline bool fragNearer(const Span &frag, const Span &e, int ox0, int ox1,
   if (frag.lay != e.lay) return true;
   if (frag.lay & LayerId::NO_DEPTH) return true;
   const int xc = (ox0 + ox1 - 1) >> 1;
-  const TriHead &f = *frag.tri, &g = *e.tri;
-  return depthPlane(f).at(xc - f.xa, yi - f.yMin) <
-         depthPlane(g).at(xc - g.xa, yi - g.yMin);
+  return depthAt(*frag.tri, xc, yi) < depthAt(*e.tri, xc, yi);
 }
 
 // Remove the range [ox0, ox1) from list element e = *pp.
@@ -2984,6 +3083,7 @@ struct SpanColor {
 
 // Texture coordinates of a span at its first pixel, as the walker takes them
 struct SpanTex {
+  const Texture *tex;
 #if SHAPOGFX3D_PERSPECTIVE == 2
   int32_t uw, vw, iw;     // plane values (see IW_NORM)
   int32_t duw, dvw, diw;  // per-pixel steps
@@ -3033,20 +3133,26 @@ static inline void spanAttrs(const REC &t, int ox, int oy, int n,
 #if SHAPOGFX3D_GOURAUD
     // The plane values at pixel centers inside the primitive lie within
     // 0..255 up to rounding; clamp the start value to guard the rounding.
-    auto clamp = [](int32_t v) {
-      return v < 0 ? 0 : (v > COLOR_MAX_FP ? COLOR_MAX_FP : v);
-    };
-    col.r = clamp(t.r.at(ox, oy));
-    col.g = clamp(t.g.at(ox, oy));
-    col.b = clamp(t.b.at(ox, oy));
-    col.dr = t.r.dx;
-    col.dg = t.g.dx;
-    col.db = t.b.dx;
+    // In 8.8, then 8.16 for the pixel loop
+    int32_t c[3];
+    for (int k = 0; k < 3; k++) {
+      const int32_t v = (int32_t)((uint32_t)((int32_t)t.c0[k] * 4) +
+                                  (uint32_t)(int32_t)t.dx[k] * (uint32_t)ox +
+                                  (uint32_t)(int32_t)t.dy[k] * (uint32_t)oy);
+      c[k] = (v < 0 ? 0 : (v > (255 << 8) ? (255 << 8) : v)) << 8;
+    }
+    col.r = c[0];
+    col.g = c[1];
+    col.b = c[2];
+    col.dr = (int32_t)t.dx[0] * 256;
+    col.dg = (int32_t)t.dx[1] * 256;
+    col.db = (int32_t)t.dx[2] * 256;
 #endif
   } else {
     col.setFlat(t.r, t.g, t.b);
   }
   if constexpr (REC::TEXTURED) {
+    st.tex = t.tex;
 #if SHAPOGFX3D_PERSPECTIVE == 2
     st.uw = t.uw.at(ox, oy);
     st.vw = t.vw.at(ox, oy);
@@ -3208,7 +3314,7 @@ static SHAPOGFX3D_HOT_ATTR void rasterSpanT(uint8_t *line, int x, int n,
   const uint32_t a64 = h.alpha64;
   if constexpr (TEX) {
 #if SHAPOGFX3D_TEXTURE
-    const Texture &tex = *h.mat->texture;
+    const Texture &tex = *st.tex;
 #if SHAPOGFX3D_PERSPECTIVE == 2
     const int32_t u0 = 0, v0 = 0, du0 = 0, dv0 = 0;  // set per sub-span
 #else

@@ -194,7 +194,8 @@ class NodeVisitor {
 namespace LayerFlags {
 // The layer carries no depth: its primitives are drawn in the order they were
 // added (the later one wins), and their records hold no depth plane, which
-// makes them 12 bytes smaller. Use it for geometry that is already ordered
+// makes them 12 bytes smaller (8 with SHAPOGFX3D_DEPTH_BITS=16). Use it for
+// geometry that is already ordered
 // back to front, such as a background.
 constexpr uint32_t NO_DEPTH = 1u << 0;
 }  // namespace LayerFlags
