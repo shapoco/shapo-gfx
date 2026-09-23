@@ -101,6 +101,9 @@ CMake も PlatformIO も使わない
 機能を無効にするとそのコードと作業メモリが減り、同じアリーナにより多くの形状を保持できます
 (:doc:`../gfx3d/concepts` の「省略できる機能」参照)。
 
+3D レンダラの出力フォーマット 1 つにつき、ピクセルループが約 14 KB (Cortex-M33) / 20 KB (Cortex-M0+) 増えます。
+16 ビットのフォーマットを片方しか使わないなら、もう片方 (``SHAPOGFX_FORMAT_RGB565`` か ``SHAPOGFX_FORMAT_RGB565BE``) を 0 にしてください。
+
 フォーマットのマクロと ``SHAPOGFX_COORD_BITS`` は、ヘッダを含む全ての翻訳単位で同じ値にしてください
 (CMake のオプションで指定した ``SHAPOGFX_COORD_BITS`` はライブラリの利用側にも伝わります)。
 

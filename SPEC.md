@@ -130,6 +130,12 @@ record when it is drawn; the pool holds `Config::spanCapacity` of them.
 Disabling a format removes its code from both renderers: the pixel cursors, the 2D
 per-format row operations, the 3D texture samplers and (for output formats) the 3D
 rasterizer table. Surfaces or textures in a disabled format are ignored at run time.
+An output format of the 3D renderer is the largest item: its rasterizer table
+instantiates the pixel loop for every texture format, blend mode and shading, about
+14 KB of code on a Cortex-M33 and 20 KB on a Cortex-M0+ (the part that
+`SHAPOGFX3D_HOT_ATTR` places in RAM). An application that draws into one 16-bit
+format should disable the other: `SHAPOGFX_FORMAT_RGB565=0` when it uses RGB565BE,
+or `SHAPOGFX_FORMAT_RGB565BE=0` when it uses RGB565.
 The format macros must have the same values in every translation unit.
 
 ## `shapoco::gfx2d`
