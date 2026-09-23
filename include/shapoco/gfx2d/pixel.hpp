@@ -182,7 +182,8 @@ constexpr Color rgb565ToColor(uint16_t p) {
          (((g6 << 2) | (g6 >> 4)) << 8) | ((b5 << 3) | (b5 >> 2));
 }
 
-// Fill n uint16_t pixels (writes 32 bits at a time where possible)
+// Fill n uint16_t pixels (writes 32 bits at a time where possible, four
+// words per iteration, which a Cortex-M3 and up turns into paired stores)
 static inline void fill16(uint16_t *dst, int n, uint16_t v) {
   if (n <= 0) return;
   if ((uintptr_t)dst & 2u) {
@@ -190,8 +191,16 @@ static inline void fill16(uint16_t *dst, int n, uint16_t v) {
     n--;
   }
   uint32_t *d32 = (uint32_t *)dst;
-  uint32_t v32 = ((uint32_t)v << 16) | v;
-  for (int i = 0; i < (n >> 1); i++) d32[i] = v32;
+  const uint32_t v32 = ((uint32_t)v << 16) | v;
+  int words = n >> 1;
+  for (; words >= 4; words -= 4) {
+    d32[0] = v32;
+    d32[1] = v32;
+    d32[2] = v32;
+    d32[3] = v32;
+    d32 += 4;
+  }
+  while (words-- > 0) *d32++ = v32;
   if (n & 1) dst[n - 1] = v;
 }
 

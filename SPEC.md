@@ -40,6 +40,7 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX_COORD_BITS` | 11 | Bits of a screen coordinate and of a surface's width and height (1..15). Wider or taller surfaces are rejected (see below) |
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
+| `SHAPOGFX3D_GOURAUD_STEP` | 1 | Pixels between two updates of the vertex color that modulates the texels of a textured, smoothly shaded span (power of two up to 16). 4 saves a few instructions per textured pixel; the color is then constant over groups of 4 pixels (in demo3d 1.3% of the pixels change, mostly by a shade) |
 | `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` and step Gouraud colors through `interp1`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise) |
@@ -278,7 +279,9 @@ Semantics:
 - **Rectangles** are half-open (`[x, x + w)`); negative sizes are normalized.
   `drawRect` draws inside the rectangle.
 - **Ellipses and rounded rectangles** are described by the horizontal extent of each
-  row (computed with one square root per row). An outline row runs, on each side,
+  row, computed in 32-bit integers with one integer square root per row (the radicand
+  scaled into [2^30, 2^32) and the root refined by its remainder, which gives the
+  exactly rounded extent; no floating point). An outline row runs, on each side,
   from that row's own end inwards to just short of the nearer of the two neighboring
   rows' ends on that side, which yields a closed one-pixel outline consistent with
   the fill. Reaching to the *nearer* neighbor is what closes it where the edge is

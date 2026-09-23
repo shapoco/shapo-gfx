@@ -25,6 +25,15 @@
 #define SHAPOGFX3D_PERSPECTIVE_STEP 16
 #endif
 
+// Pixels between two updates of the vertex color that modulates the texels of
+// a textured, smoothly shaded span (a power of two, 1..16). 1 updates it on
+// every pixel; 4 saves a few instructions per pixel and keeps the color of a
+// group of 4 pixels constant, which is invisible unless the color changes by
+// a whole shade within 4 pixels.
+#ifndef SHAPOGFX3D_GOURAUD_STEP
+#define SHAPOGFX3D_GOURAUD_STEP 1
+#endif
+
 // Optional features. Turning one off removes its code from the renderer and
 // shrinks the per-triangle and per-span working memory, so the same arena
 // holds more geometry. Like the perspective options above these are read by
@@ -131,6 +140,7 @@ static_assert(SHAPOGFX3D_DEPTH_BITS == 32 || SHAPOGFX3D_DEPTH_BITS == 16,
 #define SHAPOGFX3D_HOT_ATTR
 #endif
 // Architecture hooks (SHAPOGFX3D_RP2_INTERP is decided there)
+#include "../common/intmath.hpp"
 #include "arch/arch.hpp"
 
 namespace shapoco::gfx3d {
@@ -155,6 +165,10 @@ static constexpr int PERSPECTIVE_STEP = SHAPOGFX3D_PERSPECTIVE_STEP;
 static_assert(PERSPECTIVE_STEP >= 2 &&
                   (PERSPECTIVE_STEP & (PERSPECTIVE_STEP - 1)) == 0,
               "SHAPOGFX3D_PERSPECTIVE_STEP must be a power of two");
+static constexpr int GOURAUD_STEP = SHAPOGFX3D_GOURAUD_STEP;
+static_assert(GOURAUD_STEP >= 1 && GOURAUD_STEP <= 16 &&
+                  (GOURAUD_STEP & (GOURAUD_STEP - 1)) == 0,
+              "SHAPOGFX3D_GOURAUD_STEP must be a power of two up to 16");
 
 // Screen coordinates as stored (SHAPOGFX_COORD_BITS): a pixel position on
 // the screen, and one that may be negative (clipped values, differences)
@@ -661,17 +675,7 @@ static inline int32_t clampColorFP(int32_t v) {
   return v < 0 ? 0 : (v > COLOR_MAX ? COLOR_MAX : v);
 }
 
-// Integer square root (floor), Newton from above
-static inline uint32_t isqrt32(uint32_t v) {
-  if (v < 2) return v;
-  const int bits = 32 - __builtin_clz(v);
-  uint32_t r = 1u << ((bits + 1) >> 1);
-  for (;;) {
-    const uint32_t nr = (r + v / r) >> 1;
-    if (nr >= r) return r;
-    r = nr;
-  }
-}
+using gfx::intmath::isqrt32;
 // A vector of any length (components up to 2^30) to a Q15 unit vector
 static inline void normalizeQ15(int64_t x, int64_t y, int64_t z,
                                 int32_t out[3]) {
@@ -3137,6 +3141,7 @@ struct SpanColor {
     dr = dg = db = 0;
   }
   void advance() { r += dr, g += dg, b += db; }
+  void advance(int k) { r += dr * k, g += dg * k, b += db * k; }
   uint32_t r8() const { return (uint32_t)(r >> FIX_SHIFT) & 0xFFu; }
   uint32_t g8() const { return (uint32_t)(g >> FIX_SHIFT) & 0xFFu; }
   uint32_t b8() const { return (uint32_t)(b >> FIX_SHIFT) & 0xFFu; }
@@ -3149,6 +3154,7 @@ struct SpanColor {
     r = r8, g = g8, b = b8;
   }
   void advance() {}
+  void advance(int) {}
   uint32_t r8() const { return r; }
   uint32_t g8() const { return g; }
   uint32_t b8() const { return b; }
@@ -3295,6 +3301,14 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
   uint32_t sg = col.g6();
   uint32_t sb = col.b5();
 
+  // Texels are modulated by the vertex color (0..255): (c + 1) * t >> 8
+  // preserves the maximum value. A smooth span updates the color every
+  // GSTEP pixels (SHAPOGFX3D_GOURAUD_STEP).
+  constexpr int GSTEP = (TEX && !FLAT) ? GOURAUD_STEP : 1;
+  uint32_t cr = col.r8() + 1, cg = col.g8() + 1, cb = col.b8() + 1;
+  int gLeft = GSTEP;
+  (void)gLeft;
+
 #if SHAPOGFX3D_PERSPECTIVE == 2
   // Sub-spans of PERSPECTIVE_STEP pixels: (u, v) are exact at the sub-span
   // ends and interpolated linearly inside. uAcc/vAcc mirror the walker's
@@ -3335,11 +3349,6 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
       left--;
 #endif
       const uint32_t texel = tx.fetchNext(a4);
-      // Modulate the texel (5/6/5 bits) by the vertex color (0..255).
-      // (c + 1) * t >> 8 preserves the maximum value.
-      const uint32_t cr = col.r8() + 1;
-      const uint32_t cg = col.g8() + 1;
-      const uint32_t cb = col.b8() + 1;
       sr = (cr * (texel >> 11)) >> 8;
       sg = (cg * ((texel >> 5) & 63u)) >> 8;
       sb = (cb * (texel & 31u)) >> 8;
@@ -3370,7 +3379,22 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
     }
     cur.next();
 
-    if constexpr (!FLAT) col.advance();
+    if constexpr (!FLAT) {
+      if constexpr (GSTEP == 1) {
+        col.advance();
+        if constexpr (TEX) {
+          cr = col.r8() + 1;
+          cg = col.g8() + 1;
+          cb = col.b8() + 1;
+        }
+      } else if (--gLeft == 0) {
+        col.advance(GSTEP);
+        cr = col.r8() + 1;
+        cg = col.g8() + 1;
+        cb = col.b8() + 1;
+        gLeft = GSTEP;
+      }
+    }
   }
 }
 

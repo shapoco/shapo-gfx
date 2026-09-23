@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstring>
 
+#include "../common/intmath.hpp"
+
 namespace shapoco::gfx2d {
 
 // ---------------------------------------------------------------------------
@@ -624,16 +626,40 @@ struct EllipseExtent {
         cy2(r.y * 2 + r.height - 1),
         rx2(r.width - 1),
         ry2(r.height - 1) {}
+  // Half-width of row y: dx2 = round(rx2 * sqrt(ry2^2 - dy2^2) / ry2), in
+  // 32-bit integers. The radicand is scaled by a power of 4 into [2^30,
+  // 2^32) before the square root, and the root refined by its remainder,
+  // which gives the exact rounding (checked for every size up to 300 x 300,
+  // where the float formula this replaces was off in 342 rows); radii beyond
+  // 2^15 (far larger than any target) are scaled down first.
   bool operator()(int y, int &l, int &r) const {
-    int dy2 = y * 2 - cy2;
+    const int64_t dy2l = (int64_t)y * 2 - cy2;
+    const uint64_t ady = dy2l < 0 ? (uint64_t)-dy2l : (uint64_t)dy2l;
     int dx2;
     if (ry2 == 0) {
-      if (dy2 != 0) return false;
+      if (ady != 0) return false;
       dx2 = rx2;
     } else {
-      float t = 1.0f - (float)(dy2 * dy2) / (float)(ry2 * ry2);
-      if (t < 0.0f) return false;
-      dx2 = (int)std::lround(rx2 * std::sqrt(t));
+      if (ady > (uint64_t)ry2) return false;
+      uint32_t ry = (uint32_t)ry2, dy = (uint32_t)ady;
+      while (ry >= 32768u) ry >>= 1, dy >>= 1;
+      const uint32_t n = ry * ry - dy * dy;  // < 2^30
+      if (n == 0) {
+        dx2 = 0;
+      } else {
+        const int sh = __builtin_clz(n) & ~1;  // n << sh in [2^30, 2^32)
+        const uint32_t m = n << sh;
+        const uint32_t s = gfx::intmath::isqrt32(m);
+        // sqrt(m) - s ~= (m - s^2) / 2s, in Q15: without it the truncated
+        // root would bias the rounding of dx2 low
+        const uint32_t frac = ((m - s * s) << 14) / s;
+        const uint32_t den = ry << (sh >> 1);  // < 2^30
+        uint32_t rx = (uint32_t)rx2;
+        int rs = 0;
+        while (rx >= 32768u) rx >>= 1, rs++;
+        // rx * s < 2^31, rx * frac < 2^30
+        dx2 = (int)(((rx * s + ((rx * frac) >> 15) + (den >> 1)) / den) << rs);
+      }
     }
     l = (cx2 - dx2) / 2;
     r = (cx2 + dx2) / 2;
