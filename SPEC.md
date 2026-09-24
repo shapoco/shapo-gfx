@@ -338,9 +338,11 @@ templates.
 ### Fonts (`fonts.hpp`, `gfxfont.h`, `font/*.h`)
 
 `gfxfont.h` is the Adafruit GFXfont structure (BSD license, see LICENSE). The bundled
-ShapoSans fonts (generated with ShapoFont) are `const GFXfont` objects in the global
-namespace: `ShapoSansMono_s08c07`, `ShapoSansP_s08c07`, `ShapoSansP_s12c09a01w02`,
-`ShapoSansP_s21c16a01w03`. Any GFXfont from the Adafruit ecosystem can be used.
+fonts (generated with ShapoFont) are `const GFXfont` objects in the global namespace:
+`ShapoSansMono_s08c07`, `ShapoSansP_s05`, `ShapoSansP_s07c05a01`, `ShapoSansP_s08c07`,
+`ShapoSansP_s12c09a01w02`, `ShapoSansP_s21c16a01w03`, `ShapoSansP_s27c22a01w04` and
+`MameSeg7_s40c38w06` (7-segment; `.`, `0`-`9` and `A`-`F` only). Any GFXfont from the
+Adafruit ecosystem can be used.
 
 ### Geometry (`math2d.hpp`)
 
