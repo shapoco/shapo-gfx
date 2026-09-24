@@ -249,6 +249,52 @@ static void drawPanel(g2::Graphics2D &g, float t) {
               Rect{0, 0, PANEL_W / 2, PANEL_H - 24}, g2::BlendMode::NONE);
 }
 
+static void drawTransforms(g2::Graphics2D &g, float t) {
+  // Scaled: a thumbnail of the RGB444 panel and a mirrored copy of it
+  const int x = 334, y = 100, tw = PANEL_W * 2 / 3, th = PANEL_H * 2 / 3;
+  g.drawImage(panelSurface, Rect{x, y, tw, th}, g2::BlendMode::NONE);
+  g.drawImage(panelSurface, Rect{x + tw * 2 + 6, y, -tw, th},
+              g2::BlendMode::NONE);
+  // Transformed: the panel turning about its center, and the ball sprite
+  // squashed and spun about its own center
+  g.drawImage(panelSurface,
+              g2::affine2f::placement(372, 200, t * 0.6f, 0.7f, 0.7f,
+                                      PANEL_W * 0.5f, PANEL_H * 0.5f),
+              g2::BlendMode::NONE);
+  const float squash = 1.0f + 0.35f * std::sin(t * 4.0f);
+  g.drawImage(texBall,
+              g2::affine2f::placement(440, 200, -t * 1.5f, 1.4f * squash,
+                                      1.4f / squash, BALL * 0.5f, BALL * 0.5f));
+}
+
+static void drawCharts(g2::Graphics2D &g, float t) {
+  // Pie chart on a flat ellipse: parametric angles keep the slices'
+  // areas in proportion
+  static const int values[] = {35, 25, 20, 12, 8};
+  const Rect pie = {20, 160, 120, 64};
+  g.fillEllipse(pie.offset(0, 6), g2::makeColor(0, 0, 40, 60));  // shadow
+  float a = t * 0.3f;
+  for (int i = 0; i < 5; i++) {
+    const float sweep = values[i] * (2 * PI / 100);
+    g.fillSector(pie, a, a + sweep, g2::makeColorHsv(200 + i * 36, 170, 240));
+    a += sweep;
+  }
+  g.drawEllipse(pie, g2::makeColor(40, 40, 70));
+  // Progress ring: two concentric arcs
+  const int cx = 170, cy = 192, r = 20;
+  const float progress = std::fmod(t * 0.25f, 1.0f);
+  g.drawCircle(cx, cy, r, g2::makeColor(40, 40, 70, 80));
+  for (int k = 0; k < 3; k++) {
+    g.drawCircleArc(cx, cy, r - k, -PI / 2, -PI / 2 + progress * 2 * PI,
+                    g2::makeColor(230, 90, 40));
+  }
+  char buf[8];
+  std::snprintf(buf, sizeof(buf), "%d%%", (int)(progress * 100));
+  g.setFont(&ShapoSansP_s08c07);
+  g.setTextColor(g2::makeColor(40, 40, 70));
+  g.drawString(cx - g.measureText(buf) / 2, cy - g.textHeight() / 2, buf);
+}
+
 static void drawText(g2::Graphics2D &g, float t) {
   const Rect box = {14, 14, 300, 124};
   g.fillRoundRect(box, 12, g2::makeColor(20, 24, 40, 180));
@@ -267,7 +313,7 @@ static void drawText(g2::Graphics2D &g, float t) {
   y += 30;
 
   g.setTextColor(g2::makeColor(200, 220, 255));
-  g.drawString(x, y, "Shapes, sprites, fonts, blending");
+  g.drawString(x, y, "Shapes, sprites, transforms, fonts");
   y += g.lineAdvance() + 2;
 
   g.setFont(&ShapoSansP_s08c07);
@@ -305,6 +351,8 @@ void sceneRender(g2::Graphics2D &g, float t) {
   drawStars(g, t);
   drawPanel(g, t);
   drawShapes(g, t);
+  drawCharts(g, t);
+  drawTransforms(g, t);
   drawIcons(g);
   drawBalls(g, t, dt);
   drawText(g, t);

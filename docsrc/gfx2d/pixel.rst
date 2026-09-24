@@ -120,6 +120,7 @@ Color (ARGB8888)
      uint32_t read() const;          // 現在のピクセル (ネイティブ表現)
      void write(uint32_t native);    // 現在のピクセルに書く
      void next();                    // 1 ピクセル進む
+     void skip(int n);               // n ピクセル進む
      void fill(int n, uint32_t v);   // n ピクセルを v で埋めて進む
    };
 

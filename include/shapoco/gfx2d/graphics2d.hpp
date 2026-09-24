@@ -108,6 +108,38 @@ class Graphics2D {
     drawEllipse(cx - radius, cy - radius, radius * 2 + 1, radius * 2 + 1, c);
   }
 
+  // --- Arcs and sectors -----------------------------------------------------
+  // The part of the ellipse inscribed in the rectangle from startAngle to
+  // endAngle (radians). Angles run clockwise on screen from the +x axis and
+  // are parametric: the ellipse is a stretched circle and an angle is taken
+  // on that circle, so 45 degrees points at the corner of the rectangle and
+  // sectors of equal angle have equal area. endAngle is taken modulo 2 pi
+  // after startAngle unless endAngle - startAngle >= 2 pi, which draws the
+  // whole ellipse. Sectors sharing an angle do not overlap and leave no gap.
+  //
+  // drawArc: the pixels of drawEllipse() within the angle range
+  void drawArc(const Rect &r, float startAngle, float endAngle, Color c);
+  void drawArc(int x, int y, int w, int h, float startAngle, float endAngle,
+               Color c) {
+    drawArc(Rect{x, y, w, h}, startAngle, endAngle, c);
+  }
+  // fillSector: the pixels of fillEllipse() within the angle range (a pie)
+  void fillSector(const Rect &r, float startAngle, float endAngle, Color c);
+  void fillSector(int x, int y, int w, int h, float startAngle, float endAngle,
+                  Color c) {
+    fillSector(Rect{x, y, w, h}, startAngle, endAngle, c);
+  }
+  void drawCircleArc(int cx, int cy, int radius, float startAngle,
+                     float endAngle, Color c) {
+    drawArc(cx - radius, cy - radius, radius * 2 + 1, radius * 2 + 1,
+            startAngle, endAngle, c);
+  }
+  void fillCircleSector(int cx, int cy, int radius, float startAngle,
+                        float endAngle, Color c) {
+    fillSector(cx - radius, cy - radius, radius * 2 + 1, radius * 2 + 1,
+               startAngle, endAngle, c);
+  }
+
   // --- Lines and polygons --------------------------------------------------
   void drawLine(int x0, int y0, int x1, int y1, Color c);
   void drawLine(const vec2i &a, const vec2i &b, Color c) {
@@ -140,6 +172,34 @@ class Graphics2D {
   }
   void drawImage(const Texture &img, int dx, int dy, const Rect &src,
                  BlendMode mode = BlendMode::ALPHA, int opacity = 255);
+  // Scaled: the source rectangle `src` of the image stretched over `dst`
+  // (nearest neighbor; each destination pixel takes the source pixel under
+  // its center). A negative width or height of `dst` mirrors the image in
+  // that direction. Parts of `src` outside the image are not drawn. Sizes
+  // beyond 32767 draw nothing.
+  void drawImage(const Texture &img, const Rect &dst, const Rect &src,
+                 BlendMode mode = BlendMode::ALPHA, int opacity = 255);
+  void drawImage(const Texture &img, const Rect &dst,
+                 BlendMode mode = BlendMode::ALPHA, int opacity = 255) {
+    drawImage(img, dst, Rect{0, 0, img.width, img.height}, mode, opacity);
+  }
+  void drawImage(const Texture &img, int dx, int dy, int dw, int dh, int sx,
+                 int sy, int sw, int sh, BlendMode mode = BlendMode::ALPHA,
+                 int opacity = 255) {
+    drawImage(img, Rect{dx, dy, dw, dh}, Rect{sx, sy, sw, sh}, mode, opacity);
+  }
+  // Transformed: `m` maps image coordinates (relative to the top-left corner
+  // of `src`, see affine2f) to target coordinates (nearest neighbor). Only
+  // the part of `src` inside the image is drawn; images wider or taller
+  // than 16384 pixels and transforms that shrink by more than 4096 draw
+  // nothing. A transform without rotation or shear that maps `src` onto
+  // whole pixels goes to the scaled (or the plain) drawImage().
+  void drawImage(const Texture &img, const affine2f &m, const Rect &src,
+                 BlendMode mode = BlendMode::ALPHA, int opacity = 255);
+  void drawImage(const Texture &img, const affine2f &m,
+                 BlendMode mode = BlendMode::ALPHA, int opacity = 255) {
+    drawImage(img, m, Rect{0, 0, img.width, img.height}, mode, opacity);
+  }
   // Draw a GRAY1 image as a two-color mask: set bits in `fg`, clear bits in
   // `bg` (TRANSPARENT leaves them untouched).
   void drawBitmap(const Texture &bitmap, int dx, int dy, Color fg,

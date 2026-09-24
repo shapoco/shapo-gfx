@@ -364,7 +364,7 @@ static inline Color nativeToColor(PixelFormat f, uint32_t p) {
 // Pixel cursors: sequential read/write access to one row of a given format.
 // init() positions the cursor at pixel x of the row starting at `line`.
 // read()/write() access the current pixel as a native pixel; next() advances;
-// fill() writes n pixels and advances past them.
+// skip() advances by n pixels; fill() writes n pixels and advances past them.
 
 #if SHAPOGFX_FORMAT_GRAY1
 struct CursorGray1 {
@@ -384,6 +384,11 @@ struct CursorGray1 {
       bit = 0;
       p++;
     }
+  }
+  void skip(int n) {
+    const uint32_t b = bit + (uint32_t)n;
+    p += b >> 3;
+    bit = b & 7u;
   }
   void fill(int n, uint32_t v) {
     while (n > 0 && bit != 0) {
@@ -429,6 +434,11 @@ struct CursorRgb444 {
     p += odd ? 2 : 1;
     odd = !odd;
   }
+  void skip(int n) {
+    const int s = (int)odd + n;
+    p += (s >> 1) * 3 + (s & 1) - (int)odd;
+    odd = (s & 1) != 0;
+  }
   void fill(int n, uint32_t v) {
     if (n <= 0) return;
     if (odd) {
@@ -461,6 +471,7 @@ struct CursorArgb4444 {
   uint32_t read() const { return *p; }
   void write(uint32_t v) { *p = (uint16_t)v; }
   void next() { p++; }
+  void skip(int n) { p += n; }
   void fill(int n, uint32_t v) {
     fill16(p, n, (uint16_t)v);
     p += n;
@@ -475,6 +486,7 @@ struct CursorRgb565Swapped {
   uint32_t read() const { return bswap16(*p); }
   void write(uint32_t v) { *p = bswap16((uint16_t)v); }
   void next() { p++; }
+  void skip(int n) { p += n; }
   void fill(int n, uint32_t v) {
     fill16(p, n, bswap16((uint16_t)v));
     p += n;
@@ -489,6 +501,7 @@ struct CursorRgb565 {
   uint32_t read() const { return *p; }
   void write(uint32_t v) { *p = (uint16_t)v; }
   void next() { p++; }
+  void skip(int n) { p += n; }
   void fill(int n, uint32_t v) {
     fill16(p, n, (uint16_t)v);
     p += n;

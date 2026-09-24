@@ -90,6 +90,7 @@ CMake も PlatformIO も使わない
    "``SHAPOGFX3D_GOURAUD_STEP``", "1", "テクスチャ付き・グーロー補間の線分で、テクセルに乗じる頂点色を更新する間隔 (ピクセル、16 以下の 2 の冪)。4 にするとテクスチャ付きピクセルの処理が少し軽くなり、色は 4 ピクセル単位で一定になる (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX_COORD_BITS``", "11", "スクリーン座標と Surface の幅・高さのビット数 (1〜15)。``2^bits - 1`` ピクセルを超える Surface は 2D の描画先として拒否され、3D の ``init()`` は失敗する。全翻訳単位で同じ値にすること"
    "``SHAPOGFX3D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で 16 ビットテクセルの参照とグーロー補間の色の歩進に SIO interpolator (``interp0`` / ``interp1``) を使う。RP2 と判定され (``PICO_RP2040`` / ``PICO_RP2350``)、``hardware/interp.h`` が見えるとき既定で有効。``hardware_interp`` のリンクが必要。0 で無効 (``gfx3d.cpp`` のみ)"
+   "``SHAPOGFX2D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で、``affine2f`` による ``drawImage()`` のうちストライドが 2 の冪の 16 ビット画像のピクセル参照に SIO interpolator (``interp0``) を使う。判定は ``SHAPOGFX3D_RP2_INTERP`` と同じ。``hardware_interp`` のリンクが必要。0 で無効 (``graphics2d.cpp`` のみ)"
    "``SHAPOGFX_ARCH_SPLIT_MUL64``", "Cortex-M0/M0+ と ESP8266 で 1、他は 0", "1 にすると 32x32→64 ビットの積をライブラリ呼び出しでなく 16x16 ビットの積 4 つで作る (乗算器が下位 32 ビットしか出さないコア向け。固定小数点の頂点段・セットアップ・透視補正除算)。結果は同じ"
    "``SHAPOGFX3D_DEPTH_BITS``", "32", "レコードの深度の精度 (32 または 16)。16 で深度付きレコードが 4 バイト小さくなる (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_TEXTURE``", "1", "0 でテクスチャ/環境マッピングを除去 (``gfx3d.cpp`` のみ)"
@@ -119,7 +120,7 @@ CMake も PlatformIO も使わない
 .. csv-table::
    :header: "ターゲット", "推奨"
 
-   "RP2350 (Cortex-M33 + FPU)", "既定の float ビルド。``SHAPOGFX3D_RP2_INTERP`` は ``hardware_interp`` があれば既定で有効。``SHAPOGFX3D_HOT_ATTR`` と ``SHAPOGFX3D_HOT_INSTANTIATE=1`` でラスタライズ側を RAM に置き、``Config::renderContexts = 2`` で 2 コア描画。RISC-V (Hazard3) モードでは FPU がないので ``SHAPOGFX3D_FIXED_POINT=1``"
+   "RP2350 (Cortex-M33 + FPU)", "既定の float ビルド。``SHAPOGFX3D_RP2_INTERP`` と ``SHAPOGFX2D_RP2_INTERP`` は ``hardware_interp`` があれば既定で有効 (回転・拡大するスプライトは幅 16 / 32 / 64 などストライドが 2 の冪になるようにすると後者が効く)。``SHAPOGFX3D_HOT_ATTR`` と ``SHAPOGFX3D_HOT_INSTANTIATE=1`` でラスタライズ側を RAM に置き、``Config::renderContexts = 2`` で 2 コア描画。RISC-V (Hazard3) モードでは FPU がないので ``SHAPOGFX3D_FIXED_POINT=1``"
    "RP2040 (Cortex-M0+、FPU なし)", "``SHAPOGFX3D_FIXED_POINT=1``、ラスタライズ側を RAM に、2 コア描画。XIP フラッシュ上のテクスチャはコードと 16 KB のキャッシュを奪い合うので、小さくよく使うテクスチャは RAM へコピーする。使わない 16 ビット出力フォーマットは無効化 (RAM 上のコードが約 20 KB 減る)。メモリや速度が足りなければ ``SHAPOGFX3D_DEPTH_BITS=16``、``SHAPOGFX3D_GOURAUD_STEP=4``"
    "ESP32-S3 (Xtensa LX7 + FPU)", "float ビルド。アリーナは PSRAM ではなく内部 SRAM に置く。``RGB565`` に描いて ``esp_lcd`` 側でバイトスワップし、2 つのレンダリングコンテキストで 2 コア描画 (各コアに固定したタスクから)"
    "ESP32-P4 (RISC-V + FPU、2 コア)", "S3 と同様。アリーナは内部メモリ (L2MEM) に。大きな 2D の転送や塗りはアプリ側で PPA / 2D-DMA に任せられる (3D レンダラでは使えない)"

@@ -18,6 +18,8 @@ portable C++17 with no platform dependencies.
 include/shapoco/gfx2d/   2D API and shared types
 include/shapoco/gfx3d/   3D renderer
 src/gfx2d/, src/gfx3d/   implementation
+src/common/              internal helpers of both renderers (integer math, target detection)
+src/gfx2d/arch.hpp       architecture hooks of the 2D renderer (internal; RP2)
 src/gfx3d/arch/          architecture hooks of the 3D renderer (internal; generic + RP2)
 example/wasm/            sample programs (WASM and native)
 docs/example/            browser pages for the samples
@@ -42,6 +44,7 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
 | `SHAPOGFX3D_GOURAUD_STEP` | 1 | Pixels between two updates of the vertex color that modulates the texels of a textured, smoothly shaded span (power of two up to 16). 4 saves a few instructions per textured pixel; the color is then constant over groups of 4 pixels (in demo3d 1.3% of the pixels change, mostly by a shade) |
 | `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` and step Gouraud colors through `interp1`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
+| `SHAPOGFX2D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): the transformed `drawImage()` of a 16-bit image whose stride is a power of two fetches the pixels through the SIO interpolator `interp0`. Detected like `SHAPOGFX3D_RP2_INTERP`; 0 turns it off |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise); see "Placing the rasterization side" |
 | `SHAPOGFX_ARCH_SPLIT_MUL64` | 1 on Cortex-M0/M0+ and ESP8266, else 0 | 1 forms 32x32 -> 64-bit products from four 16x16-bit ones inline instead of calling a library routine, for a core whose multiplier yields only the low 32 bits (fixed-point vertex stage, setup, perspective division); same results either way |
@@ -56,8 +59,9 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX3D_VCACHE_SIZE` | 64 | Entries of the vertex cache (power of two) |
 | `SHAPOGFX3D_LAYER_MAX` | 8 | Layers a scene can hold (1..128) |
 
-Every macro below `SHAPOGFX3D_` is read by `src/gfx3d/*.cpp` only and changes no
-public type, so translation units cannot disagree about them. `SHAPOGFX_COORD_BITS`
+Every macro below `SHAPOGFX3D_` is read by `src/gfx3d/*.cpp` only, and
+`SHAPOGFX2D_RP2_INTERP` by `src/gfx2d/*.cpp` only; they change no public type, so
+translation units cannot disagree about them. `SHAPOGFX_COORD_BITS`
 lives in `config.hpp` like the format macros and must have the same value in every
 translation unit (the CMake option passes it on as a public definition).
 
@@ -70,11 +74,12 @@ coordinate differences 32 bits, which is what lets the 2D line and polygon walke
 and the 3D span stage do without 64-bit arithmetic. The public types (`int`,
 `Rect`, `vec2i`, `Surface::width`) do not change.
 
-The 3D renderer's architecture-specific code lives in `src/gfx3d/arch/`, behind a
-few hooks with a portable implementation that is always present (`generic.hpp`);
-`arch.hpp` detects the target (`SHAPOGFX_ARCH_RP2`, `SHAPOGFX_ARCH_ESP32S3`,
-`SHAPOGFX_ARCH_ESP32P4`, else `SHAPOGFX_ARCH_GENERIC`; any of them may be defined
-by hand) and selects the implementation. The ESP8266 is `SHAPOGFX_ARCH_GENERIC`:
+`src/common/arch_detect.hpp` detects the target for both renderers
+(`SHAPOGFX_ARCH_RP2`, `SHAPOGFX_ARCH_ESP32S3`, `SHAPOGFX_ARCH_ESP32P4`, else
+`SHAPOGFX_ARCH_GENERIC`; any of them may be defined by hand). The 3D renderer's
+architecture-specific code lives in `src/gfx3d/arch/`, behind a few hooks with a
+portable implementation that is always present (`generic.hpp`); `arch.hpp` selects
+the implementation. The ESP8266 is `SHAPOGFX_ARCH_GENERIC`:
 the ESP8266_RTOS_SDK defines `ESP_PLATFORM` too, but its `CONFIG_IDF_TARGET_ESP8266`
 selects nothing. `SHAPOGFX_ARCH_SPLIT_MUL64` (on by default for `__ARM_ARCH_6M__` and
 the ESP8266 -- `CONFIG_IDF_TARGET_ESP8266`, `ESP8266` or `ARDUINO_ARCH_ESP8266` --
@@ -86,6 +91,16 @@ right, used by the perspective division), the texture walker (`InterpTex` on RP2
 (hardware state that `render()` saves and restores). With `SHAPOGFX3D_RP2_INTERP` the target
 must link `hardware_interp`; `render()` saves and restores `interp0` and `interp1` of
 the calling core, so interrupt handlers running during `render()` must not use them.
+
+The 2D renderer has one hook (`src/gfx2d/arch.hpp`): with `SHAPOGFX2D_RP2_INTERP`
+the transformed `drawImage()` walks the source through `interp0` -- lane 0 turns
+the 16.16 u into the byte offset of the texel, lane 1 the 16.16 v into the byte
+offset of the row (hence the power-of-two stride), `POP_FULL` returns the address
+and steps both -- which takes the per-pixel fetch of a copy from 11 instructions
+to 5 on the Cortex-M33. The call saves and restores `interp0` of the calling core;
+the same caveat about interrupt handlers applies, and the target must link
+`hardware_interp`. Every other image goes through the portable walk, which gives
+the same pixels.
 
 ### Optional features of the 3D renderer
 
@@ -198,7 +213,7 @@ Per-format helpers (all `inline`): pack/unpack (`makeRgb565`, `packRgb565`,
 
 `CursorGray1`, `CursorRgb444`, `CursorArgb4444`, `CursorRgb565Swapped`, `CursorRgb565` give sequential
 access to one row: `init(line, x)`, `read()`, `write(native)`, `next()`,
-`fill(n, native)`. `FormatTraits<F>` maps a format to its cursor and its Color
+`skip(n)`, `fill(n, native)`. `FormatTraits<F>` maps a format to its cursor and its Color
 conversions; `blendNative<F>` and `addNative<F>` blend native pixels. These are the
 building blocks of both renderers and are available to applications.
 
@@ -262,6 +277,12 @@ class Graphics2D {
   void fillEllipse(const Rect &, Color); void drawEllipse(const Rect &, Color);
   void fillCircle(int cx, int cy, int r, Color); void drawCircle(int cx, int cy, int r, Color);
 
+  // arcs and sectors of the same ellipses (angles in radians, see below)
+  void drawArc(const Rect &, float start, float end, Color);    void drawArc(x, y, w, h, start, end, Color);
+  void fillSector(const Rect &, float start, float end, Color); void fillSector(x, y, w, h, start, end, Color);
+  void drawCircleArc(int cx, int cy, int r, float start, float end, Color);
+  void fillCircleSector(int cx, int cy, int r, float start, float end, Color);
+
   // lines and polygons
   void drawLine(int x0, int y0, int x1, int y1, Color);
   void drawPolyline(const vec2i *, int n, Color); void drawPolygon(const vec2i *, int n, Color);
@@ -271,6 +292,12 @@ class Graphics2D {
   // images
   void drawImage(const Texture &, int dx, int dy, BlendMode = ALPHA, int opacity = 255);
   void drawImage(const Texture &, int dx, int dy, const Rect &src, BlendMode = ALPHA, int opacity = 255);
+  void drawImage(const Texture &, const Rect &dst, const Rect &src, BlendMode = ALPHA, int opacity = 255);  // scaled
+  void drawImage(const Texture &, const Rect &dst, BlendMode = ALPHA, int opacity = 255);
+  void drawImage(const Texture &, int dx, int dy, int dw, int dh, int sx, int sy, int sw, int sh,
+                 BlendMode = ALPHA, int opacity = 255);
+  void drawImage(const Texture &, const affine2f &, const Rect &src, BlendMode = ALPHA, int opacity = 255);  // transformed
+  void drawImage(const Texture &, const affine2f &, BlendMode = ALPHA, int opacity = 255);
   void drawBitmap(const Texture &gray1, int dx, int dy, Color fg, Color bg = TRANSPARENT);
   void drawBitmap(const Texture &gray1, int dx, int dy, const Rect &src, Color fg, Color bg = TRANSPARENT);
 
@@ -300,6 +327,23 @@ Semantics:
   many columns apart and the end pixels alone would leave a dotted line. Where the
   edge is steep the neighbors are one column away and the row is its end pixels, as
   before.
+- **Arcs and sectors** are the pixels of `drawEllipse()` / `fillEllipse()` whose
+  direction from the center lies within the angle range, so they share the
+  ellipses' extents. Angles are radians, clockwise on screen from the +x axis,
+  and parametric: an angle `t` is the direction of `(rx cos t, ry sin t)`, so 45
+  degrees points at the corner of the rectangle and equal angles cut equal areas
+  (a pie chart on an ellipse stays in proportion). The range runs from `start`
+  to `end` taken modulo 2 pi after it; `end - start >= 2 pi` is the whole
+  ellipse, `end == start` nothing. Each edge is rounded once to an integer
+  direction (length 8192, less for ellipses over 65536 pixels) and becomes a
+  half-plane `a px + b py > 0` in doubled coordinates relative to the center;
+  per row it limits the extent to one column range, found with two integer
+  divisions. A range up to pi is the intersection of the half-plane after
+  `start` and the one before `end`, a larger one the complement of the range
+  from `end` to `start`. Ties are broken as if every pixel were moved by
+  `(e, e^2)` for an infinitesimal `e`, so no pixel lies on an edge: sectors that
+  share an angle neither overlap nor leave a gap, and the center pixel of an
+  odd-sized ellipse belongs to exactly one of them.
 - **Lines** walk the major axis with a 16.16 fixed-point minor coordinate and are
   clipped along the major axis before stepping; runs of pixels on the same row are
   filled as spans. Both end points are drawn. The walk is 32-bit only: it works
@@ -319,6 +363,39 @@ Semantics:
   per-pair row templates converting through RGB565 (lossless for every color depth;
   GRAY1 targets keep the `Color` luminance threshold); `ADD` goes through `Color` in
   chunks of 64 pixels on the stack.
+- **Scaled drawImage** stretches the source rectangle over the destination
+  rectangle with nearest-neighbor sampling at pixel centers: destination pixel
+  `t` of `dw` shows source pixel `floor((2t + 1) sw / 2dw)`. A negative
+  destination width or height mirrors the image (the rectangle is normalized
+  and the source counted from the far end); a negative source size is
+  normalized. Source pixels outside the image are not drawn, the source
+  rectangle keeps defining the scale. Sizes up to 32767 are accepted (larger
+  ones draw nothing), which keeps every product of the mapping within 32 bits;
+  the mapping is exact, without floating point. Equal sizes without mirroring
+  go to the unscaled `drawImage()`. Per axis the call finds the visible range
+  and the walker state with a few divisions; rows then step a DDA (source row
+  = integer step plus a remainder that carries). Horizontally a reduction
+  steps the same way per destination pixel; an enlargement walks the source
+  pixels instead, each covering a run of `q` or `q + 1` destination pixels
+  (Bresenham's run-slice), so that copies and ARGB4444 sprites write runs
+  with `fill()` and convert every source pixel once. A plain copy into a
+  16-bit target `memcpy`s the previous row wherever consecutive rows show the
+  same source row. The modes and opacities behave as in `drawImage()`: same
+  format copies and blends and ARGB4444 sprites have their own row loops,
+  every other combination goes through `Color` in chunks of 64 pixels.
+- **Transformed drawImage** maps the source rectangle's coordinates (its top-left
+  corner is the origin) through an `affine2f` and samples the pixel under each
+  destination pixel center. The inverse transform is computed once in float;
+  per row a float estimate picks a reference column inside the image's
+  footprint, and from there the row is clipped exactly in 16.16 fixed point
+  (the columns whose `u` and `v` lie in the part of the source rectangle inside
+  the image), so the per-pixel walk (`u += du`, `v += dv`) needs no bounds
+  check and never reads outside that part. Images up to 16384 pixels and
+  transforms that shrink by at most 4096 are drawn (the limits keep the fixed
+  point within 32 bits); a transform without rotation or shear that puts the
+  corners on whole pixels goes to the exact scaled (or plain) `drawImage()`.
+  On a core without an FPU the per-row setup is a few software float
+  operations; the pixels are integer only.
 - **drawBitmap** renders a GRAY1 image as a two-color mask; runs of equal bits become
   spans. A transparent background leaves clear bits untouched.
 - **Text** uses Adafruit `GFXfont` data. `setFont` computes the ascent (largest height
@@ -348,7 +425,29 @@ Adafruit ecosystem can be used.
 
 `vec2f`, `colorf` (float RGBA used by the 3D API), `vec2i`, `Rect` (with `right()`,
 `bottom()`, `contains`, `normalized`, `intersect`, `offset`), `clamp01`, `clampInt`,
-`lerp`.
+`lerp`, and `affine2f`:
+
+```c++
+struct affine2f {            // x' = a x + c y + tx, y' = b x + d y + ty
+  float a, b, c, d, tx, ty;
+  static affine2f identity(), translation(x, y), scaling(sx, sy), scaling(s),
+                  rotation(angle), rotation(angle, cx, cy), shearing(kx, ky);
+  // the point (pivotX, pivotY) to (x, y), scaled by (sx, sy), then rotated about it
+  static affine2f placement(x, y, angle, sx = 1, sy = 1, pivotX = 0, pivotY = 0);
+  affine2f &translate(x, y), &scale(sx, sy), &scale(s), &rotate(angle), &shear(kx, ky),
+           &multiply(const affine2f &);   // multiply on the right: applies first
+  vec2f apply(x, y) const; vec2f apply(vec2f) const; vec2f applyLinear(vec2f) const;
+  float determinant() const; bool invert(affine2f &out) const;
+};
+affine2f operator*(const affine2f &m, const affine2f &n);  // n first, then m
+vec2f operator*(const affine2f &, const vec2f &);
+```
+
+Coordinates are continuous (pixel `(x, y)` covers `[x, x + 1) x [y, y + 1)`), angles
+are radians and turn clockwise on screen. The member functions work like a canvas
+context: `translation(x, y).rotate(a).scale(s).translate(-w / 2, -h / 2)` centers an
+image on `(x, y)`, which is what `placement(x, y, a, s, s, w / 2, h / 2)` builds
+directly.
 
 ## `shapoco::gfx3d`
 
@@ -840,7 +939,9 @@ The library is portable; these are the settings that suit the targets it was tun
 for (checked by cross-compiling and on the host, not on hardware).
 
 - **RP2350** (Cortex-M33 with FPU): the default float build. `SHAPOGFX3D_RP2_INTERP`
-  is on by default with the Pico SDK's `hardware_interp`. Put the rasterization side
+  and `SHAPOGFX2D_RP2_INTERP` are on by default with the Pico SDK's `hardware_interp`;
+  give sprites that are rotated or scaled with an `affine2f` a power-of-two stride
+  (e.g. 16, 32 or 64 pixels wide) to let the 2D one take them. Put the rasterization side
   in RAM with `SHAPOGFX3D_HOT_ATTR='__attribute__((section(".time_critical.gfx3d")))'`
   and `SHAPOGFX3D_HOT_INSTANTIATE=1`, and render on both cores with
   `Config::renderContexts = 2`. In RISC-V (Hazard3) mode there is no FPU: use
@@ -1025,7 +1126,9 @@ served as a static site.
   sprites with alpha and additive blending, GRAY1 bitmaps with and without a
   background color, an RGB444 off-screen surface drawn with a second `Graphics2D` and
   blitted (whole and partial), rounded rectangles, circles, ellipses, triangles, lines,
-  pixels, clipping and text in all four fonts including scaling and measurement.
+  pixels, clipping and text in all four fonts including scaling and measurement,
+  a pie chart (`fillSector`) and a progress ring (`drawCircleArc`), and the
+  offscreen panel scaled, mirrored and rotated next to a squashed, spinning sprite.
 - `example/wasm/demo3d/`: a textured floor, an environment-mapped torus (`putTorus`),
   opaque, alpha-blended and additive cubes, and a vertex-colored windmill generated
   from `model/windmill.glb` (`model/make_windmill.py`) with `gltf2cpp` whose "Blades"
@@ -1039,7 +1142,14 @@ served as a static site.
 `test/` builds `shapogfx_tests` (registered with CTest) without any external
 framework. It checks color conversions and cursors for every enabled format, blending
 identities, `Graphics2D` clipping, fills, polygons, lines, ellipses, image blits,
-bitmaps and text metrics, consistency between RGB565_SWAPPED and RGB444 targets (and RGB565
+bitmaps and text metrics, scaled and transformed images (every format pair and
+blend mode against a per-pixel reference built from 1 x 1 blits, the mapping of
+the scaled path exactly, the transformed one wherever a pixel center is not within
+1/500 texel of a texel edge; nothing outside the source rectangle is read even
+where centers fall on its edges; whole-pixel transforms equal the scaled path),
+`affine2f`, arcs and sectors (a full turn equals the ellipse, sectors between
+consecutive cuts cover it exactly once, parametric angles, wrap-around), cursor
+`skip()`, consistency between RGB565_SWAPPED and RGB444 targets (and RGB565
 holding exactly the byte-swapped RGB565_SWAPPED pixels, drawn or blitted), and for
 the 3D renderer: banded versus whole-frame rendering (byte identical), offset
 rendering, transparent clear, all texture formats on both output formats, texel

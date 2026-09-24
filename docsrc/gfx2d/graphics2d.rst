@@ -65,6 +65,40 @@ Graphics2D
    "``void fillCircle(int cx, int cy, int radius, Color)``", "円の塗り (直径 ``2 * radius + 1``)"
    "``void drawCircle(int cx, int cy, int radius, Color)``", "円の輪郭"
 
+円弧と扇形
+================================================================================
+
+楕円 (矩形に内接) のうち、角度 ``startAngle`` から ``endAngle`` の範囲にある部分を描きます。
+``drawArc`` は ``drawEllipse`` の、``fillSector`` は ``fillEllipse`` のピクセルのうち範囲内のものだけを描くので、
+楕円と同じ形になります。
+
+.. csv-table::
+   :header: "メンバー", "説明"
+
+   "``void drawArc(const Rect &, float startAngle, float endAngle, Color)`` / ``drawArc(x, y, w, h, ...)``", "楕円弧"
+   "``void fillSector(const Rect &, float startAngle, float endAngle, Color)`` / ``fillSector(x, y, w, h, ...)``", "塗りつぶした扇形 (パイ)"
+   "``void drawCircleArc(int cx, int cy, int radius, float startAngle, float endAngle, Color)``", "円弧"
+   "``void fillCircleSector(int cx, int cy, int radius, float startAngle, float endAngle, Color)``", "円の扇形"
+
+- 角度はラジアンで、+x 軸から画面上で時計回りに測ります。
+- 角度は **媒介変数の角度** です。楕円を円を引き伸ばしたものとみなし、その円の上で角度を取ります
+  (角度 ``t`` は ``(rx cos t, ry sin t)`` の方向)。このため 45° は外接矩形の角を指し、同じ角度の扇形は同じ面積になります
+  (楕円の円グラフでも比率が保たれる)。
+- ``endAngle`` は ``startAngle`` の後ろへ 2π を法として取ります。``(0, -π/2)`` は 3/4 周です。
+  ``endAngle - startAngle >= 2π`` なら楕円全体、``endAngle == startAngle`` なら何も描きません。
+- 角度を共有する扇形同士は重ならず、隙間もできません (境界上のピクセルはどちらか一方だけに入る)。
+  円グラフを半透明で描いても継ぎ目が二重になりません。
+
+.. code-block:: cpp
+
+   // 円グラフ
+   float a = 0;
+   for (int i = 0; i < n; i++) {
+     const float sweep = values[i] * (2 * PI / total);
+     g.fillSector(40, 40, 120, 80, a, a + sweep, colors[i]);
+     a += sweep;
+   }
+
 線と多角形
 ================================================================================
 
@@ -100,6 +134,60 @@ Graphics2D
 
 ``opacity`` (0..255) は ``ALPHA`` と ``ADD`` で α に乗算されます。
 ``src`` で画像の一部だけを描けます。同じ 16bit フォーマット同士のコピーは ``memcpy`` になります。
+
+拡大縮小
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   void drawImage(const Texture &img, const Rect &dst, const Rect &src,
+                  BlendMode mode = BlendMode::ALPHA, int opacity = 255);
+   void drawImage(const Texture &img, const Rect &dst,
+                  BlendMode mode = BlendMode::ALPHA, int opacity = 255);  // 画像全体
+   void drawImage(const Texture &img, int dx, int dy, int dw, int dh,
+                  int sx, int sy, int sw, int sh,
+                  BlendMode mode = BlendMode::ALPHA, int opacity = 255);
+
+画像の ``src`` の範囲を ``dst`` に引き伸ばして描きます (最近傍)。描画先のピクセル ``t`` (``dw`` ピクセル中) は、
+その中心の下にあるソースピクセル ``floor((2t + 1) sw / 2dw)`` を表示します。
+
+- ``dst`` の幅・高さが負なら、その方向に鏡像反転します (矩形は正規化され、ソースを逆から数える)。
+  ``src`` の負のサイズは正規化されるだけです。
+- ``src`` のうち画像の外の部分は描かれません (拡大率は ``src`` のまま)。
+- 幅・高さは 32767 まで (それを超えると何も描かない)。写像は整数のみで正確に計算されます (浮動小数点を使わない)。
+- 等倍で反転なしなら通常の ``drawImage()`` になります。
+- ``mode`` と ``opacity`` は通常の ``drawImage()`` と同じです。
+
+アフィン変換
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   void drawImage(const Texture &img, const affine2f &m, const Rect &src,
+                  BlendMode mode = BlendMode::ALPHA, int opacity = 255);
+   void drawImage(const Texture &img, const affine2f &m,
+                  BlendMode mode = BlendMode::ALPHA, int opacity = 255);  // 画像全体
+
+``m`` (:doc:`../gfx3d/math` の ``affine2f``) で画像の座標 (``src`` の左上が原点) を描画先の座標へ写し、
+各ピクセルの中心の下にある画像のピクセルを描きます (最近傍)。
+
+.. code-block:: cpp
+
+   // スプライトを (x, y) を中心に angle 回転・1.5 倍して描く
+   g.drawImage(sprite, g2::affine2f::placement(x, y, angle, 1.5f, 1.5f,
+                                              sprite.width * 0.5f, sprite.height * 0.5f));
+
+- ``src`` のうち画像の内側だけが描かれ、その外は決して読みません。
+- 幅・高さ 16384 ピクセルを超える画像と、4096 分の 1 より強く縮小する変換は何も描きません
+  (固定小数点を 32 ビットに収めるための制限)。
+- 回転もせん断もなく、角が整数ピクセルに乗る変換は、正確な拡大縮小 (または等倍) の ``drawImage()`` に回されます。
+- ``mode`` と ``opacity`` は通常の ``drawImage()`` と同じです。
+- RP2040 / RP2350 では ``SHAPOGFX2D_RP2_INTERP`` (既定で有効) により、ストライドが 2 の冪の 16 ビット画像
+  (幅 16 / 32 / 64 などの ARGB4444 / RGB565 スプライト) のピクセル参照を SIO interpolator ``interp0`` で行います。
+  呼び出し中は ``interp0`` を保存・復元するので、その間に割り込みハンドラで ``interp0`` を使わないでください。
+
+ビットマップ
+--------------------------------------------------------------------------------
 
 .. code-block:: cpp
 
@@ -170,3 +258,10 @@ GraphicsState2D / TextState
 - 楕円と丸角矩形は行ごとの水平範囲 (1 行あたり平方根 1 回) で表し、輪郭は「隣接する両方の行に覆われない部分 + 端点」として
   描かれます。
 - フォーマットが異なる ``drawImage()`` は 64 ピクセル単位でスタック上のバッファを介して ``Color`` に変換します。
+- 拡大縮小の ``drawImage()`` は軸ごとの整数 DDA で進みます。縮小は描画先 1 ピクセルごとにソースを進め、
+  拡大はソースのピクセルごとに描画先の連続 (``q`` または ``q + 1`` ピクセル) を求めて、コピーと ARGB4444 スプライトでは
+  ``fill()`` でまとめて書きます。同じソース行が続く行は、16 ビットへのコピーなら前の行を ``memcpy`` します。
+- アフィン変換の ``drawImage()`` は逆変換を float で 1 度求め、行ごとに 16.16 固定小数点で画像内に収まる範囲を正確に
+  切り出してから、ピクセルごとに ``u += du``, ``v += dv`` と歩きます (ピクセルごとの範囲検査なし)。
+  FPU のないコアでは行ごとに数回のソフトウェア浮動小数点演算が入りますが、ピクセルごとの処理は整数のみです。
+- 円弧と扇形は、角度範囲の各辺を整数の方向ベクトルに 1 度丸めた半平面として表し、楕円の各行を整数除算 2 回で切り取ります。

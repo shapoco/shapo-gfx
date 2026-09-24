@@ -14,6 +14,52 @@
    "``colorf { float r, g, b, a; }``", "float 色 (3D API のマテリアルとライトで使用)。``+``, ``*`` (色・スカラ)、``lerp()``"
    "``Rect { int x, y, width, height; }``", "半開区間の矩形。``right()``, ``bottom()``, ``isEmpty()``, ``contains(x, y)``, ``normalized()``, ``intersect(r)``, ``offset(dx, dy)``"
    "``clamp01(float)``, ``clampInt(lo, hi, v)``", "クランプ"
+   "``affine2f { float a, b, c, d, tx, ty; }``", "2D アフィン変換。下記"
+
+affine2f
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   struct affine2f {  // x' = a x + c y + tx,  y' = b x + d y + ty
+     float a, b, c, d, tx, ty;
+     static affine2f identity();
+     static affine2f translation(float x, float y);
+     static affine2f scaling(float sx, float sy);
+     static affine2f scaling(float s);
+     static affine2f rotation(float angle);                  // 原点まわり
+     static affine2f rotation(float angle, float cx, float cy);  // (cx, cy) まわり
+     static affine2f shearing(float kx, float ky);           // x' = x + kx y, y' = ky x + y
+     // 画像の点 (pivotX, pivotY) を (x, y) へ。(sx, sy) 倍して、その点のまわりに angle 回す
+     static affine2f placement(float x, float y, float angle, float sx = 1,
+                               float sy = 1, float pivotX = 0, float pivotY = 0);
+
+     // 右から掛ける (後に書いたものが先に効く。canvas のコンテキストと同じ)
+     affine2f &translate(float x, float y);
+     affine2f &scale(float sx, float sy);
+     affine2f &scale(float s);
+     affine2f &rotate(float angle);
+     affine2f &shear(float kx, float ky);
+     affine2f &multiply(const affine2f &m);
+
+     vec2f apply(float x, float y) const;  vec2f apply(const vec2f &) const;
+     vec2f applyLinear(const vec2f &) const;  // 平行移動なし (方向ベクトル用)
+     float determinant() const;
+     bool invert(affine2f &out) const;       // 逆変換。特異なら false
+   };
+   affine2f operator*(const affine2f &m, const affine2f &n);  // n の後に m
+   vec2f operator*(const affine2f &m, const vec2f &p);
+
+座標は連続値で、ピクセル (x, y) は ``[x, x + 1) x [y, y + 1)`` を覆います (``translation(10, 20)`` で画像の左上角が
+ピクセル (10, 20) の左上角に来る)。角度はラジアンで、y 軸が下向きなので正の角度は画面上で時計回りです。
+
+.. code-block:: cpp
+
+   // 画像を (x, y) を中心に、中心のまわりに回転・拡大して置く
+   g2::affine2f m = g2::affine2f::translation(x, y);
+   m.rotate(angle).scale(2.0f).translate(-w * 0.5f, -h * 0.5f);
+   // 同じもの
+   g2::affine2f m2 = g2::affine2f::placement(x, y, angle, 2, 2, w * 0.5f, h * 0.5f);
 
 3D 型 (``shapoco::gfx3d``)
 ================================================================================

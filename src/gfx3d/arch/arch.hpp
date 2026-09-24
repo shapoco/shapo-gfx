@@ -7,13 +7,7 @@
 // (generic.hpp) always exists and is the reference: an architecture-specific
 // one computes the same result faster.
 //
-// Detection, or define one of these to 1 by hand:
-//   SHAPOGFX_ARCH_RP2      RP2040 / RP2350 (Pico SDK)
-//   SHAPOGFX_ARCH_ESP32S3  ESP32-S3 (ESP-IDF)
-//   SHAPOGFX_ARCH_ESP32P4  ESP32-P4 (ESP-IDF)
-// Anything else is SHAPOGFX_ARCH_GENERIC -- including the ESP8266, which the
-// ESP8266_RTOS_SDK builds with ESP_PLATFORM defined as well (its sdkconfig
-// names CONFIG_IDF_TARGET_ESP8266, which selects nothing here).
+// The target is detected by src/common/arch_detect.hpp.
 //
 // SHAPOGFX_ARCH_SPLIT_MUL64: 1 forms 32 x 32 -> 64-bit products from four
 // 16 x 16-bit ones inline (split_mul.hpp), for a core whose multiplier
@@ -22,25 +16,7 @@
 // ESP8266 (Xtensa lx106), else 0; define it by hand for another such core.
 // The results are the same either way.
 
-#if !defined(SHAPOGFX_ARCH_RP2) && !defined(SHAPOGFX_ARCH_ESP32S3) && \
-    !defined(SHAPOGFX_ARCH_ESP32P4) && !defined(SHAPOGFX_ARCH_GENERIC)
-#if defined(PICO_RP2040) || defined(PICO_RP2350)
-#define SHAPOGFX_ARCH_RP2 1
-#elif defined(ESP_PLATFORM)
-#if __has_include("sdkconfig.h")
-#include "sdkconfig.h"
-#endif
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-#define SHAPOGFX_ARCH_ESP32S3 1
-#elif defined(CONFIG_IDF_TARGET_ESP32P4)
-#define SHAPOGFX_ARCH_ESP32P4 1
-#endif
-#endif
-#endif
-#if !defined(SHAPOGFX_ARCH_RP2) && !defined(SHAPOGFX_ARCH_ESP32S3) && \
-    !defined(SHAPOGFX_ARCH_ESP32P4)
-#define SHAPOGFX_ARCH_GENERIC 1
-#endif
+#include "../../common/arch_detect.hpp"
 
 #ifndef SHAPOGFX_ARCH_SPLIT_MUL64
 #if defined(__ARM_ARCH_6M__) || defined(CONFIG_IDF_TARGET_ESP8266) || \

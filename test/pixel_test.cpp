@@ -94,6 +94,25 @@ static void testCursor(int width) {
       before.next();
       ref.next();
     }
+    // skip(n) lands where n next() calls do
+    for (int n = 0; n < 9; n++) {
+      uint8_t c1[128], c2[128];
+      std::memcpy(c1, a, sizeof(c1));
+      std::memcpy(c2, a, sizeof(c2));
+      typename T::Cursor s, t;
+      s.init(c1, start);
+      t.init(c2, start);
+      s.skip(n);
+      for (int i = 0; i < n; i++) t.next();
+      for (int i = 0; i < 3; i++) {
+        CHECK_EQ(s.read(), t.read());
+        s.write(maxVal ^ s.read());
+        t.write(maxVal ^ t.read());
+        s.next();
+        t.next();
+      }
+      CHECK(std::memcmp(c1, c2, sizeof(c1)) == 0);
+    }
   }
 }
 
