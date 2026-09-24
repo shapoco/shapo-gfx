@@ -16,21 +16,16 @@ namespace shapoco::gfx3d::arch::rp2 {
 // into the byte offset of the texel in its row, lane 1 turns v into the byte
 // offset of the row, and POP_FULL returns the texel address and steps both
 // accumulators. Only for 16-bit texels (ARGB4444 when ARGB, else RGB565_SWAPPED
-// when SWAP or native RGB565) with a power-of-two stride; returns the texel
-// as native RGB565 and its 4-bit alpha, like the portable walker.
+// when SWAP or native RGB565) with a power-of-two stride of at most 2^16
+// bytes and at least 2 texels each way, which the record of the primitive
+// states with its log2s (the logarithms of the sizes come from the record as
+// well; see PartTex in gfx3d.cpp); returns the texel as native RGB565 and its
+// 4-bit alpha, like the portable walker.
 template <bool ARGB, bool SWAP>
 struct InterpTex {
   static constexpr int FIX_SHIFT = 16;
-  static bool usable(const gfx2d::Texture &tex) {
-    const uint32_t s = tex.stride;
-    return tex.width >= 2 && tex.height >= 2 && s >= 2 && (s & (s - 1)) == 0 &&
-           gfx2d::log2Floor((int)s) <= FIX_SHIFT;
-  }
-  void init(const gfx2d::Texture &tex, int32_t u0, int32_t v0, int32_t du0,
-            int32_t dv0) {
-    const int log2w = gfx2d::log2Floor(tex.width);
-    const int log2h = gfx2d::log2Floor(tex.height);
-    const int log2s = gfx2d::log2Floor((int)tex.stride);
+  void init(const void *pixels, int log2w, int log2h, int log2s, int32_t u0,
+            int32_t v0, int32_t du0, int32_t dv0) {
     interp_config c = interp_default_config();
     interp_config_set_add_raw(&c, true);
     interp_config_set_shift(&c, FIX_SHIFT - 1);  // texel index x 2 bytes
@@ -41,7 +36,7 @@ struct InterpTex {
     interp_set_config(interp0, 1, &c);
     interp0->base[0] = (uint32_t)du0;
     interp0->base[1] = (uint32_t)dv0;
-    interp0->base[2] = (uintptr_t)tex.pixels;
+    interp0->base[2] = (uintptr_t)pixels;
     interp0->accum[0] = (uint32_t)u0;
     interp0->accum[1] = (uint32_t)v0;
   }

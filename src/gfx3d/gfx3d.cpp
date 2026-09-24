@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <new>
 #include <type_traits>
@@ -29,9 +30,15 @@
 // a textured, smoothly shaded span (a power of two, 1..16). 1 updates it on
 // every pixel; 4 saves a few instructions per pixel and keeps the color of a
 // group of 4 pixels constant, which is invisible unless the color changes by
-// a whole shade within 4 pixels.
+// a whole shade within 4 pixels. The default is 4 on the RP2040 / RP2350
+// (see arch/arch.hpp) and 1 elsewhere.
+#include "../common/arch_detect.hpp"
 #ifndef SHAPOGFX3D_GOURAUD_STEP
+#if defined(SHAPOGFX_ARCH_RP2)
+#define SHAPOGFX3D_GOURAUD_STEP 4
+#else
 #define SHAPOGFX3D_GOURAUD_STEP 1
+#endif
 #endif
 
 // Optional features. Turning one off removes its code from the renderer and
@@ -361,6 +368,11 @@ struct PartSmooth {
 struct PartFlat {
   uint8_t r, g, b;  // one color for the whole primitive (0..255)
 };
+// The texture's sizes are kept as their logarithms (setup computes them once
+// per primitive; the walkers need them per span): width and height are
+// rounded down to a power of two, and log2s is the logarithm of the stride
+// where the SIO interpolator of the RP2 can walk the texture (a power of two
+// up to 2^16 bytes, at least 2 texels each way), else TEX_NO_INTERP.
 struct PartTex {
   const Texture *tex;
 #if SHAPOGFX3D_PERSPECTIVE >= 1
@@ -368,7 +380,9 @@ struct PartTex {
 #else
   Plane u, v;  // texels, 16.16
 #endif
+  uint8_t log2w, log2h, log2s;
 };
+static constexpr uint8_t TEX_NO_INTERP = 0xFF;
 
 // D: the layer has a depth plane, G: interpolated (Gouraud) color, T: textured
 template <bool D, bool G, bool T>
@@ -380,6 +394,88 @@ struct TriRec : TriHead,
   static constexpr bool SMOOTH = G;
   static constexpr bool TEXTURED = T;
 };
+
+// Where the parts of a record lie behind its header, in every layout: PartZ
+// right after the header, the color part after that (or right after the
+// header in a layer without depth) and the texture part after the color
+// part. depthAt() and spanAttrs() reach the parts through these offsets
+// rather than through the record type, so that a rasterizer, which knows
+// only its own flat / textured variant, evaluates a span in one path
+// whatever the layer. The layout is checked below.
+static constexpr size_t alignUpTo(size_t v, size_t a) {
+  return (v + a - 1) & ~(a - 1);
+}
+static constexpr size_t colorPartOffset(bool depth) {
+  return sizeof(TriHead) + (depth ? sizeof(PartZ) : 0);
+}
+template <bool G>
+static constexpr size_t texPartOffset(bool depth) {
+  return alignUpTo(
+      colorPartOffset(depth) + (G ? sizeof(PartSmooth) : sizeof(PartFlat)),
+      alignof(PartTex));
+}
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#endif
+#if SHAPOGFX3D_DEPTH_BITS == 16
+#define SHAPOGFX3D_Z_FIRST z0
+#else
+#define SHAPOGFX3D_Z_FIRST z
+#endif
+// The offsets of the parts a layout has (a part it lacks reports the expected
+// value)
+template <bool D, bool G, bool T, bool HAS = D>
+struct RecZOffset {
+  using R = TriRec<D, G, T>;
+  static constexpr size_t v = offsetof(R, SHAPOGFX3D_Z_FIRST);
+};
+template <bool D, bool G, bool T>
+struct RecZOffset<D, G, T, false> {
+  static constexpr size_t v = sizeof(TriHead);
+};
+template <bool D, bool G, bool T, bool SMOOTH = G>
+struct RecColorOffset {
+  using R = TriRec<D, G, T>;
+  static constexpr size_t v = offsetof(R, c0);
+};
+template <bool D, bool G, bool T>
+struct RecColorOffset<D, G, T, false> {
+  using R = TriRec<D, G, T>;
+  static constexpr size_t v = offsetof(R, r);
+};
+template <bool D, bool G, bool T, bool HAS = T>
+struct RecTexOffset {
+  using R = TriRec<D, G, T>;
+  static constexpr size_t v = offsetof(R, tex);
+};
+template <bool D, bool G, bool T>
+struct RecTexOffset<D, G, T, false> {
+  static constexpr size_t v = texPartOffset<G>(D);
+};
+template <bool D, bool G, bool T>
+struct RecLayoutCheck {
+  static_assert(RecZOffset<D, G, T>::v == sizeof(TriHead),
+                "PartZ must follow the header");
+  static_assert(RecColorOffset<D, G, T>::v == colorPartOffset(D),
+                "the color part must follow the depth part");
+  static_assert(RecTexOffset<D, G, T>::v == texPartOffset<G>(D),
+                "PartTex must follow the color part");
+  static constexpr bool ok = true;
+};
+static_assert(RecLayoutCheck<false, false, false>::ok &&
+                  RecLayoutCheck<false, false, true>::ok &&
+                  RecLayoutCheck<false, true, false>::ok &&
+                  RecLayoutCheck<false, true, true>::ok &&
+                  RecLayoutCheck<true, false, false>::ok &&
+                  RecLayoutCheck<true, false, true>::ok &&
+                  RecLayoutCheck<true, true, false>::ok &&
+                  RecLayoutCheck<true, true, true>::ok,
+              "record layout");
+#undef SHAPOGFX3D_Z_FIRST
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 // Records are addressed by a 4-byte-unit offset from the start of the region,
 // which is what limits the triangle buffer to 256 KB.
@@ -437,7 +533,8 @@ enum : int {
 struct PlaneSet {
   Plane p[A_COUNT];  // A_T*: (u/w, v/w, 1/w), or (u, v) at level 0
   uint8_t fr, fg, fb;
-  const Texture *tex;  // textured primitives
+  uint8_t log2w, log2h, log2s;  // textured primitives, see PartTex
+  const Texture *tex;           // textured primitives
 };
 
 // The state of one render() call: its span pool and span lists, the
@@ -513,6 +610,11 @@ struct PrimSetup {
   int32_t amb[3], dif[3];  // material colors, 8.8
   int32_t alpha256;        // opacity, 0..256
   int32_t texWq, texHq;    // texture size in texels (integers)
+  // VertexBuffer::scale as a normalized fixed-point value (scale x 2^(16 +
+  // scaleSh) in [2^29, 2^30), or plain 16.16 for a scale of 2^13 and more)
+  // and bias in 16.16, for decoding packed vertices in integers
+  int32_t scaleQ[3], biasQ[3];
+  uint8_t scaleSh[3];
   bool vertexColor, add;
 #endif
 };
@@ -553,15 +655,17 @@ static constexpr float COORD_MAX = 1e8f;
   return (int)std::floor(clampf(v, -COORD_MAX, COORD_MAX));
 }
 
-// v x scale rounded to an integer, saturating at +-maxAbs; NaN maps to 0.
-// Converts the float setup's results to the record formats.
+// v x scale rounded to an integer, saturating at +-maxAbs (or at the largest
+// float below 2^31 where maxAbs is larger; the two differ by 127 at the very
+// limit only). Converts the float setup's results to the record formats.
+// Branch-free: the limits go through fminf / fmaxf (vminnm / vmaxnm on the
+// Cortex-M33; the setup calls this about twenty times per triangle), which
+// also map a NaN to -maxAbs instead of leaving it for the conversion.
 [[maybe_unused]] static inline int32_t fixF(float v, float scale,
                                             int32_t maxAbs) {
-  const float s = v * scale;
-  const float lim = (float)maxAbs;
-  if (s != s) return 0;
-  if (s <= -lim) return -maxAbs;
-  if (s >= lim) return maxAbs;
+  constexpr float FLOAT_INT_MAX = 2147483520.0f;  // 2^31 - 2^7
+  const float lim = maxAbs > 2147483520 ? FLOAT_INT_MAX : (float)maxAbs;
+  const float s = std::fmin(std::fmax(v * scale, -lim), lim);
   return (int32_t)(s < 0.0f ? s - 0.5f : s + 0.5f);
 }
 
@@ -801,6 +905,7 @@ void Graphics3D::init(const Config &cfg) {
   }
   contexts_ = (RenderContext *)p;
   contextCount_ = nctx;
+  linkedCount_ = -1;
   p += ctxBytes;
   for (int c = 0; c < nctx; c++) {
     RenderContext &rc = contexts_[c];
@@ -855,6 +960,7 @@ void Graphics3D::deinit() { *this = Graphics3D(); }
 
 void Graphics3D::beginScene() {
   triCount_ = 0;
+  linkedCount_ = -1;
   triDropped_ = 0;
   badIndices_ = 0;
   nodesDropped_ = 0;
@@ -1545,6 +1651,9 @@ void Graphics3D::storePrimitive(const TriHead &h, const PlaneSet &ps,
     }
     if constexpr (R::TEXTURED) {
       t.tex = ps.tex;
+      t.log2w = ps.log2w;
+      t.log2h = ps.log2h;
+      t.log2s = ps.log2s;
 #if SHAPOGFX3D_PERSPECTIVE >= 1
       t.uw = ps.p[A_T0];
       t.vw = ps.p[A_T1];
@@ -1556,6 +1665,22 @@ void Graphics3D::storePrimitive(const TriHead &h, const PlaneSet &ps,
     }
   });
   triCount_++;
+}
+
+// The texture of a primitive into its plane set: the pointer and the
+// logarithms of its sizes (see PartTex), computed once per primitive
+static inline void setTexture(PlaneSet &ps, const Texture *tex) {
+  ps.tex = tex;
+  ps.log2w = ps.log2h = 0;
+  ps.log2s = TEX_NO_INTERP;
+  if (!tex) return;
+  ps.log2w = (uint8_t)gfx2d::log2Floor(tex->width);
+  ps.log2h = (uint8_t)gfx2d::log2Floor(tex->height);
+  const uint32_t s = tex->stride;
+  if (tex->width >= 2 && tex->height >= 2 && s >= 2 &&
+      s <= (1u << FIX_SHIFT) && (s & (s - 1)) == 0) {
+    ps.log2s = (uint8_t)gfx2d::log2Floor((int)s);
+  }
 }
 
 // Header fields of a triangle other than its geometry. `smooth`: the vertex
@@ -1802,7 +1927,7 @@ __attribute__((noinline)) void Graphics3D::emitTriangleSetup(
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
 
   PlaneSet ps;
-  ps.tex = tex;
+  setTexture(ps, tex);
   // Flat: the color of the first vertex as passed in
   ps.fr = (uint8_t)(int)(a.sv.r + 0.5f);
   ps.fg = (uint8_t)(int)(a.sv.g + 0.5f);
@@ -1830,8 +1955,8 @@ __attribute__((noinline)) void Graphics3D::emitTriangleSetup(
       u[i] = clampf(cv[i]->sv.u, -30000.0f, 30000.0f);
       v[i] = clampf(cv[i]->sv.v, -30000.0f, 30000.0f);
     }
-    const int wPot = 1 << gfx2d::log2Floor(tex->width);
-    const int hPot = 1 << gfx2d::log2Floor(tex->height);
+    const int wPot = 1 << ps.log2w;
+    const int hPot = 1 << ps.log2h;
     const float uOff =
         (float)((int)std::floor(std::min({u[0], u[1], u[2]})) & ~(wPot - 1));
     const float vOff =
@@ -2037,7 +2162,7 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
   const bool depth = !(h.layer & LayerId::NO_DEPTH);
 
   PlaneSet ps;
-  ps.tex = tex;
+  setTexture(ps, tex);
   // Flat: the color of the first vertex as passed in
   ps.fr = (uint8_t)((a.sv.r + 128) >> 8);
   ps.fg = (uint8_t)((a.sv.g + 128) >> 8);
@@ -2066,8 +2191,8 @@ void Graphics3D::emitTriangle(const CachedVertex &a, const CachedVertex &b,
     // Wrap texture coordinates per triangle to keep them small (subtract the
     // texture period below the minimum from all three vertices; relative
     // values are unchanged). Sizes are powers of two.
-    const int wPot = 1 << gfx2d::log2Floor(tex->width);
-    const int hPot = 1 << gfx2d::log2Floor(tex->height);
+    const int wPot = 1 << ps.log2w;
+    const int hPot = 1 << ps.log2h;
     const int32_t uOff =
         (std::min({u[0], u[1], u[2]}) >> FP_SHIFT) & ~(wPot - 1);
     const int32_t vOff =
@@ -2450,10 +2575,12 @@ static inline const Vertex &vertexAt(const VertexBuffer &vb, uint16_t i,
 
 #if SHAPOGFX3D_FIXED_POINT
 // The fixed-point stage's input, from any of the three forms. A FixedVertex
-// is copied; the float forms are converted here, once per vertex and
-// primitive.
+// is copied and a PackedVertex is decoded in integers when the primitive
+// setup is at hand (its scale and bias in 16.16; the unlit path passes none
+// and takes the float decoding); a float Vertex is converted here, once per
+// vertex and primitive.
 static inline const VertexQ &vertexAtQ(const VertexBuffer &vb, uint16_t i,
-                                       VertexQ &tmp) {
+                                       const PrimSetup *ps, VertexQ &tmp) {
   if (vb.fixed) {
     const FixedVertex &f = vb.fixed[i];
     for (int k = 0; k < 3; k++) {
@@ -2463,6 +2590,21 @@ static inline const VertexQ &vertexAtQ(const VertexBuffer &vb, uint16_t i,
     tmp.u = (int32_t)f.uv[0] << 6;  // 1/1024 -> 16.16
     tmp.v = (int32_t)f.uv[1] << 6;
     tmp.color = f.color;
+    return tmp;
+  }
+  if (!vb.vertices && ps) {
+    const PackedVertex &p = vb.packed[i];
+    for (int k = 0; k < 3; k++) {
+      // position (int16) x scale (2^(16 + sh)) -> 16.16, then the bias
+      tmp.p[k] = clampFix((mulFit(p.position[k], ps->scaleQ[k]) >> ps->scaleSh[k]) +
+                              ps->biasQ[k],
+                          INT32_MAX);
+      // 1/127 -> Q15: 32768 / 127 = 258.016
+      tmp.n[k] = (int32_t)p.normal[k] * 258;
+    }
+    tmp.u = (int32_t)p.uv[0] << 6;  // 1/1024 -> 16.16
+    tmp.v = (int32_t)p.uv[1] << 6;
+    tmp.color = gfx2d::makeColor(p.color[0], p.color[1], p.color[2]);
     return tmp;
   }
   Vertex ftmp;
@@ -2491,7 +2633,7 @@ const CachedVertex &Graphics3D::fetchVertex(const VertexBuffer &vb, uint16_t vi,
   if (cv.tag != vi) {
 #if SHAPOGFX3D_FIXED_POINT
     VertexQ tmp;
-    shadeVertexQ(vertexAtQ(vb, vi, tmp), ps, cv);
+    shadeVertexQ(vertexAtQ(vb, vi, &ps, tmp), ps, cv);
 #else
     Vertex tmp;
     shadeVertex(vertexAt(vb, vi, tmp), ps, cv);
@@ -2510,7 +2652,7 @@ bool Graphics3D::fetchUnlitVertex(const VertexBuffer &vb, uint16_t vi,
   }
 #if SHAPOGFX3D_FIXED_POINT
   VertexQ tmp;
-  unlitVertexQ(vertexAtQ(vb, vi, tmp), mat, out);
+  unlitVertexQ(vertexAtQ(vb, vi, nullptr, tmp), mat, out);
 #else
   Vertex tmp;
   unlitVertex(vertexAt(vb, vi, tmp), mat, out);
@@ -2526,14 +2668,21 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
   if (!prim.vertexBuffer || !prim.indices) return;
   const VertexBuffer &vb = *prim.vertexBuffer;
   if (!vb.vertices && !vb.packed && !vb.fixed) return;
-  const uint16_t *idx = prim.indices;
-  int n = prim.indexCount;
+  PrimSetup ps;
+  setupPrimitive(mat, vb, ps);
+  putPrimitiveWith(prim, mat, ps);
+}
 
+// The per-primitive constants of the vertex stage for material `mat` and
+// the vertex buffer `vb` under the current matrix. A caller that adds several
+// primitives of the same material, matrix and buffer form (putCube()) computes
+// them once.
+void Graphics3D::setupPrimitive(const Material *mat, const VertexBuffer &vb,
+                                PrimSetup &ps) {
+  (void)vb;
 #if SHAPOGFX3D_FIXED_POINT
   refreshFixed();
 #endif
-  // Per-primitive constants of the vertex stage
-  PrimSetup ps;
   ps.mat = mat;
   ps.tex = materialTexture(mat);
   ps.texW = ps.tex ? (float)ps.tex->width : 0.0f;
@@ -2560,7 +2709,33 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
   ps.texHq = ps.tex ? (int32_t)ps.tex->height : 0;
   ps.vertexColor = (mat->flags & MaterialFlags::VERTEX_COLOR) != 0;
   ps.add = mat->blendMode == BlendMode::ADD;
+  if (!vb.vertices && !vb.fixed) {  // packed: decoded in integers
+    const float scale[3] = {vb.scale.x, vb.scale.y, vb.scale.z};
+    const float bias[3] = {vb.bias.x, vb.bias.y, vb.bias.z};
+    for (int k = 0; k < 3; k++) {
+      // scale x 2^(16 + sh) in [2^29, 2^30): sh = 13 - floor(log2 |scale|),
+      // at least 0 (a huge scale stays 16.16) and at most 46 (fToFix's
+      // range; a scale below 2^-33 model units is as good as zero)
+      const float s = scale[k];
+      int sh = 0;
+      if (s == s && s != 0.0f) {
+        sh = 13 - floatExponent(std::fabs(s));
+        sh = sh < 0 ? 0 : (sh > 46 ? 46 : sh);
+      }
+      ps.scaleQ[k] = fToFix(s * pow2f(FP_SHIFT + sh), 0, INT32_MAX);
+      ps.scaleSh[k] = (uint8_t)sh;
+      ps.biasQ[k] = fToFix(bias[k], FP_SHIFT, INT32_MAX);
+    }
+  }
 #endif
+}
+
+// Add the primitive `prim` (checked by putPrimitive()) with the constants ps
+void Graphics3D::putPrimitiveWith(const Primitive &prim, const Material *mat,
+                                  const PrimSetup &ps) {
+  const VertexBuffer &vb = *prim.vertexBuffer;
+  const uint16_t *idx = prim.indices;
+  int n = prim.indexCount;
 
   // Vertex cache: avoid re-transforming vertices shared by several triangles
   // (strips, fans, indexed meshes). Invalidated per primitive.
@@ -2636,7 +2811,15 @@ void Graphics3D::putPrimitive(const Primitive &prim) {
 }
 
 void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
+  if (!recBase_ || !curMat_) return;
   if (divs < 1) divs = 1;
+  // One vertex-stage setup (light in model space, fixed-point material
+  // colors) for all 6 x divs x divs quads: they share material and matrix
+  PrimSetup ps;
+  {
+    const VertexBuffer any = {0, nullptr};
+    setupPrimitive(curMat_, any, ps);
+  }
 
   static const int8_t FACE_NORMALS[6][3] = {
       {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1},
@@ -2694,7 +2877,7 @@ void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
         VertexBuffer vb = {4, quad};
         Primitive prim = {PrimitiveType::TRIANGLES, &vb, 6, QUAD_INDICES,
                           nullptr};
-        putPrimitive(prim);
+        putPrimitiveWith(prim, curMat_, ps);
       }
     }
   }
@@ -2706,6 +2889,50 @@ void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
 // Header of the record an entry points to
 static inline const TriHead *recOf(const uint8_t *base, TriEntry e) {
   return (const TriHead *)(base + (size_t)e * REC_UNIT);
+}
+
+// Sort n entries by the sort keys of their records, ascending, keeping the
+// order of equal keys: a radix sort of the 16-bit key in two passes of 8
+// bits through `tmp` (n entries), with `count` for the histogram. The second
+// pass is skipped when the high bytes of all keys are equal (a shallow scene),
+// which leaves a copy back instead. Two to four sequential passes over the
+// entries, against the n log n key fetches of a comparison sort.
+static void sortEntries(TriEntry *e, int n, TriEntry *tmp, uint16_t *count,
+                        const uint8_t *base) {
+  if (n < 2) return;
+  auto key = [base](TriEntry a) -> uint32_t {
+    return (uint16_t)((uint16_t)recOf(base, a)->sortKey ^ 0x8000u);
+  };
+  // Pass 1: the low byte, and the range of the high byte
+  std::memset(count, 0, 256 * sizeof(uint16_t));
+  uint32_t hiMin = 255, hiMax = 0;
+  for (int i = 0; i < n; i++) {
+    const uint32_t k = key(e[i]);
+    count[k & 255u]++;
+    hiMin = std::min(hiMin, k >> 8);
+    hiMax = std::max(hiMax, k >> 8);
+  }
+  uint16_t sum = 0;
+  for (int b = 0; b < 256; b++) {
+    const uint16_t c = count[b];
+    count[b] = sum;
+    sum = (uint16_t)(sum + c);
+  }
+  for (int i = 0; i < n; i++) tmp[count[key(e[i]) & 255u]++] = e[i];
+  if (hiMin == hiMax) {
+    std::memcpy(e, tmp, (size_t)n * sizeof(TriEntry));
+    return;
+  }
+  // Pass 2: the high byte, back into e
+  std::memset(count, 0, 256 * sizeof(uint16_t));
+  for (int i = 0; i < n; i++) count[key(tmp[i]) >> 8]++;
+  sum = 0;
+  for (int b = 0; b < 256; b++) {
+    const uint16_t c = count[b];
+    count[b] = sum;
+    sum = (uint16_t)(sum + c);
+  }
+  for (int i = 0; i < n; i++) e[count[key(tmp[i]) >> 8]++] = tmp[i];
 }
 
 void Graphics3D::beginRender() {
@@ -2725,20 +2952,16 @@ void Graphics3D::beginRender() {
     rc.dropped = 0;
     rc.link = link + (size_t)c * (size_t)triCount_;
   }
+  linkedCount_ = triCount_;
+  // The links of context 0 are unused until render(), so they take the
+  // entries between the passes of the sort (a layer has at most triCount_)
   const uint8_t *base = recBase_;
+  uint16_t count[256];
   for (int i = 0; i < layerCount_; i++) {
     if (layers_[i].id & LayerId::NO_DEPTH) continue;  // kept in the order added
     const int first = layers_[i].first;
     const int last = (i + 1 < layerCount_) ? layers_[i + 1].first : triCount_;
-    std::sort(entries_ + first, entries_ + last,
-              [base](TriEntry a, TriEntry b) {
-                const int ka = recOf(base, a)->sortKey;
-                const int kb = recOf(base, b)->sortKey;
-                // Equal depth keeps the order the primitives were added in:
-                // records grow downwards, so the earlier one sits higher.
-                if (ka != kb) return ka < kb;
-                return a > b;
-              });
+    sortEntries(entries_ + first, last - first, link, count, base);
   }
 }
 
@@ -3151,10 +3374,10 @@ struct SoftTex {
   uint32_t uMask, vMask, tstride;
   int32_t u, v, du, dv;
 
-  void init(const Texture &tex, int32_t u0, int32_t v0, int32_t du0,
-            int32_t dv0) {
-    uMask = (1u << gfx2d::log2Floor(tex.width)) - 1;
-    vMask = (1u << gfx2d::log2Floor(tex.height)) - 1;
+  void init(const Texture &tex, int log2w, int log2h, int32_t u0, int32_t v0,
+            int32_t du0, int32_t dv0) {
+    uMask = (1u << log2w) - 1;
+    vMask = (1u << log2h) - 1;
     tp = (const uint8_t *)tex.pixels;
     tstride = tex.stride;
     u = u0;
@@ -3269,6 +3492,7 @@ struct SpanColor {
 // Texture coordinates of a span at its first pixel, as the walker takes them
 struct SpanTex {
   const Texture *tex;
+  uint8_t log2w, log2h, log2s;  // see PartTex
 #if SHAPOGFX3D_PERSPECTIVE == 2
   int32_t uw, vw, iw;     // plane values (see IW_NORM)
   int32_t duw, dvw, diw;  // per-pixel steps
@@ -3308,13 +3532,19 @@ struct PerspDiv {
 #endif
 
 // Color and texture coordinates of a span of n pixels whose first pixel is
-// (ox, oy) from the reference pixel of its record t
-template <typename REC>
-static inline void spanAttrs(const REC &t, int ox, int oy, int n,
-                             SpanColor &col, SpanTex &st) {
+// (ox, oy) from the reference pixel of its record h. G: the color is
+// interpolated, T: textured (the rasterizer's own variant); whether the
+// record has a depth part is read from its layer, and the parts are reached
+// through the layout offsets (see colorPartOffset()).
+template <bool G, bool T>
+static SHAPOGFX3D_HOT_ATTR void spanAttrs(const TriHead &h, int ox, int oy,
+                                          int n, SpanColor &col, SpanTex &st) {
   (void)ox, (void)oy, (void)n, (void)st;  // unused by some configurations
-  if constexpr (REC::SMOOTH) {
+  const bool depth = !(h.layer & LayerId::NO_DEPTH);
+  const uint8_t *const rec = (const uint8_t *)&h;
+  if constexpr (G) {
 #if SHAPOGFX3D_GOURAUD
+    const PartSmooth &t = *(const PartSmooth *)(rec + colorPartOffset(depth));
     // The plane values at pixel centers inside the primitive lie within
     // 0..255 up to the rounding of the 8.8 gradients, which can take the
     // last pixel of a span slightly outside (a fan fading to black at its
@@ -3345,10 +3575,15 @@ static inline void spanAttrs(const REC &t, int ox, int oy, int n,
     col.db = d[2];
 #endif
   } else {
+    const PartFlat &t = *(const PartFlat *)(rec + colorPartOffset(depth));
     col.setFlat(t.r, t.g, t.b);
   }
-  if constexpr (REC::TEXTURED) {
+  if constexpr (T) {
+    const PartTex &t = *(const PartTex *)(rec + texPartOffset<G>(depth));
     st.tex = t.tex;
+    st.log2w = t.log2w;
+    st.log2h = t.log2h;
+    st.log2s = t.log2s;
 #if SHAPOGFX3D_PERSPECTIVE == 2
     st.uw = t.uw.at(ox, oy);
     st.vw = t.vw.at(ox, oy);
@@ -3417,11 +3652,14 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
 
   // Texels are modulated by the vertex color (0..255): (c + 1) * t >> 8
   // preserves the maximum value. A smooth span updates the color every
-  // GSTEP pixels (SHAPOGFX3D_GOURAUD_STEP).
+  // GSTEP pixels (SHAPOGFX3D_GOURAUD_STEP); when that is every pixel the
+  // color is read from the walker as c * t + t (one multiply-accumulate)
+  // instead of keeping c + 1 per channel.
   constexpr int GSTEP = (TEX && !FLAT) ? GOURAUD_STEP : 1;
+  constexpr bool COLOR_PER_PIXEL = TEX && !FLAT && GSTEP == 1;
   uint32_t cr = col.r8() + 1, cg = col.g8() + 1, cb = col.b8() + 1;
   int gLeft = GSTEP;
-  (void)gLeft;
+  (void)gLeft, (void)cr, (void)cg, (void)cb;
 
 #if SHAPOGFX3D_PERSPECTIVE == 2
   // Sub-spans of PERSPECTIVE_STEP pixels: (u, v) are exact at the sub-span
@@ -3463,9 +3701,17 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
       left--;
 #endif
       const uint32_t texel = tx.fetchNext(a4);
-      sr = (cr * (texel >> 11)) >> 8;
-      sg = (cg * ((texel >> 5) & 63u)) >> 8;
-      sb = (cb * (texel & 31u)) >> 8;
+      const uint32_t tr = texel >> 11, tg = (texel >> 5) & 63u,
+                     tb = texel & 31u;
+      if constexpr (COLOR_PER_PIXEL) {
+        sr = (col.r8() * tr + tr) >> 8;
+        sg = (col.g8() * tg + tg) >> 8;
+        sb = (col.b8() * tb + tb) >> 8;
+      } else {
+        sr = (cr * tr) >> 8;
+        sg = (cg * tg) >> 8;
+        sb = (cb * tb) >> 8;
+      }
     } else if constexpr (!FLAT) {
       sr = col.r5();
       sg = col.g6();
@@ -3496,11 +3742,6 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
     if constexpr (!FLAT) {
       if constexpr (GSTEP == 1) {
         col.advance();
-        if constexpr (TEX) {
-          cr = col.r8() + 1;
-          cg = col.g8() + 1;
-          cb = col.b8() + 1;
-        }
       } else if (--gLeft == 0) {
         col.advance(GSTEP);
         cr = col.r8() + 1;
@@ -3521,19 +3762,11 @@ static SHAPOGFX3D_HOT_ATTR void rasterSpanT(uint8_t *line, int x, int n,
   using O = OutTraits<OUT>;
   constexpr bool TEX = (T != TexFmt::NONE);
 
-  // Recover the record layout: the rasterizer's own flat/texture variant
-  // plus the layer's depth flag
   const TriHead &h = *sp.tri;
   const int ox = sp.x0 - h.xa, oy = yi - h.yMin;
   SpanColor col;
   SpanTex st;
-  if (h.layer & LayerId::NO_DEPTH) {
-    spanAttrs(static_cast<const TriRec<false, !FLAT, TEX> &>(h), ox, oy, n, col,
-              st);
-  } else {
-    spanAttrs(static_cast<const TriRec<true, !FLAT, TEX> &>(h), ox, oy, n, col,
-              st);
-  }
+  spanAttrs<!FLAT, TEX>(h, ox, oy, n, col, st);
 
   typename O::Cursor cur;
   cur.init(line, x);
@@ -3559,16 +3792,16 @@ static SHAPOGFX3D_HOT_ATTR void rasterSpanT(uint8_t *line, int x, int n,
                   T == TexFmt::ARGB4444) {
       using InterpTex = arch::rp2::InterpTex<T == TexFmt::ARGB4444,
                                              T == TexFmt::RGB565_SWAPPED>;
-      if (InterpTex::usable(tex)) {
+      if (st.log2s != TEX_NO_INTERP) {
         InterpTex tx;
-        tx.init(tex, u0, v0, du0, dv0);
+        tx.init(tex.pixels, st.log2w, st.log2h, st.log2s, u0, v0, du0, dv0);
         rasterLoop<B, T, FLAT, OUT>(cur, n, a64, col, st, tx);
         return;
       }
     }
 #endif
     SoftTex<T> tx;
-    tx.init(tex, u0, v0, du0, dv0);
+    tx.init(tex, st.log2w, st.log2h, u0, v0, du0, dv0);
     rasterLoop<B, T, FLAT, OUT>(cur, n, a64, col, st, tx);
 #endif
   } else {
@@ -3596,6 +3829,21 @@ static SHAPOGFX3D_HOT_ATTR void fillLineT(uint8_t *line, int x, int n,
 #define SHAPOGFX3D_HOT_INSTANTIATE 0
 #endif
 #if SHAPOGFX3D_HOT_INSTANTIATE
+// The attribute evaluation, where the compiler keeps it out of line
+#define SHAPOGFX3D_HOT_ATTRS(G, T)                                          \
+  template SHAPOGFX3D_HOT_ATTR void spanAttrs<G, T>(const TriHead &, int, int, \
+                                                    int, SpanColor &, SpanTex &);
+SHAPOGFX3D_HOT_ATTRS(false, false)
+#if SHAPOGFX3D_GOURAUD
+SHAPOGFX3D_HOT_ATTRS(true, false)
+#endif
+#if SHAPOGFX3D_TEXTURE
+SHAPOGFX3D_HOT_ATTRS(false, true)
+#if SHAPOGFX3D_GOURAUD
+SHAPOGFX3D_HOT_ATTRS(true, true)
+#endif
+#endif
+#undef SHAPOGFX3D_HOT_ATTRS
 #define SHAPOGFX3D_HOT_INST(B, T, FLAT, OUT)                      \
   template SHAPOGFX3D_HOT_ATTR void rasterSpanT<B, T, FLAT, OUT>( \
       uint8_t *, int, int, const Span &, int);
@@ -3777,6 +4025,9 @@ SHAPOGFX3D_HOT_ATTR void Graphics3D::render(int ctx, int16_t x, int16_t y,
                                             const Surface &dst, int16_t dstX,
                                             int16_t dstY) {
   if (!recBase_ || !dst.pixels || ctx < 0 || ctx >= contextCount_) return;
+  // Without beginRender() for this scene the links are unplaced (or placed
+  // for fewer primitives): draw nothing rather than write through them
+  if (linkedCount_ != triCount_) return;
   RenderContext &rc = contexts_[ctx];
   const int cap = spanCapacity_;
 

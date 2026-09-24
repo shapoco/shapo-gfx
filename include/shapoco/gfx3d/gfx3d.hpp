@@ -457,6 +457,8 @@ class Graphics3D {
   uint16_t *entries_ = nullptr;  // == recBase_, sorted by beginRender()
   int entryBytes_ = 4;  // per primitive: the entry and a link per context
   int triCount_ = 0;
+  int linkedCount_ = -1;  // triCount_ when beginRender() placed the links (-1:
+                          // not yet); render() draws nothing while they differ
 
   detail::LayerDesc *layers_ = nullptr;
   int layerCount_ = 0;
@@ -517,6 +519,13 @@ class Graphics3D {
 
   bool projectPoint(const vec3f &view, float &sx, float &sy, float &zNdc,
                     float &invW) const;
+  // putPrimitive() in two steps: the constants of the vertex stage for a
+  // material and buffer, then the primitive with them (putCube() reuses the
+  // constants for all its quads)
+  void setupPrimitive(const Material *mat, const VertexBuffer &vb,
+                      detail::PrimSetup &ps);
+  void putPrimitiveWith(const Primitive &prim, const Material *mat,
+                        const detail::PrimSetup &ps);
   // Transformed vertex `vi` of `vb`, from the vertex cache; decodes a packed
   // vertex on a miss. Out of line: putPrimitive() calls it from every branch.
   const detail::CachedVertex &fetchVertex(const VertexBuffer &vb, uint16_t vi,
