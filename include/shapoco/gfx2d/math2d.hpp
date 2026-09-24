@@ -114,6 +114,42 @@ struct Rect {
 };
 
 // ---------------------------------------------------------------------------
+// RectF (float, continuous: [x, x + width) x [y, y + height))
+
+struct RectF {
+  float x, y;
+  float width, height;
+
+  RectF() = default;
+  constexpr RectF(float x, float y, float w, float h)
+      : x(x), y(y), width(w), height(h) {}
+  constexpr RectF(const Rect &r)
+      : x((float)r.x), y((float)r.y), width((float)r.width),
+        height((float)r.height) {}
+
+  float right() const { return x + width; }
+  float bottom() const { return y + height; }
+  bool isEmpty() const { return !(width > 0.0f) || !(height > 0.0f); }
+
+  RectF normalized() const {
+    RectF r = *this;
+    if (r.width < 0.0f) {
+      r.x += r.width;
+      r.width = -r.width;
+    }
+    if (r.height < 0.0f) {
+      r.y += r.height;
+      r.height = -r.height;
+    }
+    return r;
+  }
+
+  RectF offset(float dx, float dy) const {
+    return {x + dx, y + dy, width, height};
+  }
+};
+
+// ---------------------------------------------------------------------------
 // affine2f: 2D affine transform
 //
 //   x' = a * x + c * y + tx

@@ -53,11 +53,16 @@ MameSeg7 は ``.``、``0``〜``9``、``A``〜``F`` のみを収録していま�
 
    #include "shapoco/gfx2d/fonts.hpp"
 
-   g.setFont(&ShapoSansP_s12c09a01w02);        // 第 2 引数で整数倍の拡大 (既定 1)
+   g.setFont(&ShapoSansP_s12c09a01w02);
    g.setTextColor(g2::Colors::WHITE);           // 前景のみ (背景は透過)
    g.drawString(8, 8, "Hello");
-   g.setFont(&ShapoSansMono_s08c07, 2);         // 2 倍拡大
+   g.setFont(&ShapoSansMono_s08c07);
    g.setTextColor(g2::Colors::YELLOW, g2::makeColor(0, 0, 128));  // 背景色付き
-   g.drawString("x2");                          // カーソル位置から続けて描く
+   g.drawString(" world");                      // カーソル位置から続けて描く
+   g.pushState();                               // 拡大・回転は変換行列で
+   g.translate(8, 30);
+   g.scale(2);
+   g.drawString(0, 0, "x2");
+   g.popState();
 
 文字描画の詳細 (カーソルの意味、行送り、計測) は :doc:`graphics2d` を参照してください。

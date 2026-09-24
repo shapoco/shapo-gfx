@@ -34,6 +34,7 @@ static const g2::Texture texIcon = {g2::PixelFormat::GRAY1, ICON, ICON,
 // RGB444 offscreen surface drawn every frame and then copied to the screen
 static constexpr int PANEL_W = 96, PANEL_H = 64;
 static uint8_t panelPixels[(PANEL_W * 3 / 2) * PANEL_H];
+static constexpr Color PANEL_BG = g2::makeColor(24, 28, 44);
 static const g2::Surface panelSurface = {g2::PixelFormat::RGB444, PANEL_W,
                                          PANEL_H, PANEL_W * 3 / 2, panelPixels};
 
@@ -169,11 +170,13 @@ static void drawBalls(g2::Graphics2D &g, float t, float dt) {
       // Alpha-blended sprite with a soft shadow underneath
       g.fillEllipse(x + 4, y + BALL - 6, BALL - 4, 8,
                     g2::makeColor(0, 0, 40, 60));
-      g.drawImage(texBall, x, y, g2::BlendMode::ALPHA);
+      g.drawImage(texBall, x, y);
     } else {
       // Additive "glow": pulsating opacity
       int op = 120 + (int)(100 * std::sin(t * 3.0f + i));
-      g.drawImage(texBall, x, y, g2::BlendMode::ADD, op);
+      g.setBlend(g2::BlendMode::ADD, op);
+      g.drawImage(texBall, x, y);
+      g.setBlend(g2::BlendMode::ALPHA);
     }
   }
 }
@@ -231,7 +234,7 @@ static void drawIcons(g2::Graphics2D &g) {
 static void drawPanel(g2::Graphics2D &g, float t) {
   // Draw into the RGB444 offscreen surface, then blit it to the screen
   g2::Graphics2D p(panelSurface);
-  p.clear(g2::makeColor(24, 28, 44));
+  p.clear(PANEL_BG);
   for (int i = 0; i < PANEL_W; i += 6) {
     int h = 14 + (int)(12 * std::sin(t * 2.5f + i * 0.15f));
     p.fillRect(i, PANEL_H - 6 - h, 5, h,
@@ -243,28 +246,39 @@ static void drawPanel(g2::Graphics2D &g, float t) {
   p.drawRect(0, 0, PANEL_W, PANEL_H, g2::makeColor(120, 140, 200));
 
   const int x = SCREEN_W - PANEL_W - 12, y = 12;
-  g.drawImage(panelSurface, x, y, g2::BlendMode::NONE);
-  // Partial copy (left half) with a source rectangle
+  g.drawImage(panelSurface, x, y);
+  // Partial copy (left half) with a source rectangle, its background keyed
+  // out
+  g.setColorKey(PANEL_BG);
   g.drawImage(panelSurface, x - PANEL_W / 2 - 8, y + 24,
-              Rect{0, 0, PANEL_W / 2, PANEL_H - 24}, g2::BlendMode::NONE);
+              Rect{0, 0, PANEL_W / 2, PANEL_H - 24});
+  g.clearColorKey();
 }
 
 static void drawTransforms(g2::Graphics2D &g, float t) {
   // Scaled: a thumbnail of the RGB444 panel and a mirrored copy of it
   const int x = 334, y = 100, tw = PANEL_W * 2 / 3, th = PANEL_H * 2 / 3;
-  g.drawImage(panelSurface, Rect{x, y, tw, th}, g2::BlendMode::NONE);
-  g.drawImage(panelSurface, Rect{x + tw * 2 + 6, y, -tw, th},
-              g2::BlendMode::NONE);
-  // Transformed: the panel turning about its center, and the ball sprite
-  // squashed and spun about its own center
-  g.drawImage(panelSurface,
-              g2::affine2f::placement(372, 200, t * 0.6f, 0.7f, 0.7f,
-                                      PANEL_W * 0.5f, PANEL_H * 0.5f),
-              g2::BlendMode::NONE);
+  g.drawImage(panelSurface, Rect{x, y, tw, th});
+  g.drawImage(panelSurface, Rect{x + tw * 2 + 6, y, -tw, th});
+  // Transformed: the panel turning about its center, with a frame and a
+  // caption that turn with it
+  g.pushState();
+  g.setTransform(g2::affine2f::placement(372, 200, t * 0.6f, 0.7f, 0.7f,
+                                         PANEL_W * 0.5f, PANEL_H * 0.5f));
+  g.drawImage(panelSurface, 0, 0);
+  g.drawRect(-3, -3, PANEL_W + 6, PANEL_H + 6, g2::makeColor(40, 40, 70), 3);
+  g.setFont(&ShapoSansP_s12c09a01w02);
+  g.setTextColor(g2::makeColor(40, 40, 70));
+  g.drawString(0, PANEL_H + 4, "rotate()");
+  g.popState();
+  // The ball sprite squashed and spun about its own center
   const float squash = 1.0f + 0.35f * std::sin(t * 4.0f);
-  g.drawImage(texBall,
-              g2::affine2f::placement(440, 200, -t * 1.5f, 1.4f * squash,
-                                      1.4f / squash, BALL * 0.5f, BALL * 0.5f));
+  g.pushState();
+  g.setTransform(g2::affine2f::placement(440, 200, -t * 1.5f, 1.4f * squash,
+                                         1.4f / squash, BALL * 0.5f,
+                                         BALL * 0.5f));
+  g.drawImage(texBall, 0, 0);
+  g.popState();
 }
 
 static void drawCharts(g2::Graphics2D &g, float t) {
@@ -292,7 +306,8 @@ static void drawCharts(g2::Graphics2D &g, float t) {
   std::snprintf(buf, sizeof(buf), "%d%%", (int)(progress * 100));
   g.setFont(&ShapoSansP_s08c07);
   g.setTextColor(g2::makeColor(40, 40, 70));
-  g.drawString(cx - g.measureText(buf) / 2, cy - g.textHeight() / 2, buf);
+  const g2::TextMetrics m = g.textMetrics(buf);
+  g.drawString(cx - (int)m.width / 2, cy - (int)m.height / 2, buf);
 }
 
 static void drawText(g2::Graphics2D &g, float t) {
@@ -309,26 +324,31 @@ static void drawText(g2::Graphics2D &g, float t) {
   std::snprintf(buf, sizeof(buf), "%.1fs", (double)t);
   g.setFont(&ShapoSansP_s12c09a01w02);
   g.setTextColor(g2::makeColor(255, 220, 120));
-  g.drawString(box.right() - 12 - g.measureText(buf), y + 6, buf);
+  g.drawString(box.right() - 12 - (int)g.textMetrics(buf).width, y + 6, buf);
   y += 30;
 
   g.setTextColor(g2::makeColor(200, 220, 255));
   g.drawString(x, y, "Shapes, sprites, transforms, fonts");
-  y += g.lineAdvance() + 2;
+  y += (int)g.textMetrics("").lineAdvance + 2;
 
   g.setFont(&ShapoSansP_s08c07);
   g.setTextColor(Colors::WHITE);
   g.drawString(x, y,
                "ShapoSansP_s08c07: proportional 8 px\nGRAY1 / RGB444 / "
                "ARGB4444 / RGB565_SWAPPED");
-  y += g.lineAdvance() * 2 + 2;
+  y += (int)g.textMetrics("").lineAdvance * 2 + 2;
 
   g.setFont(&ShapoSansMono_s08c07);
   g.setTextColor(g2::makeColor(140, 255, 160), g2::makeColor(0, 60, 30));
   g.drawString(x, y, "Mono 8px, bg color ");
-  g.setFont(&ShapoSansMono_s08c07, 2);
+  // Enlarged by the transform: scaled about the cursor
+  const g2::vec2i c = g.cursor();
+  g.pushState();
+  g.translate((float)c.x, (float)c.y);
+  g.scale(2);
   g.setTextColor(g2::makeColor(255, 160, 160));
-  g.drawString("x2");
+  g.drawString(0, 0, "x2");
+  g.popState();
 }
 
 // ---------------------------------------------------------------------------

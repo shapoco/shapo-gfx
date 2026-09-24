@@ -35,6 +35,15 @@ set(SHAPOGFX3D_DEPTH_BITS "" CACHE STRING
     "Depth resolution of the span records: 32 or 16 bits")
 set_property(CACHE SHAPOGFX3D_DEPTH_BITS PROPERTY STRINGS "" 32 16)
 
+# Options of the 2D renderer, read by src/gfx2d/*.cpp only like the ones above
+set(SHAPOGFX2D_STACK_DEPTH "" CACHE STRING "Levels of the 2D state stack")
+set(SHAPOGFX2D_TRANSFORM "" CACHE STRING "2D transforms (0/1)")
+set_property(CACHE SHAPOGFX2D_TRANSFORM PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX2D_BLEND "" CACHE STRING "2D blend modes and opacity (0/1)")
+set_property(CACHE SHAPOGFX2D_BLEND PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX2D_COLOR_KEY "" CACHE STRING "Color key of drawImage() (0/1)")
+set_property(CACHE SHAPOGFX2D_COLOR_KEY PROPERTY STRINGS "" 0 1)
+
 # Shared by gfx2d and gfx3d and read by config.hpp, so it has to be the same
 # in every translation unit: it is passed on to the users of the library.
 set(SHAPOGFX_COORD_BITS "" CACHE STRING
@@ -46,7 +55,9 @@ set(SHAPOGFX3D_OPTIONS
     SHAPOGFX3D_TEXTURE SHAPOGFX3D_GOURAUD SHAPOGFX3D_BLEND
     SHAPOGFX3D_LINES SHAPOGFX3D_POINTS
     SHAPOGFX3D_STACK_DEPTH SHAPOGFX3D_VCACHE_SIZE SHAPOGFX3D_LAYER_MAX
-    SHAPOGFX3D_FIXED_POINT SHAPOGFX3D_DEPTH_BITS)
+    SHAPOGFX3D_FIXED_POINT SHAPOGFX3D_DEPTH_BITS
+    SHAPOGFX2D_STACK_DEPTH SHAPOGFX2D_TRANSFORM SHAPOGFX2D_BLEND
+    SHAPOGFX2D_COLOR_KEY)
 set(SHAPOGFX_FEATURE_DEFS "")
 foreach(opt IN LISTS SHAPOGFX3D_OPTIONS)
     if(NOT "${${opt}}" STREQUAL "")

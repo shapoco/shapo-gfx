@@ -90,7 +90,11 @@ CMake も PlatformIO も使わない
    "``SHAPOGFX3D_GOURAUD_STEP``", "1", "テクスチャ付き・グーロー補間の線分で、テクセルに乗じる頂点色を更新する間隔 (ピクセル、16 以下の 2 の冪)。4 にするとテクスチャ付きピクセルの処理が少し軽くなり、色は 4 ピクセル単位で一定になる (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX_COORD_BITS``", "11", "スクリーン座標と Surface の幅・高さのビット数 (1〜15)。``2^bits - 1`` ピクセルを超える Surface は 2D の描画先として拒否され、3D の ``init()`` は失敗する。全翻訳単位で同じ値にすること"
    "``SHAPOGFX3D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で 16 ビットテクセルの参照とグーロー補間の色の歩進に SIO interpolator (``interp0`` / ``interp1``) を使う。RP2 と判定され (``PICO_RP2040`` / ``PICO_RP2350``)、``hardware/interp.h`` が見えるとき既定で有効。``hardware_interp`` のリンクが必要。0 で無効 (``gfx3d.cpp`` のみ)"
-   "``SHAPOGFX2D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で、``affine2f`` による ``drawImage()`` のうちストライドが 2 の冪の 16 ビット画像のピクセル参照に SIO interpolator (``interp0``) を使う。判定は ``SHAPOGFX3D_RP2_INTERP`` と同じ。``hardware_interp`` のリンクが必要。0 で無効 (``graphics2d.cpp`` のみ)"
+   "``SHAPOGFX2D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で、回転・せん断した ``drawImage()`` のうちストライドが 2 の冪の 16 ビット画像のピクセル参照に SIO interpolator (``interp0``) を使う。判定は ``SHAPOGFX3D_RP2_INTERP`` と同じ。``hardware_interp`` のリンクが必要。0 で無効 (``src/gfx2d`` のみ)"
+   "``SHAPOGFX2D_TRANSFORM``", "1", "0 で 2D の変換行列を除去する。``setTransform()`` などは何もせず、常に単位行列になる (``src/gfx2d`` のみ)"
+   "``SHAPOGFX2D_BLEND``", "1", "0 で 2D のブレンドモード (``ALPHA`` 以外) と不透明度を除去する。``setBlend()`` は何もしない (``src/gfx2d`` のみ)"
+   "``SHAPOGFX2D_COLOR_KEY``", "1", "0 で ``drawImage()`` のカラーキーを除去する。``setColorKey()`` は何もしない (``src/gfx2d`` のみ)"
+   "``SHAPOGFX2D_STACK_DEPTH``", "16", "2D のステートスタックの段数 (``src/gfx2d`` のみ)"
    "``SHAPOGFX_ARCH_SPLIT_MUL64``", "Cortex-M0/M0+ と ESP8266 で 1、他は 0", "1 にすると 32x32→64 ビットの積をライブラリ呼び出しでなく 16x16 ビットの積 4 つで作る (乗算器が下位 32 ビットしか出さないコア向け。固定小数点の頂点段・セットアップ・透視補正除算)。結果は同じ"
    "``SHAPOGFX3D_DEPTH_BITS``", "32", "レコードの深度の精度 (32 または 16)。16 で深度付きレコードが 4 バイト小さくなる (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_TEXTURE``", "1", "0 でテクスチャ/環境マッピングを除去 (``gfx3d.cpp`` のみ)"
@@ -101,7 +105,8 @@ CMake も PlatformIO も使わない
    "``SHAPOGFX3D_VCACHE_SIZE``", "64", "頂点キャッシュのエントリ数 (2 の冪。``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_LAYER_MAX``", "8", "1 シーンに持てるレイヤ数 (1〜128。``gfx3d.cpp`` のみ)"
 
-``gfx3d.cpp`` のみに影響するマクロは公開型を変えないので、翻訳単位ごとに食い違っても壊れません。
+``gfx3d.cpp`` / ``src/gfx2d`` のみに影響するマクロは公開型を変えないので、翻訳単位ごとに食い違っても壊れません。
+2D の機能を無効にした場合も、その関数は残り (何もしないだけ)、同じアプリケーションコードがそのままコンパイルできます。
 機能を無効にするとそのコードと作業メモリが減り、同じアリーナにより多くの形状を保持できます
 (:doc:`../gfx3d/concepts` の「省略できる機能」参照)。
 

@@ -26,6 +26,8 @@ static uint16_t fb[SCREEN_W * SCREEN_H];  // RGB565_SWAPPED
 static const g2::Surface fbSurface = {g2::PixelFormat::RGB565_SWAPPED, SCREEN_W,
                                       SCREEN_H, SCREEN_W * 2, fb};
 static g2::Graphics2D gfx;
+// State stack and scratch memory of gfx
+static uint8_t arena[4096];
 
 // ---------------------------------------------------------------------------
 // Exported API
@@ -38,6 +40,7 @@ DEMO2D_EXPORT int demo2d_get_height() { return SCREEN_H; }
 
 DEMO2D_EXPORT void demo2d_init() {
   demo2d::sceneInit();
+  gfx.init(arena, sizeof(arena));
   gfx.setTarget(fbSurface);
 }
 

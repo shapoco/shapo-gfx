@@ -24,6 +24,20 @@
 #define SHAPOGFX3D_POINTS 1
 #endif
 
+// Optional features of the 2D renderer (see src/gfx2d/internal.hpp)
+#ifndef SHAPOGFX2D_TRANSFORM
+#define SHAPOGFX2D_TRANSFORM 1
+#endif
+#ifndef SHAPOGFX2D_BLEND
+#define SHAPOGFX2D_BLEND 1
+#endif
+#ifndef SHAPOGFX2D_COLOR_KEY
+#define SHAPOGFX2D_COLOR_KEY 1
+#endif
+#ifndef SHAPOGFX2D_STACK_DEPTH
+#define SHAPOGFX2D_STACK_DEPTH 16
+#endif
+
 extern int g_checkFailures;
 
 #define CHECK(cond)                                                 \

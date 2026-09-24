@@ -14,6 +14,7 @@
    "``colorf { float r, g, b, a; }``", "float 色 (3D API のマテリアルとライトで使用)。``+``, ``*`` (色・スカラ)、``lerp()``"
    "``Rect { int x, y, width, height; }``", "半開区間の矩形。``right()``, ``bottom()``, ``isEmpty()``, ``contains(x, y)``, ``normalized()``, ``intersect(r)``, ``offset(dx, dy)``"
    "``clamp01(float)``, ``clampInt(lo, hi, v)``", "クランプ"
+   "``RectF { float x, y, width, height; }``", "``Rect`` の float 版 (連続座標)。``Rect`` から暗黙変換できる。``right()``, ``bottom()``, ``isEmpty()``, ``normalized()``, ``offset(dx, dy)``"
    "``affine2f { float a, b, c, d, tx, ty; }``", "2D アフィン変換。下記"
 
 affine2f
