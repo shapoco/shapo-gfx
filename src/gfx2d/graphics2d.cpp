@@ -675,16 +675,16 @@ static TextMetrics lineMetrics(const Graphics2D &g) {
   return m;
 }
 
-// The float version, with the size on the target
-static TextMetricsF withDeviceSize(const Graphics2D &g, const TextMetrics &i) {
-  TextMetricsF m;
-  m.width = (float)i.width;
-  m.height = (float)i.height;
-  m.ascent = (float)i.ascent;
-  m.lineAdvance = (float)i.lineAdvance;
+// Metrics on the target: scaled by the lengths of the transform's axes
+static TextMetricsF onTarget(const Graphics2D &g, const TextMetrics &i) {
   const affine2f &x = g.transform();
-  m.deviceWidth = m.width * std::sqrt(x.a * x.a + x.b * x.b);
-  m.deviceHeight = m.height * std::sqrt(x.c * x.c + x.d * x.d);
+  const float sx = std::sqrt(x.a * x.a + x.b * x.b);
+  const float sy = std::sqrt(x.c * x.c + x.d * x.d);
+  TextMetricsF m;
+  m.width = (float)i.width * sx;
+  m.height = (float)i.height * sy;
+  m.ascent = (float)i.ascent * sy;
+  m.lineAdvance = (float)i.lineAdvance * sy;
   return m;
 }
 
@@ -696,12 +696,12 @@ TextMetrics Graphics2D::charMetrics(int code) const {
   return m;
 }
 
-TextMetricsF Graphics2D::charMetricsF(int code) const {
-  return withDeviceSize(*this, charMetrics(code));
+TextMetricsF Graphics2D::deviceCharMetrics(int code) const {
+  return onTarget(*this, charMetrics(code));
 }
 
-TextMetricsF Graphics2D::textMetricsF(const char *str) const {
-  return withDeviceSize(*this, textMetrics(str));
+TextMetricsF Graphics2D::deviceTextMetrics(const char *str) const {
+  return onTarget(*this, textMetrics(str));
 }
 
 TextMetrics Graphics2D::textMetrics(const char *str) const {

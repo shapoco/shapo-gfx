@@ -269,7 +269,7 @@ draws nothing, 255 overwrites, anything else blends).
 struct Config {};                     // settings of init() (none yet)
 enum class TransformKind : uint8_t { IDENTITY, TRANSLATE, SCALE, AFFINE };
 struct TextMetrics { int width, height, ascent, lineAdvance; };   // integer only
-struct TextMetricsF { float width, height, ascent, lineAdvance, deviceWidth, deviceHeight; };
+struct TextMetricsF { float width, height, ascent, lineAdvance; };  // on the target
 struct TextState {
   const GFXfont *font; Color color, background;
   int cursorX, cursorY, lineStartX; int16_t ascent, lineHeight;
@@ -350,9 +350,7 @@ class Graphics2D {
   int drawChar(int x, int y, int code);        // returns the x advance
   void drawString(const char *); void drawString(int x, int y, const char *);
   TextMetrics charMetrics(int code) const; TextMetrics textMetrics(const char *) const;
-  TextMetricsF charMetricsF(int code) const; TextMetricsF textMetricsF(const char *) const;
-  [[deprecated]] int measureText(const char *) const; [[deprecated]] int charAdvance(int code) const;
-  [[deprecated]] int textHeight() const; [[deprecated]] int lineAdvance() const;
+  TextMetricsF deviceCharMetrics(int code) const; TextMetricsF deviceTextMetrics(const char *) const;
 };
 ```
 
@@ -520,12 +518,11 @@ Semantics:
   transform. `charMetrics()` and `textMetrics()` give sizes in the coordinates of the
   drawing calls (so they lay out text under the same transform), as integers: font
   metrics are whole pixels, and no floating point is involved (which matters on cores
-  without an FPU, such as the Cortex-M0+ or the ESP8266). `charMetricsF()` and
-  `textMetricsF()` give the same in float plus `deviceWidth` and `deviceHeight`:
-  `width` and `height` scaled by the lengths of the transform's columns, the size on
-  the target along the text's own axes (two square roots). The deprecated integer
-  functions return `textMetrics(str).width`, `charMetrics(code).width`,
-  `textMetrics("").height` and `textMetrics("").lineAdvance`.
+  without an FPU, such as the Cortex-M0+ or the ESP8266). `deviceCharMetrics()` and
+  `deviceTextMetrics()` measure the same on the target, in float: `width` scaled by the
+  length of the transform's x axis, `height`, `ascent` and `lineAdvance` by that of its
+  y axis, so along the text's own axes and unchanged by a rotation (two square
+  roots).
 
 Every drawing function switches on the target format once per call (or per row),
 never per pixel; the per-pixel loops are instantiated per format from the cursor
@@ -1269,7 +1266,7 @@ served as a static site.
 `test/` builds `shapogfx_tests` (registered with CTest) without any external
 framework. It checks color conversions and cursors for every enabled format, blending
 identities, `Graphics2D` clipping, fills, polygons, lines, ellipses, image blits,
-bitmaps, text and its metrics (and the deprecated integer versions), the blend state
+bitmaps, text and its metrics, the blend state
 (opacity against the color's alpha, additive shapes and text, `NONE` writing the
 alpha of an ARGB4444 target), the state stack (what is saved and restored, the
 cursor kept, the depth limit, a clip rectangle restored onto a smaller target),

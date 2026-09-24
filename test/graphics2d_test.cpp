@@ -346,28 +346,26 @@ static void testMetrics() {
   const TextMetrics t = g.textMetrics("ab\nabc\n");
   CHECK_EQ(t.width, g.textMetrics("abc").width);
   CHECK_EQ(t.height, a.height + 2 * a.lineAdvance);
-  CHECK_EQ(g.textMetricsF("ab\nabc\n").deviceWidth, t.width);
-  CHECK_EQ(g.textMetricsF("ab\nabc\n").height, t.height);
-  CHECK_EQ(g.charMetricsF('a').width, a.width);
+  // Without a transform the target measures the same
+  const TextMetricsF td = g.deviceTextMetrics("ab\nabc\n");
+  CHECK(td.width == t.width && td.height == t.height && td.ascent == t.ascent &&
+        td.lineAdvance == t.lineAdvance);
+  CHECK_EQ(g.deviceCharMetrics('a').width, a.width);
   CHECK_EQ(g.textMetrics(nullptr).height, a.height);
 #if SHAPOGFX2D_TRANSFORM
-  // In drawing coordinates; the device size follows the transform
+  // textMetrics() stays in drawing coordinates; on the target, x scales by
+  // 3 and y by 2 whatever the rotation
+  const TextMetrics tu = g.textMetrics("abc");
   g.rotate(0.7f);
   g.scale(3, 2);
-  const TextMetricsF ts = g.textMetricsF("abc");
-  CHECK_EQ(ts.width, g.textMetrics("abc").width);
-  CHECK_EQ(ts.height, g.textMetrics("abc").height);
-  CHECK(std::fabs(ts.deviceWidth - ts.width * 3) < 1e-3f);
-  CHECK(std::fabs(ts.deviceHeight - ts.height * 2) < 1e-3f);
+  const TextMetrics ti = g.textMetrics("abc");
+  CHECK(ti.width == tu.width && ti.height == tu.height);
+  const TextMetricsF ts = g.deviceTextMetrics("abc");
+  CHECK(std::fabs(ts.width - tu.width * 3) < 1e-3f);
+  CHECK(std::fabs(ts.height - tu.height * 2) < 1e-3f);
+  CHECK(std::fabs(ts.ascent - tu.ascent * 2) < 1e-3f);
+  CHECK(std::fabs(ts.lineAdvance - tu.lineAdvance * 2) < 1e-3f);
 #endif
-  // The deprecated integer versions
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  CHECK_EQ(g.measureText("ab\nabc"), g.textMetrics("abc").width);
-  CHECK_EQ(g.charAdvance('a'), ga.xAdvance);
-  CHECK_EQ(g.textHeight(), g.textState().lineHeight);
-  CHECK_EQ(g.lineAdvance(), f.yAdvance);
-#pragma GCC diagnostic pop
 }
 
 // Lines and polygons with vertices far outside the target: the walkers work

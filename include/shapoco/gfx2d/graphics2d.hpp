@@ -41,16 +41,14 @@ struct TextMetrics {
   int lineAdvance = 0;  // baseline to baseline
 };
 
-// The same in float, plus the size on the target
+// The same measured on the target: in target pixels along the text's own
+// axes, i.e. width scaled by the transform's x axis and the others by its y
+// axis (a rotation changes none of them)
 struct TextMetricsF {
   float width = 0.0f;
   float height = 0.0f;
   float ascent = 0.0f;
   float lineAdvance = 0.0f;
-  // width and height as they appear on the target: scaled by the
-  // transform along the text's own axes (rotation does not change them)
-  float deviceWidth = 0.0f;
-  float deviceHeight = 0.0f;
 };
 
 // Text settings of a Graphics2D
@@ -372,28 +370,14 @@ class Graphics2D {
     drawString(str);
   }
   // Size of one glyph (zero width if the font lacks it) and of a text
-  // (widest line; '\n' starts a line). Zero without a font. The F versions
-  // add the size on the target, which takes float math (software float on
-  // a core without an FPU); the others are integer only.
+  // (widest line; '\n' starts a line). Zero without a font. charMetrics()
+  // and textMetrics() measure in the coordinates of the drawing calls,
+  // integer only; the device versions measure on the target, which takes
+  // float math (software float on a core without an FPU).
   TextMetrics charMetrics(int code) const;
   TextMetrics textMetrics(const char *str) const;
-  TextMetricsF charMetricsF(int code) const;
-  TextMetricsF textMetricsF(const char *str) const;
-
-  [[deprecated("use textMetrics(str).width")]] int measureText(
-      const char *str) const {
-    return textMetrics(str).width;
-  }
-  [[deprecated("use charMetrics(code).width")]] int charAdvance(
-      int code) const {
-    return charMetrics(code).width;
-  }
-  [[deprecated("use textMetrics(\"\").height")]] int textHeight() const {
-    return textMetrics("").height;
-  }
-  [[deprecated("use textMetrics(\"\").lineAdvance")]] int lineAdvance() const {
-    return textMetrics("").lineAdvance;
-  }
+  TextMetricsF deviceCharMetrics(int code) const;
+  TextMetricsF deviceTextMetrics(const char *str) const;
 
  private:
   friend struct detail::G2Impl;

@@ -282,7 +282,7 @@ GRAY1 の画像を 2 色のマスクとして描きます。1 のビットを ``
    "``void drawString(int x, int y, const char *)``", "``setCursor()`` してから描く"
    "``TextMetrics charMetrics(int code) const``", "1 文字の寸法 (フォントにない文字は幅 0)。整数のみで計算する"
    "``TextMetrics textMetrics(const char *) const``", "文字列の寸法 (最も幅の広い行)。整数のみで計算する"
-   "``TextMetricsF charMetricsF(int code) const`` / ``TextMetricsF textMetricsF(const char *) const``", "同じ寸法を float で、描画先での大きさを加えて返す (float 演算を使う)"
+   "``TextMetricsF deviceCharMetrics(int code) const`` / ``TextMetricsF deviceTextMetrics(const char *) const``", "同じ寸法を描画先のピクセル単位で測って float で返す (float 演算を使う)"
    "``const TextState &textState() const``", "文字設定の取得"
 
 .. code-block:: cpp
@@ -294,19 +294,15 @@ GRAY1 の画像を 2 色のマスクとして描きます。1 のビットを ``
      int lineAdvance;       // 行送り (フォントの yAdvance)
    };
 
-   struct TextMetricsF {    // 同じものを float で
-     float width, height, ascent, lineAdvance;
-     float deviceWidth;     // width と height を変換行列で拡大した、描画先での大きさ
-     float deviceHeight;    // (文字の軸に沿った長さなので、回転しても変わらない)
+   struct TextMetricsF {    // 同じものを描画先のピクセル単位で (文字の軸に沿って測るので、回転しても変わらない)
+     float width;           // 変換行列の x 軸の長さを掛けたもの
+     float height, ascent, lineAdvance;  // 変換行列の y 軸の長さを掛けたもの
    };
 
 寸法は描画関数に渡す座標の単位 (変換行列を掛ける前) なので、変換行列の下でそのまま文字の配置に使えます。
 ``charMetrics()`` / ``textMetrics()`` は浮動小数点を使わないので、FPU のないコア (Cortex-M0+、ESP8266 など) でも軽く済みます。
-描画先での大きさが必要なときだけ ``charMetricsF()`` / ``textMetricsF()`` を使います
-(変換行列の列の長さを求めるため、平方根などの float 演算が入ります)。
-``measureText()`` / ``charAdvance()`` / ``textHeight()`` / ``lineAdvance()`` は非推奨で、
-それぞれ ``textMetrics(str).width`` / ``charMetrics(code).width`` / ``textMetrics("").height`` /
-``textMetrics("").lineAdvance`` を返します。
+描画先での大きさが必要なときだけ ``deviceCharMetrics()`` / ``deviceTextMetrics()`` を使います
+(変換行列の軸の長さを求めるため、平方根などの float 演算が入ります)。
 
 カーソルは **行ボックスの左上** です。``setFont()`` は全グリフからベースラインより上の最大高さ (アセント) と
 ボックス高さを求め、グリフはベースラインを基準に配置されます。この規約により、フォントを切り替えても
