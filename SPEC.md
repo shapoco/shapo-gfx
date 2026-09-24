@@ -268,7 +268,8 @@ draws nothing, 255 overwrites, anything else blends).
 ```c++
 struct Config {};                     // settings of init() (none yet)
 enum class TransformKind : uint8_t { IDENTITY, TRANSLATE, SCALE, AFFINE };
-struct TextMetrics { float width, height, ascent, lineAdvance, deviceWidth, deviceHeight; };
+struct TextMetrics { int width, height, ascent, lineAdvance; };   // integer only
+struct TextMetricsF { float width, height, ascent, lineAdvance, deviceWidth, deviceHeight; };
 struct TextState {
   const GFXfont *font; Color color, background;
   int cursorX, cursorY, lineStartX; int16_t ascent, lineHeight;
@@ -349,6 +350,7 @@ class Graphics2D {
   int drawChar(int x, int y, int code);        // returns the x advance
   void drawString(const char *); void drawString(int x, int y, const char *);
   TextMetrics charMetrics(int code) const; TextMetrics textMetrics(const char *) const;
+  TextMetricsF charMetricsF(int code) const; TextMetricsF textMetricsF(const char *) const;
   [[deprecated]] int measureText(const char *) const; [[deprecated]] int charAdvance(int code) const;
   [[deprecated]] int textHeight() const; [[deprecated]] int lineAdvance() const;
 };
@@ -516,11 +518,14 @@ Semantics:
   `xAdvance x lineHeight` of each glyph before drawing it. `'\n'` returns to the x of
   the last `setCursor()` and advances by `yAdvance`. Text is enlarged or turned by the
   transform. `charMetrics()` and `textMetrics()` give sizes in the coordinates of the
-  drawing calls (so they lay out text under the same transform); `deviceWidth` and
-  `deviceHeight` are `width` and `height` scaled by the lengths of the transform's
-  columns, the size on the target along the text's own axes. The deprecated integer
+  drawing calls (so they lay out text under the same transform), as integers: font
+  metrics are whole pixels, and no floating point is involved (which matters on cores
+  without an FPU, such as the Cortex-M0+ or the ESP8266). `charMetricsF()` and
+  `textMetricsF()` give the same in float plus `deviceWidth` and `deviceHeight`:
+  `width` and `height` scaled by the lengths of the transform's columns, the size on
+  the target along the text's own axes (two square roots). The deprecated integer
   functions return `textMetrics(str).width`, `charMetrics(code).width`,
-  `textMetrics("").height` and `textMetrics("").lineAdvance` as `int`.
+  `textMetrics("").height` and `textMetrics("").lineAdvance`.
 
 Every drawing function switches on the target format once per call (or per row),
 never per pixel; the per-pixel loops are instantiated per format from the cursor

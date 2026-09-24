@@ -675,10 +675,17 @@ static TextMetrics lineMetrics(const Graphics2D &g) {
   return m;
 }
 
-static void deviceSize(const Graphics2D &g, TextMetrics &m) {
+// The float version, with the size on the target
+static TextMetricsF withDeviceSize(const Graphics2D &g, const TextMetrics &i) {
+  TextMetricsF m;
+  m.width = (float)i.width;
+  m.height = (float)i.height;
+  m.ascent = (float)i.ascent;
+  m.lineAdvance = (float)i.lineAdvance;
   const affine2f &x = g.transform();
   m.deviceWidth = m.width * std::sqrt(x.a * x.a + x.b * x.b);
   m.deviceHeight = m.height * std::sqrt(x.c * x.c + x.d * x.d);
+  return m;
 }
 
 TextMetrics Graphics2D::charMetrics(int code) const {
@@ -686,8 +693,15 @@ TextMetrics Graphics2D::charMetrics(int code) const {
   const GFXfont *f = state_.text.font;
   if (f && code >= f->first && code <= f->last)
     m.width = f->glyph[code - f->first].xAdvance;
-  deviceSize(*this, m);
   return m;
+}
+
+TextMetricsF Graphics2D::charMetricsF(int code) const {
+  return withDeviceSize(*this, charMetrics(code));
+}
+
+TextMetricsF Graphics2D::textMetricsF(const char *str) const {
+  return withDeviceSize(*this, textMetrics(str));
 }
 
 TextMetrics Graphics2D::textMetrics(const char *str) const {
@@ -705,9 +719,8 @@ TextMetrics Graphics2D::textMetrics(const char *str) const {
       w += f->glyph[code - f->first].xAdvance;
     }
   }
-  m.width = (float)std::max(best, w);
-  m.height += (float)(lines - 1) * m.lineAdvance;
-  deviceSize(*this, m);
+  m.width = std::max(best, w);
+  m.height += (lines - 1) * m.lineAdvance;
   return m;
 }
 

@@ -318,8 +318,8 @@ static void testBitmapAndText() {
   g.setFont(&ShapoSansP_s08c07);
   g.setCursor(0, 0);
   g.drawString("a\nb");
-  CHECK_EQ(g.cursor().y, (int)g.textMetrics("").lineAdvance);
-  CHECK_EQ(g.cursor().x, (int)g.charMetrics('b').width);
+  CHECK_EQ(g.cursor().y, g.textMetrics("").lineAdvance);
+  CHECK_EQ(g.cursor().x, g.charMetrics('b').width);
   // A background box of xAdvance x lineHeight per glyph
   g.clear(Colors::BLACK);
   g.setTextColor(Colors::WHITE, Colors::BLUE);
@@ -346,21 +346,24 @@ static void testMetrics() {
   const TextMetrics t = g.textMetrics("ab\nabc\n");
   CHECK_EQ(t.width, g.textMetrics("abc").width);
   CHECK_EQ(t.height, a.height + 2 * a.lineAdvance);
-  CHECK_EQ(t.deviceWidth, t.width);
+  CHECK_EQ(g.textMetricsF("ab\nabc\n").deviceWidth, t.width);
+  CHECK_EQ(g.textMetricsF("ab\nabc\n").height, t.height);
+  CHECK_EQ(g.charMetricsF('a').width, a.width);
   CHECK_EQ(g.textMetrics(nullptr).height, a.height);
 #if SHAPOGFX2D_TRANSFORM
   // In drawing coordinates; the device size follows the transform
   g.rotate(0.7f);
   g.scale(3, 2);
-  const TextMetrics ts = g.textMetrics("abc");
+  const TextMetricsF ts = g.textMetricsF("abc");
   CHECK_EQ(ts.width, g.textMetrics("abc").width);
+  CHECK_EQ(ts.height, g.textMetrics("abc").height);
   CHECK(std::fabs(ts.deviceWidth - ts.width * 3) < 1e-3f);
   CHECK(std::fabs(ts.deviceHeight - ts.height * 2) < 1e-3f);
 #endif
   // The deprecated integer versions
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  CHECK_EQ(g.measureText("ab\nabc"), (int)g.textMetrics("abc").width);
+  CHECK_EQ(g.measureText("ab\nabc"), g.textMetrics("abc").width);
   CHECK_EQ(g.charAdvance('a'), ga.xAdvance);
   CHECK_EQ(g.textHeight(), g.textState().lineHeight);
   CHECK_EQ(g.lineAdvance(), f.yAdvance);

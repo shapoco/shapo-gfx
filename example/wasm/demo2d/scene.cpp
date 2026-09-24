@@ -307,7 +307,7 @@ static void drawCharts(g2::Graphics2D &g, float t) {
   g.setFont(&ShapoSansP_s08c07);
   g.setTextColor(g2::makeColor(40, 40, 70));
   const g2::TextMetrics m = g.textMetrics(buf);
-  g.drawString(cx - (int)m.width / 2, cy - (int)m.height / 2, buf);
+  g.drawString(cx - m.width / 2, cy - m.height / 2, buf);
 }
 
 static void drawText(g2::Graphics2D &g, float t) {
@@ -324,19 +324,19 @@ static void drawText(g2::Graphics2D &g, float t) {
   std::snprintf(buf, sizeof(buf), "%.1fs", (double)t);
   g.setFont(&ShapoSansP_s12c09a01w02);
   g.setTextColor(g2::makeColor(255, 220, 120));
-  g.drawString(box.right() - 12 - (int)g.textMetrics(buf).width, y + 6, buf);
+  g.drawString(box.right() - 12 - g.textMetrics(buf).width, y + 6, buf);
   y += 30;
 
   g.setTextColor(g2::makeColor(200, 220, 255));
   g.drawString(x, y, "Shapes, sprites, transforms, fonts");
-  y += (int)g.textMetrics("").lineAdvance + 2;
+  y += g.textMetrics("").lineAdvance + 2;
 
   g.setFont(&ShapoSansP_s08c07);
   g.setTextColor(Colors::WHITE);
   g.drawString(x, y,
                "ShapoSansP_s08c07: proportional 8 px\nGRAY1 / RGB444 / "
                "ARGB4444 / RGB565_SWAPPED");
-  y += (int)g.textMetrics("").lineAdvance * 2 + 2;
+  y += g.textMetrics("").lineAdvance * 2 + 2;
 
   g.setFont(&ShapoSansMono_s08c07);
   g.setTextColor(g2::makeColor(140, 255, 160), g2::makeColor(0, 60, 30));

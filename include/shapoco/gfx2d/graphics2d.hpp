@@ -32,12 +32,21 @@ enum class TransformKind : uint8_t {
 
 // Size of a glyph or a text, in the coordinates of the drawing calls (not
 // scaled by the transform, so that they can be used to lay out text drawn
-// under it)
+// under it). Font metrics are whole pixels, so these are exact; computing
+// them takes no floating point.
 struct TextMetrics {
-  float width = 0.0f;        // advance width (of the widest line)
-  float height = 0.0f;       // line box height + lineAdvance per further line
-  float ascent = 0.0f;       // top of the line box to the baseline
-  float lineAdvance = 0.0f;  // baseline to baseline
+  int width = 0;        // advance width (of the widest line)
+  int height = 0;       // line box height + lineAdvance per further line
+  int ascent = 0;       // top of the line box to the baseline
+  int lineAdvance = 0;  // baseline to baseline
+};
+
+// The same in float, plus the size on the target
+struct TextMetricsF {
+  float width = 0.0f;
+  float height = 0.0f;
+  float ascent = 0.0f;
+  float lineAdvance = 0.0f;
   // width and height as they appear on the target: scaled by the
   // transform along the text's own axes (rotation does not change them)
   float deviceWidth = 0.0f;
@@ -363,23 +372,27 @@ class Graphics2D {
     drawString(str);
   }
   // Size of one glyph (zero width if the font lacks it) and of a text
-  // (widest line; '\n' starts a line). Zero without a font.
+  // (widest line; '\n' starts a line). Zero without a font. The F versions
+  // add the size on the target, which takes float math (software float on
+  // a core without an FPU); the others are integer only.
   TextMetrics charMetrics(int code) const;
   TextMetrics textMetrics(const char *str) const;
+  TextMetricsF charMetricsF(int code) const;
+  TextMetricsF textMetricsF(const char *str) const;
 
   [[deprecated("use textMetrics(str).width")]] int measureText(
       const char *str) const {
-    return (int)textMetrics(str).width;
+    return textMetrics(str).width;
   }
   [[deprecated("use charMetrics(code).width")]] int charAdvance(
       int code) const {
-    return (int)charMetrics(code).width;
+    return charMetrics(code).width;
   }
   [[deprecated("use textMetrics(\"\").height")]] int textHeight() const {
-    return (int)textMetrics("").height;
+    return textMetrics("").height;
   }
   [[deprecated("use textMetrics(\"\").lineAdvance")]] int lineAdvance() const {
-    return (int)textMetrics("").lineAdvance;
+    return textMetrics("").lineAdvance;
   }
 
  private:

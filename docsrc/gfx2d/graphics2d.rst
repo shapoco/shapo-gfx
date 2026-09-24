@@ -280,25 +280,33 @@ GRAY1 の画像を 2 色のマスクとして描きます。1 のビットを ``
    "``int drawChar(int x, int y, int code)``", "1 文字を行ボックス左上 (x, y) に描き、進み幅を返す"
    "``void drawString(const char *)``", "カーソル位置から描き、カーソルを進める。``'\\n'`` で改行"
    "``void drawString(int x, int y, const char *)``", "``setCursor()`` してから描く"
-   "``TextMetrics charMetrics(int code) const``", "1 文字の寸法 (フォントにない文字は幅 0)"
-   "``TextMetrics textMetrics(const char *) const``", "文字列の寸法 (最も幅の広い行)"
+   "``TextMetrics charMetrics(int code) const``", "1 文字の寸法 (フォントにない文字は幅 0)。整数のみで計算する"
+   "``TextMetrics textMetrics(const char *) const``", "文字列の寸法 (最も幅の広い行)。整数のみで計算する"
+   "``TextMetricsF charMetricsF(int code) const`` / ``TextMetricsF textMetricsF(const char *) const``", "同じ寸法を float で、描画先での大きさを加えて返す (float 演算を使う)"
    "``const TextState &textState() const``", "文字設定の取得"
 
 .. code-block:: cpp
 
-   struct TextMetrics {
-     float width;         // 進み幅 (複数行なら最も広い行)
-     float height;        // 行ボックスの高さ + 2 行目以降の行送り
-     float ascent;        // 行ボックス上端からベースラインまで
-     float lineAdvance;   // 行送り (フォントの yAdvance)
-     float deviceWidth;   // width と height を変換行列で拡大した、描画先での大きさ
-     float deviceHeight;  // (文字の軸に沿った長さなので、回転しても変わらない)
+   struct TextMetrics {     // 整数 (フォントの寸法は整数ピクセルなので正確)
+     int width;             // 進み幅 (複数行なら最も広い行)
+     int height;            // 行ボックスの高さ + 2 行目以降の行送り
+     int ascent;            // 行ボックス上端からベースラインまで
+     int lineAdvance;       // 行送り (フォントの yAdvance)
+   };
+
+   struct TextMetricsF {    // 同じものを float で
+     float width, height, ascent, lineAdvance;
+     float deviceWidth;     // width と height を変換行列で拡大した、描画先での大きさ
+     float deviceHeight;    // (文字の軸に沿った長さなので、回転しても変わらない)
    };
 
 寸法は描画関数に渡す座標の単位 (変換行列を掛ける前) なので、変換行列の下でそのまま文字の配置に使えます。
+``charMetrics()`` / ``textMetrics()`` は浮動小数点を使わないので、FPU のないコア (Cortex-M0+、ESP8266 など) でも軽く済みます。
+描画先での大きさが必要なときだけ ``charMetricsF()`` / ``textMetricsF()`` を使います
+(変換行列の列の長さを求めるため、平方根などの float 演算が入ります)。
 ``measureText()`` / ``charAdvance()`` / ``textHeight()`` / ``lineAdvance()`` は非推奨で、
 それぞれ ``textMetrics(str).width`` / ``charMetrics(code).width`` / ``textMetrics("").height`` /
-``textMetrics("").lineAdvance`` を整数にして返します。
+``textMetrics("").lineAdvance`` を返します。
 
 カーソルは **行ボックスの左上** です。``setFont()`` は全グリフからベースラインより上の最大高さ (アセント) と
 ボックス高さを求め、グリフはベースラインを基準に配置されます。この規約により、フォントを切り替えても
@@ -309,7 +317,7 @@ GRAY1 の画像を 2 色のマスクとして描きます。1 のビットを ``
    // 右寄せ
    const char *s = "12.3 s";
    g.setFont(&ShapoSansP_s12c09a01w02);
-   g.drawString(box.right() - 8 - (int)g.textMetrics(s).width, box.y + 4, s);
+   g.drawString(box.right() - 8 - g.textMetrics(s).width, box.y + 4, s);
 
    // (x, y) から 2 倍で描く
    g.pushState();
