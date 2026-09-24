@@ -1,6 +1,6 @@
 // Graphics2D: ellipses, arcs, sectors, rounded rectangles and polygons.
 
-#include "../common/intmath.hpp"
+#include "arch.hpp"
 #include "internal.hpp"
 
 namespace shapoco::gfx2d {
@@ -45,7 +45,7 @@ struct EllipseExtent {
       } else {
         const int sh = __builtin_clz(n) & ~1;  // n << sh in [2^30, 2^32)
         const uint32_t m = n << sh;
-        const uint32_t s = gfx::intmath::isqrt32(m);
+        const uint32_t s = arch::isqrt32(m);
         // sqrt(m) - s ~= (m - s^2) / 2s, in Q15: without it the truncated
         // root would bias the rounding of dx2 low
         const uint32_t frac = ((m - s * s) << 14) / s;
@@ -475,39 +475,53 @@ int arcSegments(float radius) {
   return n < 1.0f ? 1 : (n > 16.0f ? 16 : (int)n);
 }
 
-void roundRectShape(Graphics2D &g, const Rect *ri, const RectF *rf,
-                    float radius, bool outline, Color c) {
+// Axis-aligned rounded rectangle r (target pixels) with corners rx x ry
+void roundRectRaw(const Raster &ras, const Rect &r, int rx, int ry,
+                  bool outline, const Paint &p) {
+  if (r.isEmpty()) return;
+  if (rx <= 0 || ry <= 0) rx = ry = 0;
+  if (!outline && rx == 0) {
+    ras.rect(r, p);
+    return;
+  }
+  rasterExtent(ras, r.y, r.bottom(), RoundRectExtent(r, rx, ry), outline,
+               nullptr, p);
+}
+
+// The Rect API (ri, radius) or the RectF API (rf, radiusF)
+void roundRectShape(Graphics2D &g, const Rect *ri, int radius, const RectF *rf,
+                    float radiusF, bool outline, Color c) {
   if (!g.hasTarget()) return;
   Paint p;
   if (!G2Impl::makePaint(g, c, p)) return;
   const TransformKind kind = G2Impl::kind(g);
+  if (ri && (!TRANSFORM || kind <= TransformKind::TRANSLATE)) {
+    // Integer only (no float on a core without an FPU)
+    const Rect r = ri->normalized();
+    if (r.isEmpty()) return;
+    // At most half the shorter side
+    const int rad =
+        std::max(0, std::min(radius, std::min(r.width, r.height) / 2));
+    roundRectRaw(G2Impl::raster(g),
+                 r.offset(G2Impl::offsetX(g), G2Impl::offsetY(g)), rad, rad,
+                 outline, p);
+    return;
+  }
   const RectF f = (ri ? RectF(*ri) : *rf).normalized();
   if (f.isEmpty()) return;
+  if (ri) radiusF = (float)radius;
   // A circle of the user's coordinates, at most half the shorter side
-  radius = std::min(radius, std::min(f.width, f.height) * 0.5f);
-  if (!(radius > 0.0f)) radius = 0.0f;
+  radiusF = std::min(radiusF, std::min(f.width, f.height) * 0.5f);
+  if (!(radiusF > 0.0f)) radiusF = 0.0f;
 
   if (!TRANSFORM || kind <= TransformKind::SCALE) {
-    Rect r;
-    int rx, ry;
-    if (ri && kind <= TransformKind::TRANSLATE) {
-      r = ri->normalized().offset(G2Impl::offsetX(g), G2Impl::offsetY(g));
-      rx = ry = (int)radius;
-    } else {
-      const affine2f &m = G2Impl::matrix(g);
-      r = G2Impl::mapRectSigned(g, f).normalized();
-      rx = std::min((int)roundToInt(radius * std::fabs(m.a)), r.width / 2);
-      ry = std::min((int)roundToInt(radius * std::fabs(m.d)), r.height / 2);
-    }
-    if (r.isEmpty()) return;
-    if (rx <= 0 || ry <= 0) rx = ry = 0;
-    const Raster ras = G2Impl::raster(g);
-    if (!outline && rx == 0) {
-      ras.rect(r, p);
-      return;
-    }
-    rasterExtent(ras, r.y, r.bottom(), RoundRectExtent(r, rx, ry), outline,
-                 nullptr, p);
+    const affine2f &m = G2Impl::matrix(g);
+    const Rect r = G2Impl::mapRectSigned(g, f).normalized();
+    const int rx =
+        std::min((int)roundToInt(radiusF * std::fabs(m.a)), r.width / 2);
+    const int ry =
+        std::min((int)roundToInt(radiusF * std::fabs(m.d)), r.height / 2);
+    roundRectRaw(G2Impl::raster(g), r, rx, ry, outline, p);
     return;
   }
 
@@ -516,7 +530,7 @@ void roundRectShape(Graphics2D &g, const Rect *ri, const RectF *rf,
   const affine2f &m = G2Impl::matrix(g);
   const float scale = std::max(std::sqrt(m.a * m.a + m.b * m.b),
                                std::sqrt(m.c * m.c + m.d * m.d));
-  int segs = radius > 0.0f ? arcSegments(radius * scale) : 0;
+  int segs = radiusF > 0.0f ? arcSegments(radiusF * scale) : 0;
   G2Impl::ScratchMark mark(g);
   constexpr int LOCAL_SEGS = 4;
   vec2f local[4 * (LOCAL_SEGS + 1)];
@@ -535,8 +549,8 @@ void roundRectShape(Graphics2D &g, const Rect *ri, const RectF *rf,
     v[n++] = {f.right(), f.bottom()};
     v[n++] = {f.x, f.bottom()};
   } else {
-    const float x0 = f.x + radius, x1 = f.right() - radius;
-    const float y0 = f.y + radius, y1 = f.bottom() - radius;
+    const float x0 = f.x + radiusF, x1 = f.right() - radiusF;
+    const float y0 = f.y + radiusF, y1 = f.bottom() - radiusF;
     const vec2f centers[4] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}};
     constexpr float HALF_PI = 1.5707964f;
     for (int k = 0; k < 4; k++) {
@@ -544,8 +558,8 @@ void roundRectShape(Graphics2D &g, const Rect *ri, const RectF *rf,
       const float a0 = (float)(k + 2) * HALF_PI;
       for (int i = 0; i <= segs; i++) {
         const float a = a0 + HALF_PI * (float)i / (float)segs;
-        v[n++] = {centers[k].x + radius * std::cos(a),
-                  centers[k].y + radius * std::sin(a)};
+        v[n++] = {centers[k].x + radiusF * std::cos(a),
+                  centers[k].y + radiusF * std::sin(a)};
       }
     }
   }
@@ -558,16 +572,16 @@ void roundRectShape(Graphics2D &g, const Rect *ri, const RectF *rf,
 }  // namespace
 
 void Graphics2D::fillRoundRect(const Rect &r, int radius, Color c) {
-  roundRectShape(*this, &r, nullptr, (float)radius, false, c);
+  roundRectShape(*this, &r, radius, nullptr, 0.0f, false, c);
 }
 void Graphics2D::fillRoundRect(const RectF &r, float radius, Color c) {
-  roundRectShape(*this, nullptr, &r, radius, false, c);
+  roundRectShape(*this, nullptr, 0, &r, radius, false, c);
 }
 void Graphics2D::drawRoundRect(const Rect &r, int radius, Color c) {
-  roundRectShape(*this, &r, nullptr, (float)radius, true, c);
+  roundRectShape(*this, &r, radius, nullptr, 0.0f, true, c);
 }
 void Graphics2D::drawRoundRect(const RectF &r, float radius, Color c) {
-  roundRectShape(*this, nullptr, &r, radius, true, c);
+  roundRectShape(*this, nullptr, 0, &r, radius, true, c);
 }
 
 // ---------------------------------------------------------------------------

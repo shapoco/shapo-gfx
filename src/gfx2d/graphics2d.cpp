@@ -77,11 +77,18 @@ static void writeColorsT(uint8_t *line, int x, int n, const Color *src,
 
 namespace detail {
 
+static void fillSpanNone(uint8_t *, int, int, const Paint &) {}
+
+// (out of line: inlined, the switch would repeat at every Raster)
+__attribute__((noinline)) FillSpanFn fillSpanFn(PixelFormat fmt) {
+  FillSpanFn fn = fillSpanNone;
+  withFormat(fmt, [&](auto tag) { fn = fillSpanT<decltype(tag)::value>; });
+  return fn;
+}
+
 void fillSpanFmt(PixelFormat fmt, uint8_t *line, int x, int n,
                  const Paint &p) {
-  withFormat(fmt, [&](auto tag) {
-    fillSpanT<decltype(tag)::value>(line, x, n, p);
-  });
+  fillSpanFn(fmt)(line, x, n, p);
 }
 
 void readColorsFmt(PixelFormat fmt, const uint8_t *line, int x, int n,
@@ -484,10 +491,16 @@ void Graphics2D::drawVLine(int x, int y, int h, Color c) {
 // ---------------------------------------------------------------------------
 // Lines
 
-// A segment within +-LINE_SAFE of (ox, oy)
-static void drawLineSafe(const Raster &ras, int x0, int y0, int x1, int y1,
-                         int ox, int oy, const Paint &p) {
+// A segment within +-LINE_SAFE of (ox, oy), in the format F: the format is
+// switched once per segment, the pixels are written through the cursor of
+// the format (a run at a time along a row for shallow lines, a pixel per
+// row for steep ones)
+template <PixelFormat F>
+static void drawLineSafeT(const Raster &ras, int x0, int y0, int x1, int y1,
+                          int ox, int oy, const Paint &p) {
+  using Cursor = typename FormatTraits<F>::Cursor;
   const Rect &clip = ras.clip;
+  const Surface &target = ras.target;
   // Walk the major axis (i) with a 16.16 fixed-point minor coordinate (j),
   // skipping the parts outside the clip rectangle along the major axis.
   const bool steep = std::abs(y1 - y0) > std::abs(x1 - x0);
@@ -512,8 +525,37 @@ static void drawLineSafe(const Raster &ras, int x0, int y0, int x1, int y1,
   if (iStart > iEnd) return;
   int32_t jf = (int32_t)y0 * 65536 + 0x8000 + slope * (iStart - x0);
 
-  // Group consecutive major-axis steps with the same minor coordinate into
-  // runs
+  if (steep) {
+    // A pixel per row: x = j + oj on row i + oi (runs would gain nothing)
+    uint8_t *line = target.linePtr(iStart + oi);
+    Cursor cur;
+    if (p.op == PaintOp::FILL) {
+      for (int i = iStart; i <= iEnd; i++, jf += slope, line += target.stride) {
+        const int j = jf >> 16;
+        if (j < jMin || j > jMax) continue;
+        cur.init(line, j + oj);
+        cur.write(p.native);
+      }
+    } else if (BLEND && p.op == PaintOp::ADD) {
+      for (int i = iStart; i <= iEnd; i++, jf += slope, line += target.stride) {
+        const int j = jf >> 16;
+        if (j < jMin || j > jMax) continue;
+        cur.init(line, j + oj);
+        cur.write(addNative<F>(cur.read(), p.native));
+      }
+    } else {
+      for (int i = iStart; i <= iEnd; i++, jf += slope, line += target.stride) {
+        const int j = jf >> 16;
+        if (j < jMin || j > jMax) continue;
+        cur.init(line, j + oj);
+        cur.write(blendNative<F>(cur.read(), p.native, p.alpha64));
+      }
+    }
+    return;
+  }
+
+  // Group consecutive major-axis steps with the same minor coordinate (row
+  // j + oj) into runs
   int i = iStart;
   while (i <= iEnd) {
     const int j = jf >> 16;
@@ -523,15 +565,17 @@ static void drawLineSafe(const Raster &ras, int x0, int y0, int x1, int y1,
       k++;
     }
     jf += slope;
-    if (j >= jMin && j <= jMax) {
-      if (steep) {
-        for (int r = i; r <= k; r++) plotRaw(ras.target, j + oj, r + oi, p);
-      } else {
-        ras.spanRaw(j + oj, i + oi, k + oi + 1, p);
-      }
-    }
+    if (j >= jMin && j <= jMax)
+      fillSpanT<F>(target.linePtr(j + oj), i + oi, k - i + 1, p);
     i = k + 1;
   }
+}
+
+static inline void drawLineSafe(const Raster &ras, int x0, int y0, int x1,
+                                int y1, int ox, int oy, const Paint &p) {
+  withFormat(ras.target.format, [&](auto tag) {
+    drawLineSafeT<decltype(tag)::value>(ras, x0, y0, x1, y1, ox, oy, p);
+  });
 }
 
 void detail::drawLineRaw(const Raster &ras, int x0, int y0, int x1, int y1,
@@ -732,7 +776,7 @@ int Graphics2D::drawChar(int x, int y, int code) {
     fillRect(x, y, g.xAdvance, t.lineHeight, t.background);
   Paint fg;
   if (!hasTarget() || g.width == 0 || g.height == 0 ||
-      !G2Impl::makePaint(*this, t.color, fg))
+      !G2Impl::makePaintInline(*this, t.color, fg))
     return g.xAdvance;
   const MaskSource m = {t.font->bitmap, (uint32_t)g.bitmapOffset * 8u,
                         g.width};

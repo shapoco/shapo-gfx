@@ -127,6 +127,10 @@ __attribute__((always_inline)) inline void withFormat(PixelFormat f, Fn &&fn) {
 // Paint [x, x + n) of `line`. Every shape ends up here, so this is the one
 // place that switches on the blend.
 void fillSpanFmt(PixelFormat fmt, uint8_t *line, int x, int n, const Paint &p);
+// The same for one format, chosen once per drawing call (a no-op for a
+// disabled format)
+using FillSpanFn = void (*)(uint8_t *line, int x, int n, const Paint &p);
+FillSpanFn fillSpanFn(PixelFormat fmt);
 
 // Read n pixels of `line` from x as Colors
 void readColorsFmt(PixelFormat fmt, const uint8_t *line, int x, int n,
@@ -164,11 +168,11 @@ inline void fillRectRaw(const Surface &target, const Rect &clip, const Rect &r,
 struct Raster {
   Surface target;
   Rect clip;
+  FillSpanFn fill;  // fillSpanFn(target.format)
 
   // [x0, x1) of row y, already clipped
   void spanRaw(int y, int x0, int x1, const Paint &p) const {
-    if (x1 > x0)
-      fillSpanFmt(target.format, target.linePtr(y), x0, x1 - x0, p);
+    if (x1 > x0) fill(target.linePtr(y), x0, x1 - x0, p);
   }
   void span(int y, int x0, int x1, const Paint &p) const {
     if (y < clip.y || y >= clip.bottom()) return;
@@ -200,7 +204,7 @@ struct MaskSource {
 
 struct G2Impl {
   static Raster raster(const Graphics2D &g) {
-    return {g.target_, g.clipRect()};
+    return {g.target_, g.clipRect(), fillSpanFn(g.target_.format)};
   }
   static TransformKind kind(const Graphics2D &g) { return g.kind_; }
   // Integer offset of IDENTITY and TRANSLATE

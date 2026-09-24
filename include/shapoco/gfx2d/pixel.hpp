@@ -187,9 +187,14 @@ constexpr Color rgb565ToColor(uint16_t p) {
 }
 
 // Fill n uint16_t pixels (writes 32 bits at a time where possible, four
-// words per iteration, which a Cortex-M3 and up turns into paired stores)
+// words per iteration, which a Cortex-M3 and up turns into paired stores).
+// Short runs, the common case of scaled images and thin shapes, skip the
+// alignment and word setup.
 static inline void fill16(uint16_t *dst, int n, uint16_t v) {
-  if (n <= 0) return;
+  if (n < 8) {
+    while (n-- > 0) *dst++ = v;
+    return;
+  }
   if ((uintptr_t)dst & 2u) {
     *dst++ = v;
     n--;

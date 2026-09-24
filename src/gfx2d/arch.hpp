@@ -1,7 +1,7 @@
 #ifndef SHAPOGFX2D_ARCH_HPP
 #define SHAPOGFX2D_ARCH_HPP
 
-// Architecture layer of the 2D renderer (internal; included by graphics2d.cpp
+// Architecture layer of the 2D renderer (internal; included by src/gfx2d/*.cpp
 // only). The portable code is the reference; a hook here computes the same
 // pixels faster.
 //
@@ -10,11 +10,52 @@
 // SIO interpolator interp0 of the calling core, which it saves and restores.
 // On by default where the Pico SDK's hardware_interp is available; define it
 // as 0 to use the portable code.
+//
+// SHAPOGFX2D_FPU_SQRT: the integer square root of the ellipse extents is
+// seeded by the FPU's sqrtf() and corrected to the exact floor (the same
+// value as the pure integer root, which a core without an FPU keeps). On by
+// default where the compiler reports hardware float; define it as 0 or 1 to
+// choose.
 
+#include <cmath>
 #include <cstdint>
 
 #include "../common/arch_detect.hpp"
+#include "../common/intmath.hpp"
 #include "shapoco/gfx2d/surface.hpp"
+
+// (__ARM_FP is defined only with a hardware FPU in use, unlike __VFP_FP__,
+// which names the float format and is defined on a Cortex-M0+ as well)
+#ifndef SHAPOGFX2D_FPU_SQRT
+#if defined(__ARM_FP) || defined(__riscv_flen) ||                          \
+    defined(SHAPOGFX_ARCH_ESP32S3) || defined(SHAPOGFX_ARCH_ESP32P4) ||    \
+    defined(__x86_64__) || defined(__i386__) || defined(__aarch64__) ||    \
+    defined(__wasm__)
+#define SHAPOGFX2D_FPU_SQRT 1
+#else
+#define SHAPOGFX2D_FPU_SQRT 0
+#endif
+#endif
+
+namespace shapoco::gfx2d::arch {
+
+// floor(sqrt(m)), equal to gfx::intmath::isqrt32(m) for every m
+static inline uint32_t isqrt32(uint32_t m) {
+#if SHAPOGFX2D_FPU_SQRT
+  // The float root is within one of the answer ((float)m is off by less
+  // than 2^-23 m, so its root by less than 2^-24 sqrt(m) + rounding); the
+  // loops settle it. s <= 65535 keeps every product in 32 bits.
+  uint32_t s = (uint32_t)std::sqrt((float)m);
+  if (s > 65535u) s = 65535u;
+  while (s * s > m) s--;
+  while (s < 65535u && (s + 1u) * (s + 1u) <= m) s++;
+  return s;
+#else
+  return gfx::intmath::isqrt32(m);
+#endif
+}
+
+}  // namespace shapoco::gfx2d::arch
 
 #ifndef SHAPOGFX2D_RP2_INTERP
 #if defined(SHAPOGFX_ARCH_RP2) && __has_include("hardware/interp.h")

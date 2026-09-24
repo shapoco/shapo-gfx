@@ -59,29 +59,31 @@ __attribute__((noinline)) static void copyRowT(uint8_t *dl, int dx, const uint8_
   }
 }
 
-// Blend n pixels of S over D with (source alpha x opacity64)
+// Blend n pixels of S over D with (source alpha x opacity64). For an
+// ARGB4444 source `alpha` is the weight (0..64) of each 4-bit alpha under
+// the opacity (ImageBlit::alpha, computed once per drawImage()).
 template <PixelFormat S, PixelFormat D>
 static void blendRowT(uint8_t *dl, int dx, const uint8_t *sl, int sx, int n,
-                      uint32_t opacity64) {
+                      uint32_t opacity64, const uint32_t *alpha) {
   typename FormatTraits<S>::Cursor src;
   typename FormatTraits<D>::Cursor dst;
   src.init((void *)sl, sx);
   dst.init(dl, dx);
   if constexpr (S == PixelFormat::ARGB4444) {
-    // Opacity of each 4-bit alpha, as the Color path computes it
-    uint32_t alpha[16];
-    for (uint32_t a4 = 0; a4 < 16; a4++)
-      alpha[a4] = (alpha255To64(a4 * 17u) * opacity64) >> 6;
+    (void)opacity64;
     for (int i = 0; i < n; i++) {
       const uint32_t p = src.read();
       const uint32_t a = alpha[p >> 12];
       if (a != 0) {
-        dst.write(blendNative<D>(dst.read(), convertPixel<S, D>(p), a));
+        const uint32_t s = convertPixel<S, D>(p);
+        // Opaque pixels are written directly (like OpBlendArgb::put)
+        dst.write(a >= 64 ? s : blendNative<D>(dst.read(), s, a));
       }
       src.next();
       dst.next();
     }
   } else {
+    (void)alpha;
     for (int i = 0; i < n; i++) {
       dst.write(blendNative<D>(dst.read(), convertPixel<S, D>(src.read()),
                                opacity64));
@@ -106,19 +108,20 @@ static void copyRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
 // Color.
 static bool blendRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
                         int dx, const uint8_t *sl, int sx, int n,
-                        uint32_t opacity64) {
+                        uint32_t opacity64, const uint32_t *alpha) {
   bool done = false;
   withFormat(dstFmt, [&](auto tag) {
     constexpr PixelFormat D = decltype(tag)::value;
 #if SHAPOGFX_FORMAT_ARGB4444
     if (srcFmt == PixelFormat::ARGB4444) {
-      blendRowT<PixelFormat::ARGB4444, D>(dl, dx, sl, sx, n, opacity64);
+      blendRowT<PixelFormat::ARGB4444, D>(dl, dx, sl, sx, n, opacity64,
+                                          alpha);
       done = true;
       return;
     }
 #endif
     if (srcFmt == D) {
-      blendRowT<D, D>(dl, dx, sl, sx, n, opacity64);
+      blendRowT<D, D>(dl, dx, sl, sx, n, opacity64, alpha);
       done = true;
     }
   });
@@ -313,7 +316,7 @@ struct ImageBlit {
   bool keyed;
   uint32_t key;  // as stored, or NO_KEY
   uint32_t op64;
-  uint32_t alpha[16];  // BLEND_ARGB
+  uint32_t alpha[16];  // ARGB4444 blends
 
   static constexpr uint32_t NO_KEY = 0xFFFFFFFFu;
 
@@ -331,6 +334,12 @@ struct ImageBlit {
                                              : native;
     }
     const bool srcAlpha = (s == PixelFormat::ARGB4444);
+    // Opacity of each 4-bit alpha, as the Color path computes it (for the
+    // ARGB4444 blend paths; computed here once rather than per row)
+    if (srcAlpha && mode == BlendMode::ALPHA) {
+      for (uint32_t a4 = 0; a4 < 16; a4++)
+        alpha[a4] = (alpha255To64(a4 * 17u) * op64) >> 6;
+    }
     // A format without alpha drawn with ALPHA at full opacity is a copy
     if (mode == BlendMode::ALPHA && !srcAlpha && op64 >= 64)
       mode = BlendMode::NONE;
@@ -343,8 +352,6 @@ struct ImageBlit {
                    : (is16 ? BlitPath::COPY16 : BlitPath::COPY);
     } else if (!keyed && mode == BlendMode::ALPHA && srcAlpha) {
       path = BlitPath::BLEND_ARGB;
-      for (uint32_t a4 = 0; a4 < 16; a4++)
-        alpha[a4] = (alpha255To64(a4 * 17u) * op64) >> 6;
     } else if (!keyed && mode == BlendMode::ALPHA && s == dst) {
       path = BlitPath::BLEND_SAME;
     } else {
@@ -734,7 +741,11 @@ struct AffineRows {
       if (!narrowSpan(u, du, uLo, uHi, k0, k1) ||
           !narrowSpan(v, dv, vLo, vHi, k0, k1))
         continue;
-      fn(y, xr + k0, k1 - k0 + 1, u + k0 * du, v + k0 * dv);
+      // The 16.16 offsets are formed in uint32 so that an intermediate wraps
+      // instead of overflowing (the sums lie within the image)
+      fn(y, xr + k0, k1 - k0 + 1,
+         (int32_t)((uint32_t)u + (uint32_t)k0 * (uint32_t)du),
+         (int32_t)((uint32_t)v + (uint32_t)k0 * (uint32_t)dv));
     }
   }
 };
@@ -775,10 +786,10 @@ void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
   }
   if (b.mode == BlendMode::ALPHA &&
       blendRowFmt(target.format, img.format, target.linePtr(dst.y), dst.x,
-                  img.linePtr(src.y), src.x, dst.width, b.op64)) {
+                  img.linePtr(src.y), src.x, dst.width, b.op64, b.alpha)) {
     for (int j = 1; j < dst.height; j++) {
       blendRowFmt(target.format, img.format, target.linePtr(dst.y + j), dst.x,
-                  img.linePtr(src.y + j), src.x, dst.width, b.op64);
+                  img.linePtr(src.y + j), src.x, dst.width, b.op64, b.alpha);
     }
     return;
   }
@@ -1002,17 +1013,23 @@ void maskPixelsT(const Surface &target, const MaskSource &m, int sx, int sy,
   }
 }
 
+// Untransformed, with a foreground only (text): pixel by pixel per format
+void maskPixels(const Surface &target, const Rect &clip, const MaskSource &m,
+                const Rect &src, int x, int y, const Paint &fg) {
+  const Rect dst = Rect{x, y, src.width, src.height}.intersect(clip);
+  if (dst.isEmpty()) return;
+  const int sx = src.x + dst.x - x, sy = src.y + dst.y - y;
+  withFormat(target.format, [&](auto tag) {
+    maskPixelsT<decltype(tag)::value>(target, m, sx, sy, dst, fg);
+  });
+}
+
+// Untransformed, as spans of equal bits
 void maskPlain(const Raster &ras, const MaskSource &m, const Rect &src, int x,
                int y, const Paint *fg, const Paint *bg) {
   const Rect dst = Rect{x, y, src.width, src.height}.intersect(ras.clip);
   if (dst.isEmpty()) return;
   const int sx = src.x + dst.x - x, sy = src.y + dst.y - y;
-  if (fg && !bg) {
-    withFormat(ras.target.format, [&](auto tag) {
-      maskPixelsT<decltype(tag)::value>(ras.target, m, sx, sy, dst, *fg);
-    });
-    return;
-  }
   for (int j = 0; j < dst.height; j++) {
     const MaskSink sink = {&ras, fg, bg, dst.y + j};
     uint32_t bi = m.base + (uint32_t)(sy + j) * m.stride + (uint32_t)sx;
@@ -1074,10 +1091,15 @@ void detail::G2Impl::drawMask(Graphics2D &g, const MaskSource &m,
                               const Rect &src, int dx, int dy, const Paint *fg,
                               const Paint *bg) {
   if (src.isEmpty()) return;
-  const Raster ras = raster(g);
   if (!TRANSFORM || g.kind_ <= TransformKind::TRANSLATE) {
-    maskPlain(ras, m, src, dx + g.ox_, dy + g.oy_, fg, bg);
-  } else if (g.kind_ == TransformKind::SCALE) {
+    if (fg && !bg)
+      maskPixels(g.target_, g.clipRect(), m, src, dx + g.ox_, dy + g.oy_, *fg);
+    else
+      maskPlain(raster(g), m, src, dx + g.ox_, dy + g.oy_, fg, bg);
+    return;
+  }
+  const Raster ras = raster(g);
+  if (g.kind_ == TransformKind::SCALE) {
     maskScaled(ras, m, src,
                mapRectSigned(g, RectF{(float)dx, (float)dy, (float)src.width,
                                       (float)src.height}),
