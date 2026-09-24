@@ -43,11 +43,22 @@ set(SHAPOGFX2D_BLEND "" CACHE STRING "2D blend modes and opacity (0/1)")
 set_property(CACHE SHAPOGFX2D_BLEND PROPERTY STRINGS "" 0 1)
 set(SHAPOGFX2D_COLOR_KEY "" CACHE STRING "Color key of drawImage() (0/1)")
 set_property(CACHE SHAPOGFX2D_COLOR_KEY PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX2D_FPU_SQRT "" CACHE STRING
+    "Seed the ellipse extents' integer square root with the FPU's sqrtf (0/1)")
+set_property(CACHE SHAPOGFX2D_FPU_SQRT PROPERTY STRINGS "" 0 1)
 
 # Shared by gfx2d and gfx3d and read by config.hpp, so it has to be the same
 # in every translation unit: it is passed on to the users of the library.
 set(SHAPOGFX_COORD_BITS "" CACHE STRING
     "Bits of a screen coordinate and of a surface size (1..15, default 11)")
+# The pixel formats, likewise public (config.hpp): 1 compiles the format in
+set(SHAPOGFX_FORMAT_OPTIONS
+    SHAPOGFX_FORMAT_GRAY1 SHAPOGFX_FORMAT_RGB444 SHAPOGFX_FORMAT_ARGB4444
+    SHAPOGFX_FORMAT_RGB565_SWAPPED SHAPOGFX_FORMAT_RGB565)
+foreach(opt IN LISTS SHAPOGFX_FORMAT_OPTIONS)
+    set(${opt} "" CACHE STRING "Pixel format ${opt} (0/1, empty = library default)")
+    set_property(CACHE ${opt} PROPERTY STRINGS "" 0 1)
+endforeach()
 
 set(SHAPOGFX3D_OPTIONS
     SHAPOGFX3D_CORRECT_PERSPECTIVE SHAPOGFX3D_PERSPECTIVE_STEP
@@ -57,7 +68,7 @@ set(SHAPOGFX3D_OPTIONS
     SHAPOGFX3D_STACK_DEPTH SHAPOGFX3D_VCACHE_SIZE SHAPOGFX3D_LAYER_MAX
     SHAPOGFX3D_FIXED_POINT SHAPOGFX3D_DEPTH_BITS
     SHAPOGFX2D_STACK_DEPTH SHAPOGFX2D_TRANSFORM SHAPOGFX2D_BLEND
-    SHAPOGFX2D_COLOR_KEY)
+    SHAPOGFX2D_COLOR_KEY SHAPOGFX2D_FPU_SQRT)
 set(SHAPOGFX_FEATURE_DEFS "")
 foreach(opt IN LISTS SHAPOGFX3D_OPTIONS)
     if(NOT "${${opt}}" STREQUAL "")
@@ -88,6 +99,11 @@ if(NOT "${SHAPOGFX_COORD_BITS}" STREQUAL "")
     target_compile_definitions(shapogfx PUBLIC
         SHAPOGFX_COORD_BITS=${SHAPOGFX_COORD_BITS})
 endif()
+foreach(opt IN LISTS SHAPOGFX_FORMAT_OPTIONS)
+    if(NOT "${${opt}}" STREQUAL "")
+        target_compile_definitions(shapogfx PUBLIC ${opt}=${${opt}})
+    endif()
+endforeach()
 
 if(SHAPOGFX_BUILD_EXAMPLES AND NOT EMSCRIPTEN)
     add_subdirectory(example/wasm/demo2d)

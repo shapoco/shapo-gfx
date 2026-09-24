@@ -47,9 +47,10 @@ the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 | `SHAPOGFX_COORD_BITS` | 11 | Bits of a screen coordinate and of a surface's width and height (1..15). Wider or taller surfaces are rejected (see below) |
 | `SHAPOGFX3D_CORRECT_PERSPECTIVE` | 1 | Perspective correction level of the 3D renderer (0/1/2) |
 | `SHAPOGFX3D_PERSPECTIVE_STEP` | 16 | Level 2: pixels between two exact evaluations of the texture coordinates (power of two) |
-| `SHAPOGFX3D_GOURAUD_STEP` | 1 | Pixels between two updates of the vertex color that modulates the texels of a textured, smoothly shaded span (power of two up to 16). 4 saves a few instructions per textured pixel; the color is then constant over groups of 4 pixels (in demo3d 1.3% of the pixels change, mostly by a shade) |
+| `SHAPOGFX3D_GOURAUD_STEP` | 1 (4 on the RP2040 / RP2350) | Pixels between two updates of the vertex color that modulates the texels of a textured, smoothly shaded span (power of two up to 16). 4 saves a few instructions per textured pixel; the color is then constant over groups of 4 pixels (in demo3d 1.3% of the pixels change, mostly by a shade) |
 | `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` and step Gouraud colors through `interp1`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
 | `SHAPOGFX2D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): a rotated or sheared `drawImage()` of a 16-bit image whose stride is a power of two fetches the pixels through the SIO interpolator `interp0`. Detected like `SHAPOGFX3D_RP2_INTERP`; 0 turns it off |
+| `SHAPOGFX2D_FPU_SQRT` | 1 with an FPU, else 0 | The integer square root of the axis-aligned ellipse extents is seeded by the FPU's `sqrtf()` and corrected to the exact floor (the same value as the pure integer root, which a core without an FPU keeps). Detected from the compiler (`__ARM_FP`, `__riscv_flen`, the ESP32-S3/P4, x86, AArch64, WebAssembly); 0 or 1 overrides |
 | `SHAPOGFX2D_TRANSFORM` | 1 | 2D transforms; 0 removes them (the transform stays the identity, `setTransform()` and friends do nothing) |
 | `SHAPOGFX2D_BLEND` | 1 | 2D blend modes other than `ALPHA` and the opacity; 0 removes them (`setBlend()` does nothing) |
 | `SHAPOGFX2D_COLOR_KEY` | 1 | Color key of `drawImage()`; 0 removes it (`setColorKey()` does nothing) |
@@ -103,7 +104,11 @@ right, used by the perspective division), the texture walker (`InterpTex` on RP2
 must link `hardware_interp`; `render()` saves and restores `interp0` and `interp1` of
 the calling core, so interrupt handlers running during `render()` must not use them.
 
-The 2D renderer has one hook (`src/gfx2d/arch.hpp`): with `SHAPOGFX2D_RP2_INTERP`
+The 2D renderer's hooks are in `src/gfx2d/arch.hpp`. With `SHAPOGFX2D_FPU_SQRT`
+(on where the compiler reports a hardware FPU) the integer square root of the
+ellipse extents starts from `sqrtf()` (one `vsqrt` on the Cortex-M33) and is settled
+to the exact floor by at most one step each way, instead of the 16-iteration integer
+root, which a core without an FPU keeps. With `SHAPOGFX2D_RP2_INTERP`
 a rotated or sheared `drawImage()` walks the source through `interp0` -- lane 0 turns
 the 16.16 u into the byte offset of the texel, lane 1 the 16.16 v into the byte
 offset of the row (hence the power-of-two stride), `POP_FULL` returns the address
@@ -139,13 +144,15 @@ costs no more than one of a build without the feature. Bytes per record on a
 | header and flat color | 48 | — |
 | + depth plane | 60 (56) | a layer without `LayerFlags::NO_DEPTH` |
 | + interpolated color | 76 (72) | three differing vertex colors (`SHAPOGFX3D_GOURAUD`) |
-| + texture coordinates | 100 (96) | a textured material (`SHAPOGFX3D_TEXTURE`) |
-| all of them | 116 (112) | |
+| + texture coordinates | 104 (100) | a textured material (`SHAPOGFX3D_TEXTURE`) |
+| all of them | 120 (116) | |
 
 In parentheses: with `SHAPOGFX3D_DEPTH_BITS=16`. The header (40 bytes) holds the
 edges or end points, a 16-bit sort key, the row range, the reference column of the
-planes and the rasterizer index; the texture pointer lives in the texture part, so
-an untextured record carries no material. The depth plane is 8.24 in 12 bytes, or
+planes and the rasterizer index; the texture pointer lives in the texture part
+together with the logarithms of the texture's width, height and stride (computed
+once per primitive; the texel walkers need them per span), so an untextured
+record carries no material. The depth plane is 8.24 in 12 bytes, or
 with 16 bits of depth a 2.14 value and two 16-bit gradients whose scale is chosen
 per record in 8 bytes (the gradient is quantized to 2^-15 of its own magnitude, the
 value to 2^-14 NDC: surfaces that cross far from the camera may swap slightly
@@ -404,9 +411,13 @@ Semantics:
   row. An axis-aligned one (also under `SCALE`, after snapping its rectangle) is
   computed in 32-bit integers with one integer square root per row (the radicand
   scaled into [2^30, 2^32) and the root refined by its remainder, which gives the
-  exactly rounded extent; no floating point); the corners of a scaled rounded
-  rectangle are elliptical. Under `AFFINE` an ellipse is a general one: the rectangle's
-  conjugate semi-axes through the transform, each shortened by half a pixel (which
+  exactly rounded extent; no floating point, except that with `SHAPOGFX2D_FPU_SQRT`
+  the root is seeded by the FPU and corrected to the same integer); the corners of a
+  scaled rounded rectangle are elliptical. The integer `fillRoundRect()` /
+  `drawRoundRect()` without a scaling transform stay in integers throughout (the
+  radius is clamped to half the shorter side in integers). Under `AFFINE` an
+  ellipse is a general one: the rectangle's conjugate semi-axes through the
+  transform, each shortened by half a pixel (which
   puts the ends of an unturned one on the pixel centers there, like the integer
   extent), solved per row in float with one square root, and its row ends rounded to
   half pixels and then down like the integer extent, so a quarter turn gives the same
@@ -441,7 +452,9 @@ Semantics:
   or size exceeds 2^24 pixels draw nothing.
 - **Lines** walk the major axis with a 16.16 fixed-point minor coordinate and are
   clipped along the major axis before stepping; runs of pixels on the same row are
-  filled as spans, steep lines pixel by pixel. Both end points are drawn. The walk is
+  filled as spans, steep lines pixel by pixel through the format's cursor, stepping
+  a row pointer (the target format is switched once per line, not per pixel or
+  run). Both end points are drawn. The walk is
   32-bit only: it works relative to the center of the clip rectangle, within +-16383
   pixels of it, and a line reaching further is halved (split points rounded to whole
   pixels) until its parts either miss the clip rectangle or fit.
@@ -526,7 +539,8 @@ Semantics:
 
 Every drawing function switches on the target format once per call (or per row),
 never per pixel; the per-pixel loops are instantiated per format from the cursor
-templates.
+templates. The shapes walked by rows (ellipses, arcs, rounded rectangles, polygons,
+frames) select the span function of the format once per call and call it per span.
 
 Sizes of `src/gfx2d` (`-O2`, all formats but RGB565): 52.7 KB on a Cortex-M33 and 57.4 KB
 on a Cortex-M0+; 39.3 KB on the M33 with `SHAPOGFX2D_TRANSFORM=0` and 35.3 KB with the
@@ -991,7 +1005,10 @@ once, at the boundary:
   screen center, `m[10]` and `m[14]`); a matrix set any other way goes through
   a Q18 4x4 path. Lights are converted when enabled, material colors once per
   primitive.
-- A vertex is converted when it is fetched (three float-to-int conversions),
+- A vertex is converted when it is fetched (three float-to-int conversions; a
+  `PackedVertex` is decoded in integers instead, its buffer's scale as a
+  normalized fixed-point value and its bias in 16.16 converted once per
+  primitive, so a glTF mesh costs no float operation per vertex),
   transformed with 32x32 -> 64 multiplies into 16.16 view space, and projected
   with one division: 1/w comes from a normalized reciprocal (one 32-bit
   hardware division gives 16 bits of it, and a quotient is the top 16 bits of
@@ -1033,21 +1050,29 @@ following get the attribute, for example to run them from RAM
   format NONE plus each enabled texture format with `SHAPOGFX3D_TEXTURE`), and
   `fillLineT<output format>`; these are the explicit instantiations.
 
-Everything else `render()` runs -- the span builders, `fragNearer`/`depthAt`, the
-attribute evaluation (`spanAttrs`, `PerspDiv`) and the pixel loop (`rasterLoop`) -- is
-inlined into them. The only calls from this code to code without the attribute are
-`memset` (GCC turns the reset of the scanline buckets, once per `render()` call, into
-it), the integer division helpers of the target (textured spans) and, on a core
-without `clz`, `__clzsi2`. To list them for a build, disassemble the section with
-relocations (`arm-none-eabi-objdump -dr -j .time_critical.gfx3d gfx3d.o`) and look
-for the call relocations (`R_ARM_THM_CALL`). With `SHAPOGFX3D_TEXTURE=0` the attributed code is about
-7.3 KB on a Cortex-M0+ in the fixed-point build (12.3 KB before the span stage was
-reworked).
+- the attribute evaluation of a span, `spanAttrs<smooth, textured>` (the compiler
+  keeps the textured ones out of line; they are explicit instantiations too).
+
+Everything else `render()` runs -- the span builders, `fragNearer`/`depthAt`,
+`PerspDiv` and the pixel loop (`rasterLoop`) -- is inlined into them. The only calls
+from this code to code without the attribute are `memset` (GCC turns the reset of
+the scanline buckets, once per `render()` call, into it), the integer division
+helpers of the target (textured spans, and the clamp of a smooth span whose color
+leaves 0..255) and, on a core without `clz`, `__clzsi2`. To list them for a build,
+disassemble the section with relocations
+(`arm-none-eabi-objdump -dr -j .time_critical.gfx3d gfx3d.o`) and look for the call
+relocations (`R_ARM_THM_CALL`). With `SHAPOGFX3D_TEXTURE=0` the attributed code is
+about 6.2 KB on a Cortex-M0+ in the fixed-point build (12.3 KB before the span stage
+was reworked); with every texture format it is about 24 KB on a Cortex-M33 (a
+rasterizer evaluates a span's attributes in one path whatever its layer, reaching
+the parts of the record through the fixed layout offsets rather than through one
+record type per layer, which had doubled that code).
 
 ### Stack
 
 `render()` needs about 170 bytes of stack plus a rasterizer's frame (48 to 96 bytes
-on ARM). The deepest path of scene building goes through `putPrimitive()` into the
+on ARM); `beginRender()` about 560 bytes (the 256 counters of its radix sort). The
+deepest path of scene building goes through `putPrimitive()` into the
 triangle setup: on ARM with `SHAPOGFX3D_TEXTURE=0` about 570 bytes in the float build
 (810 when a triangle has to be clipped to the guard band; that variant of the setup
 is a separate function, so its buffers are on the stack only then) and 890 bytes in
@@ -1092,10 +1117,18 @@ view-space z of the primitive's vertices, as a 16-bit key with the ordering of z
 float build keeps the sign, the exponent and 7 bits of mantissa, the fixed-point
 build a 5-bit exponent and 10 bits of mantissa of the 16.16 value, so depths within
 1/128 or 1/1024 of each other tie); equal keys keep the order the primitives were
-added in. Layers with
-`LayerFlags::NO_DEPTH` are left in the order they were added. Depth order between
-opaque spans of one layer is resolved by depth comparison in `render()`, so this sort
-primarily determines the compositing order of translucent primitives.
+added in. The sort is a radix sort of the key in two passes of 8 bits (the second
+skipped when every key of the layer shares its high byte), with the links of render
+context 0, unused until `render()`, as its scratch space: two to four sequential
+passes over the entries instead of the n log n record lookups of a comparison sort.
+Layers with `LayerFlags::NO_DEPTH` are left in the order they were added. Depth
+order between opaque spans of one layer is resolved by depth comparison in
+`render()`, so this sort primarily determines the compositing order of translucent
+primitives.
+
+`beginRender()` also places the scanline links of every render context, so
+`render()` requires it: called without it for the scene at hand (or after more
+primitives were added), `render()` draws nothing.
 
 ### `render()`
 
