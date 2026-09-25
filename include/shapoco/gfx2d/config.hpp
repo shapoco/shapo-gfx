@@ -1,6 +1,8 @@
 #ifndef SHAPOGFX2D_CONFIG_HPP
 #define SHAPOGFX2D_CONFIG_HPP
 
+#include "shapoco/gfx2d/version.hpp"
+
 // Compile-time configuration shared by gfx2d and gfx3d.
 //
 // ShapoGFX is written in C++17. Diagnose a too-old standard here rather than

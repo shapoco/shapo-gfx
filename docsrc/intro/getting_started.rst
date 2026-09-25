@@ -117,6 +117,29 @@ CMake も PlatformIO も使わない
 フォーマットのマクロと ``SHAPOGFX_COORD_BITS`` は、ヘッダを含む全ての翻訳単位で同じ値にしてください
 (CMake のオプションで指定した ``SHAPOGFX_COORD_BITS`` はライブラリの利用側にも伝わります)。
 
+バージョン
+================================================================================
+
+ライブラリのバージョンは ``include/shapoco/gfx2d/version.hpp`` で定義され、``config.hpp`` 経由で
+``gfx2d.hpp`` / ``gfx3d.hpp`` のどちらからも見えます。2D と 3D は同時にリリースされ、番号は一つです。
+
+.. csv-table::
+   :header: "名前", "内容"
+
+   "``SHAPOGFX_VERSION_MAJOR`` / ``_MINOR`` / ``_PATCH``", "バージョンの各成分"
+   "``SHAPOGFX_VERSION_STRING``", "``major.minor.patch`` 形式の文字列リテラル (例: ``""1.0.0""``)"
+   "``SHAPOGFX_VERSION``", "``#if`` で比較するための単一の整数 ``0x00MMmmpp``。``SHAPOGFX_MAKE_VERSION(major, minor, patch)`` で同じ形式の値を作れる"
+   "``shapoco::gfx::VERSION_MAJOR`` / ``VERSION_MINOR`` / ``VERSION_PATCH`` / ``VERSION`` / ``VERSION_STRING``", "上記と同じ値の ``constexpr`` 定数"
+
+.. code-block:: cpp
+
+   #if SHAPOGFX_VERSION < SHAPOGFX_MAKE_VERSION(1, 0, 0)
+   #error "ShapoGFX 1.0.0 or later is required"
+   #endif
+   printf("ShapoGFX %s\n", shapoco::gfx::VERSION_STRING);
+
+``library.json`` の ``version`` も同じ番号で、リリースごとに git で ``v<version>`` のタグを打ちます。
+
 プラットフォーム別の設定
 ================================================================================
 

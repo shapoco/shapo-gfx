@@ -35,6 +35,18 @@ Users include `shapoco/gfx2d/gfx2d.hpp` and/or `shapoco/gfx3d/gfx3d.hpp` and com
 `src/gfx2d/*.cpp` and `src/gfx3d/*.cpp`. Header guards and compile-time options use
 the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 
+## Version (`version.hpp`)
+
+gfx2d and gfx3d are released together and share one version number, defined in
+`include/shapoco/gfx2d/version.hpp` and included by `config.hpp`, so it is visible
+through either umbrella header. `SHAPOGFX_VERSION_MAJOR`, `_MINOR` and `_PATCH` are
+the components, `SHAPOGFX_VERSION_STRING` the `"major.minor.patch"` string and
+`SHAPOGFX_VERSION` the single integer `0x00MMmmpp` for `#if` comparisons
+(`SHAPOGFX_MAKE_VERSION(major, minor, patch)` builds one). The same values are
+available as `constexpr` constants `shapoco::gfx::VERSION_MAJOR`, `VERSION_MINOR`,
+`VERSION_PATCH`, `VERSION` and `VERSION_STRING`. The number must match `"version"`
+in `library.json`; each release is tagged `v<version>` in git.
+
 ## Compile-time configuration (`config.hpp`)
 
 | Macro | Default | Effect |

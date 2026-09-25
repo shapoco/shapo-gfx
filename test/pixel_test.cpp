@@ -1,6 +1,7 @@
 // Pixel format helpers: conversions, cursors and blending
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "check.hpp"
@@ -144,7 +145,40 @@ static void testBlend() {
   CHECK_EQ(makeColor(300, -5, 128), 0xFFFF0080u);
 }
 
+// The version macros, the constants and the string must agree with each other,
+// and library.json (PlatformIO) must carry the same number as version.hpp.
+static_assert(shapoco::gfx::VERSION_MAJOR == SHAPOGFX_VERSION_MAJOR);
+static_assert(shapoco::gfx::VERSION_MINOR == SHAPOGFX_VERSION_MINOR);
+static_assert(shapoco::gfx::VERSION_PATCH == SHAPOGFX_VERSION_PATCH);
+static_assert(SHAPOGFX_VERSION ==
+              SHAPOGFX_MAKE_VERSION(SHAPOGFX_VERSION_MAJOR, SHAPOGFX_VERSION_MINOR,
+                                    SHAPOGFX_VERSION_PATCH));
+static_assert(SHAPOGFX_VERSION >= SHAPOGFX_MAKE_VERSION(1, 0, 0));
+
+static void testVersion() {
+  char expected[32];
+  std::snprintf(expected, sizeof(expected), "%d.%d.%d", SHAPOGFX_VERSION_MAJOR,
+                SHAPOGFX_VERSION_MINOR, SHAPOGFX_VERSION_PATCH);
+  CHECK(std::strcmp(shapoco::gfx::VERSION_STRING, expected) == 0);
+  CHECK_EQ(shapoco::gfx::VERSION, SHAPOGFX_VERSION);
+
+#ifdef SHAPOGFX_TEST_SOURCE_DIR
+  std::FILE* f = std::fopen(SHAPOGFX_TEST_SOURCE_DIR "/library.json", "rb");
+  CHECK(f != nullptr);
+  if (f) {
+    char buf[4096];
+    size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    buf[n] = 0;
+    char key[64];
+    std::snprintf(key, sizeof(key), "\"version\": \"%s\"", expected);
+    CHECK(std::strstr(buf, key) != nullptr);
+  }
+#endif
+}
+
 void testPixel() {
+  testVersion();
   testRoundTrips();
 #if SHAPOGFX_FORMAT_GRAY1
   testCursor<PixelFormat::GRAY1>(37);

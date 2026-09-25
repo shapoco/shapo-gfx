@@ -1,6 +1,6 @@
 {
   "name": "ShapoGFX",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "2D/3D graphics library for embedded systems. A scanline software renderer that needs neither a frame buffer nor a Z buffer, plus a 2D drawing API with bitmap fonts. Supports GRAY1, RGB444, ARGB4444 and RGB565 (display byte order) pixel formats, renders any screen region into a band buffer, and never allocates memory: it draws into buffers you provide and takes its working memory from an arena you hand it. Pure C++17 with no platform dependencies.",
   "keywords": [
     "graphics",
