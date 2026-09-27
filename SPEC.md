@@ -700,7 +700,7 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   until the next pose), `bounds()` (union of the visible slots' boxes) and
   `bounds(placement)` (the box of its corners after `placement`).
 
-Cost, measured on the demorig character (29 bones, 41 slots, scale 0.5): `pose()`
+Cost, measured on the rgb_chan character of demorig converted at scale 0.5 (29 bones, 41 slots): `pose()`
 retires about 17,000 instructions on x86-64 (13,700 of them for the bones without
 timelines); `draw()` adds about 3,000 to the `drawImage()` calls it makes, which do
 the pixel work (a transformed ARGB4444 blit over the parts' footprints, about 51,000
@@ -1450,13 +1450,15 @@ served as a static site.
   rendered in four bands with the clear disabled. Mouse and keyboard control the
   camera in the browser.
 - `example/wasm/demorig/`: a DragonBones character (`model/rgb_chan.hpp`, generated
-  with `dbones2cpp --scale 0.5` from `assets/2d/rgb_chan/` by `make model`: 29 bones,
-  41 slots, a 128 x 492 ARGB4444 atlas, about 130 KB) posed by three `rig::Instance`s
-  at different times of the 24 fps animation (`frameAt()` every frame): as
-  converted, mirrored by a negative scale, and enlarged and swaying. The center one
-  is drawn in two ranges with a ball drawn between them, behind its hand
-  (`drawIndexOf`, `boneTransform`), and the bounding boxes (`bounds(placement)`)
-  are outlined.
+  with `dbones2cpp --scale 0.8` from `assets/2d/rgb_chan/` by `make model`: 29 bones,
+  41 slots, a 512 x 326 ARGB4444 atlas, about 340 KB) posed by a `rig::Instance`
+  from its 24 fps animation (`frameAt()` every frame) and bobbing up and down in a
+  ring of additive rectangles that turns around it. The ring's back half is drawn
+  first, then the character up to its left arm (`draw(g, 0, k)` with
+  `k = drawIndexOf(slotIndex("l_arm"))`), the ring's front half, and the rest of
+  the character, so the arm reaches out in front of the ring. Behind it, colorful
+  stars (outlined and filled polygons, like those of demo2d) turn and fall
+  diagonally over a scrolling checkerboard.
 
 ## Tests
 

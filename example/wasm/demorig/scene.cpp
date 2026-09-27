@@ -15,46 +15,91 @@ namespace g2 = shapoco::gfx2d;
 namespace rig = shapoco::gfx2d::rig;
 using g2::affine2f;
 
-// One pose per character: they play the animation at different times
-static constexpr int NUM_CHARAS = 3;
 // rig::Instance::bytes(rgb_chan::armature) is 1235
-alignas(4) static uint8_t rigMemory[NUM_CHARAS][1236];
-static rig::Instance charas[NUM_CHARAS];
-static int handBone = -1, handDrawIndex = 0;
+alignas(4) static uint8_t rigMemory[2048];
+static rig::Instance rigInst;
 
 void sceneInit() {
-  for (int i = 0; i < NUM_CHARAS; i++) {
-    charas[i].init(rgb_chan::armature, rigMemory[i], sizeof(rigMemory[i]));
-  }
-  handBone = charas[0].boneIndex("l_hand");
+  rigInst.init(rgb_chan::armature, rigMemory, sizeof(rigMemory));
 }
 
-// The armature's origin is near its feet's left; this centers the bind pose
-static affine2f placement(float x, float y, float angle, float sx, float sy) {
-  const g2::RectF &b = rgb_chan::armature.bounds;
-  return affine2f::placement(x, y, angle, sx, sy, b.x + b.width * 0.5f,
-                             b.y + b.height * 0.5f);
+// Colorful stars falling diagonally behind the character, outlined and
+// filled alternately like those of demo2d
+static constexpr int NUM_STARS = 24;
+
+static float hash01(uint32_t n) {
+  n = (n ^ 61u) ^ (n >> 16);
+  n *= 9u;
+  n ^= n >> 4;
+  n *= 0x27d4eb2du;
+  n ^= n >> 15;
+  return (float)(n & 0xFFFFu) / 65535.0f;
+}
+
+static void drawStars(g2::Graphics2D &g, float t) {
+  g.pushState();
+  g.setBlendMode(g2::BlendMode::ADD);
+  for (int i = 0; i < NUM_STARS; i++) {
+    // Nearer stars are larger and fall faster
+    const float zInv = 1.0f / (hash01(i * 3 + 3) * 2.0f + 1.0f);
+    const float r = 28.0f * zInv;
+    const float w = SCREEN_W + 2 * r, h = SCREEN_H + 2 * r;
+    float x = std::fmod(hash01(i * 3 + 1) * w - t * 40.0f * zInv, w);
+    float y = std::fmod(hash01(i * 3 + 2) * h + t * 60.0f * zInv, h);
+    if (x < 0) x += w;
+    if (y < 0) y += h;
+    x -= r;
+    y -= r;
+    const float angle = t * (i & 2 ? 1.2f : -1.2f) + i;
+    g2::vec2f v[10];
+    for (int k = 0; k < 10; k++) {
+      const float dist = (k & 1) ? r : r * 0.45f;
+      const float th = angle + k * (float)M_PI / 5.0f;
+      v[k] = {x + std::cos(th) * dist, y + std::sin(th) * dist};
+    }
+    const g2::Color col =
+        g2::makeColorHsv(i * 360 / NUM_STARS + (int)(t * 40), 200, 240);
+    if (i & 1) {
+      g.fillPolygon(v, 10, g2::colorWithAlpha(col, 200));
+    } else {
+      g.drawPolygon(v, 10, col);
+    }
+  }
+  g.popState();
 }
 
 static void drawBackground(g2::Graphics2D &g, float t) {
-  for (int y = 0; y < SCREEN_H; y += 8) {
-    const int v = 28 + y * 40 / SCREEN_H;
-    g.fillRect(0, y, SCREEN_W, 8, g2::makeColor(v / 2, v * 3 / 4, v + 20));
-  }
-  // Floor tiles scrolling to the left
-  const int off = (int)(t * 40.0f) % 40;
-  for (int x = -off; x < SCREEN_W; x += 40) {
-    g.fillRect(x, SCREEN_H - 24, 20, 24, g2::makeColor(52, 60, 84));
-    g.fillRect(x + 20, SCREEN_H - 24, 20, 24, g2::makeColor(44, 50, 72));
+  g.clear(g2::makeColor(64, 64, 64));
+  const int sz = SCREEN_H / 16;
+  const g2::Color col = g2::makeColor(80, 80, 80);
+  const int shift = (int)(t * sz) % (sz * 2);
+  for (int iy = -2; iy < SCREEN_H / sz; iy++) {
+    for (int ix = -2; ix < SCREEN_W / sz; ix++) {
+      if ((ix + iy) % 2 == 0) {
+        g.fillRect(ix * sz + shift, iy * sz + shift, sz, sz, col);
+      }
+    }
   }
 }
 
-static void drawBounds(g2::Graphics2D &g, const rig::Instance &inst,
-                       const affine2f &m) {
-  const g2::RectF b = inst.bounds(m);
-  g.drawRect(g2::Rect{(int)std::floor(b.x), (int)std::floor(b.y),
-                      (int)std::ceil(b.width), (int)std::ceil(b.height)},
-             g2::makeColor(255, 255, 255, 64));
+static void drawCircle(g2::Graphics2D &g, float t, bool front) {
+  const int N = 40;
+  g.pushState();
+  g.setBlendMode(g2::BlendMode::ADD);
+  g.rotate(M_PI / 8.0f);
+  g.scale(1.0f, 0.3f);
+  for (int i = 0; i < N; i++) {
+    float a =
+        ((int)(i * 65536 / N + t * 1024) % 65536) / 65536.0f * 2.0f * M_PI;
+    if (front ^ (M_PI / 2.0f < a && a < M_PI * 3.0f / 2.0f)) {
+      g.pushState();
+      g.rotate(a);
+      g.fillRect(-5, 150, 10, 40,
+                 g2::makeColorHsv((i * (360 / N)) % 360, 200, 255));
+      g.popState();
+    }
+  }
+  g.popState();
 }
 
 void sceneRender(g2::Graphics2D &g, float t) {
@@ -62,51 +107,49 @@ void sceneRender(g2::Graphics2D &g, float t) {
   g.resetTransform();
   g.setBlend(g2::BlendMode::ALPHA, 255);
   drawBackground(g, t);
+  drawStars(g, t);
 
   const rig::Animation &anim = rgb_chan::anim_animtion0;
   // 24 fps data, interpolated at any rate
-  for (int i = 0; i < NUM_CHARAS; i++) {
-    charas[i].pose(anim, rig::frameAt(anim, t + i * 0.9f));
-  }
+  float t2 = ((int)(t * 1000) % 2000) / 1000.0f + 1.0f;
+  rigInst.pose(anim, rig::frameAt(anim, t2));
 
-  // Left: as converted
-  const affine2f m0 = placement(110, 100, 0.0f, 0.9f, 0.9f);
-  // Right: mirrored (a negative scale), slightly smaller
-  const affine2f m1 = placement(380, 96, 0.0f, -0.8f, 0.8f);
-  // Center: enlarged and swaying
-  const affine2f m2 =
-      placement(250, 210, std::sin(t * 1.3f) * 0.25f, 1.25f, 1.25f);
+  // Draw a scene where a ring of rectangles rotates around the character.
+  // To make the character appear to be placed inside the ring,
+  // draw the back side of the ring first, then the character, and finally the
+  // front side of the ring. However, the character's left hand is drawn in
+  // front of the ring.
 
-  g.setTransform(m0);
-  charas[0].draw(g);
-  g.setTransform(m1);
-  charas[1].draw(g);
+  const int handSlot = rigInst.slotIndex("l_arm");
+  const int handDrawIndex = rigInst.drawIndexOf(handSlot);
 
-  // A ball held in the left hand of the center one: drawn between the slots
-  // before and after the hand, so the hand is in front of it
-  rig::Instance &c = charas[2];
-  const int handSlot = c.slotIndex("l_hand");
-  handDrawIndex = c.drawIndexOf(handSlot);
-  g.setTransform(m2);
-  c.draw(g, 0, handDrawIndex);
-  const affine2f &hand = c.boneTransform(handBone);
-  const g2::vec2f p = (m2 * hand).apply(30.0f, -4.0f);  // on the palm
+  g.pushState();
   g.resetTransform();
-  const float r = 22.0f + std::sin(t * 4.0f) * 2.0f;
-  g.fillCircle(p, r, g2::makeColorHsv((int)(t * 60.0f) % 360, 200, 255));
-  g.fillCircle({p.x - r * 0.3f, p.y - r * 0.35f}, r * 0.3f,
-               g2::makeColor(255, 255, 255, 160));
-  g.setTransform(m2);
-  c.draw(g, handDrawIndex, rgb_chan::armature.slotCount);
+  g.translate(SCREEN_W / 2, SCREEN_H / 2);
 
-  g.resetTransform();
-  drawBounds(g, charas[0], m0);
-  drawBounds(g, charas[1], m1);
-  drawBounds(g, charas[2], m2);
+  const float scale = (float)SCREEN_H / 320;
+  g.scale(scale, scale);
 
-  g.setFont(&ShapoSansP_s12c09a01w02);
-  g.setTextColor(g2::Colors::WHITE);
-  g.drawString(8, 6, "rig::Instance: DragonBones -> dbones2cpp");
+  drawCircle(g, t, false);
+
+  g.pushState();
+  g.translate(0, sinf(t * 2.0f) * scale * 10);
+  rigInst.draw(g, 0, handDrawIndex);
+  g.popState();
+
+  drawCircle(g, t, true);
+
+  g.pushState();
+  g.translate(0, sinf(t * 2.0f) * scale * 10);
+  rigInst.draw(g, handDrawIndex, rgb_chan::armature.slotCount);
+  g.popState();
+
+  g.popState();
+
+  // g.resetTransform();
+  // g.setFont(&ShapoSansP_s12c09a01w02);
+  // g.setTextColor(g2::Colors::WHITE);
+  // g.drawString(8, 6, "rig::Instance: DragonBones -> dbones2cpp");
 }
 
-}  // namespace demorig
+} // namespace demorig
