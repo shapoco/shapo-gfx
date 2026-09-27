@@ -1,5 +1,7 @@
 # ShapoGFX
 
+English | [日本語](README.ja.md)
+
 2D/3D graphics libraries for embedded systems.
 
 ShapoGFX is a small, dependency-free C++17 software renderer for
@@ -30,6 +32,12 @@ takes its working memory from an arena you hand it.
 - Tools: `img2cpp` (images), `gltf2cpp` (glTF 2.0 models) and `dbones2cpp`
   (DragonBones armatures) generate `const` data headers
 - Self-checking tests meant to run under ASan/UBSan
+
+## Applications
+
+- [Devour Sphere](https://github.com/shapoco/devour-sphere): a 3D shooter
+  running on RP2350 / RP2040 / ESP32-S3 / ESP32-P4 boards and in the browser,
+  written as a showcase of ShapoGFX
 
 ## Building
 
