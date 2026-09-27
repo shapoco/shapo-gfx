@@ -1465,7 +1465,16 @@ module.
   attachments (dropped where it would enclose over 98% of the rectangle). The
   images are shelf-packed into one atlas whose width (a power of two, 64..2048)
   gives the smallest area, so the stride is a power of two (RP2 interpolator path);
-  `--atlas-width 0` emits one texture per image. Output: `atlasData` / `atlas`,
+  `--atlas-width 0` emits one texture per image, which has no row padding: when the
+  images live in flash behind a cache, a frame touches a third fewer cache lines
+  (rgb_chan: 3464 lines of 64 bytes against 5133), which is what took the Tab5
+  from 30 to 42 fps (its 256 KB L2 holds the dense textures, not the atlas) and
+  changed nothing on the CoreS3 (64 KB: neither fits); the atlas keeps the RP2
+  interpolator path. The measured costs of the options on the rgb_chan frame
+  (320 x 240, x86-64): the hulls -5.5%, `--fit-rotate` mostly flash (-13%),
+  `--out-format rgb565_swapped` -33% (opaque pixels are copied, not blended, and
+  the edges lose their antialiasing), `--scale` flash and cache footprint only (the
+  drawn pixels are the screen's). Output: `atlasData` / `atlas`,
   `hull_<image>`, `attachments_<slot>`, `bones`, `slots`, `armature`, per animation
   `anim_<name>_curves`, key arrays, timelines, draw orders and `anim_<name>`, then
   `animations[]` and `ANIMATION_COUNT`. `--preview` renders poses of the first
