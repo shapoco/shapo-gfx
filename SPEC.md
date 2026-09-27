@@ -673,7 +673,10 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   a) e / 16384` in float for positions, `a + (((int16)(b - a) e) >> 14)` for angles
   and `a + (((b - a) e) >> 14)` for scales and alphas), calls
   `BoneVisitor::onBone(bone, BonePose &)` if given, and multiplies the local matrix
-  (one sin/cos pair when rotX == rotY) onto the parent's. Then each slot takes its
+  onto the parent's. Its sines and cosines come from a 257-entry quarter-wave Q15
+  table interpolated linearly (error below 5e-5; one pair when rotX == rotY), not from
+  libm, whose `sinf()` / `cosf()` cost thousands of cycles in software floating point
+  and 3.5-4 KB of code. Then each slot takes its
   attachment and alpha, and its bounding box in the armature's space (the four
   corners of `src` through `world * local`, floor / ceil, int16). The draw order is
   that of the last key at or before the frame, copied only when it changes (an order
@@ -696,6 +699,16 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   space), `attachmentOf` / `setAttachment` and `alphaOf` / `setAlpha` (overrides
   until the next pose), `bounds()` (union of the visible slots' boxes) and
   `bounds(placement)` (the box of its corners after `placement`).
+
+Cost, measured on the demorig character (29 bones, 41 slots, scale 0.5): `pose()`
+retires about 17,000 instructions on x86-64 (13,700 of them for the bones without
+timelines); `draw()` adds about 3,000 to the `drawImage()` calls it makes, which do
+the pixel work (a transformed ARGB4444 blit over the parts' footprints, about 51,000
+source pixels here). Drawing in 8 bands of 40 rows costs 3% more than at once
+(8% more without the clip skip), and a band the character misses costs 3,000
+instructions (27,000 without the skip). `src/gfx2d/rig.cpp` is 5.1 KB on a
+Cortex-M33 and 6.4 KB on a Cortex-M0+ (`-O2`, code and the sine table); it is not
+linked in when unused.
 
 Not supported (the tool warns and drops them): mesh deformation (FFD, weighted
 meshes), IK, nested armatures, events, the RGB tint of slots, extra turns

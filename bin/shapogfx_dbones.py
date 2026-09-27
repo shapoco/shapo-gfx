@@ -841,12 +841,29 @@ def _lerp_angle(a, b, e):
     return wrap16(a + ((wrap16(b - a) * e) >> 14))
 
 
-ANGLE_RAD = 2.0 * math.pi / 65536.0
+# sin over a quarter turn in 256 steps, Q15 (SIN_Q15 of rig.cpp)
+SIN_Q15 = [round(32767 * math.sin(i * math.pi / 512)) for i in range(257)]
+
+
+def sin_q15(angle):
+    """sin of an angle in 1/65536 turns, Q15, like sinQ15() of rig.cpp."""
+    angle &= 0xFFFF
+    quadrant, r = angle >> 14, angle & 0x3FFF
+    pos = 16384 - r if quadrant & 1 else r
+    i, f = pos >> 6, pos & 63
+    v = SIN_Q15[i]
+    if f:
+        v += ((SIN_Q15[i + 1] - v) * f) >> 6
+    return -v if quadrant & 2 else v
 
 
 def local_matrix(p):
-    sx, sy = p["scaleX"] / SCALE_ONE, p["scaleY"] / SCALE_ONE
-    return mat_from(p["x"], p["y"], p["rotX"] * ANGLE_RAD, p["rotY"] * ANGLE_RAD, sx, sy)
+    k = f32(1.0 / (32767.0 * SCALE_ONE))
+    sx, sy = f32(p["scaleX"]) * k, f32(p["scaleY"]) * k
+    cy, sny = sin_q15(p["rotY"] + 16384), sin_q15(p["rotY"])
+    cx, snx = sin_q15(p["rotX"] + 16384), sin_q15(p["rotX"])
+    return (float(f32(cy) * sx), float(f32(sny) * sx), float(-f32(snx) * sy), float(f32(cx) * sy),
+            float(f32(p["x"])), float(f32(p["y"])))
 
 
 def evaluate(c, anim, frame, visitor=None):
