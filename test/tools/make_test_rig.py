@@ -95,9 +95,12 @@ MOVE_50 = {
             {"duration": 4, "transform": {"x": 1, "y": 1, "skX": -20, "skY": -20}},  # no tween
             {"duration": 0, "transform": {}},
         ]},
+        # Offsets 0, -350 (= +10), 170, -170 (170 -> -170 turns +20 through 180), 0
         {"name": "b", "frame": [
-            {"duration": 6, "tweenEasing": 0, "transform": {}},
-            {"duration": 6, "tweenEasing": 0, "transform": {"skX": -350, "skY": -350}},  # = +10
+            {"duration": 3, "tweenEasing": 0, "transform": {}},
+            {"duration": 3, "tweenEasing": 0, "transform": {"skX": -350, "skY": -350}},
+            {"duration": 3, "tweenEasing": 0, "transform": {"skX": 170, "skY": 170}},
+            {"duration": 3, "tweenEasing": 0, "transform": {"skX": -170, "skY": -170}},
             {"duration": 0, "transform": {}},
         ]},
         {"name": "c", "frame": [
@@ -130,8 +133,10 @@ MOVE_55 = {
              {"duration": 4, "rotate": -20},
              {"duration": 0}]},
         {"name": "b", "rotateFrame": [
-            {"duration": 6, "tweenEasing": 0},
-            {"duration": 6, "tweenEasing": 0, "rotate": -350},
+            {"duration": 3, "tweenEasing": 0},
+            {"duration": 3, "tweenEasing": 0, "rotate": -350},
+            {"duration": 3, "tweenEasing": 0, "rotate": 170},
+            {"duration": 3, "tweenEasing": 0, "rotate": -170},
             {"duration": 0}]},
         {"name": "c", "scaleFrame": [
             {"duration": 6, "tweenEasing": 0},

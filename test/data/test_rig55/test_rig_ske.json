@@ -1,7 +1,7 @@
 {
  "frameRate": 24,
  "name": "test_rig",
- "version": "5.0",
+ "version": "5.5",
  "armature": [
   {
    "type": "Armature",
@@ -135,13 +135,23 @@
        "name": "b",
        "rotateFrame": [
         {
-         "duration": 6,
+         "duration": 3,
          "tweenEasing": 0
         },
         {
-         "duration": 6,
+         "duration": 3,
          "tweenEasing": 0,
          "rotate": -350
+        },
+        {
+         "duration": 3,
+         "tweenEasing": 0,
+         "rotate": 170
+        },
+        {
+         "duration": 3,
+         "tweenEasing": 0,
+         "rotate": -170
         },
         {
          "duration": 0

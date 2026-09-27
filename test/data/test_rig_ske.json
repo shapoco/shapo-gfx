@@ -122,16 +122,32 @@
        "name": "b",
        "frame": [
         {
-         "duration": 6,
+         "duration": 3,
          "tweenEasing": 0,
          "transform": {}
         },
         {
-         "duration": 6,
+         "duration": 3,
          "tweenEasing": 0,
          "transform": {
           "skX": -350,
           "skY": -350
+         }
+        },
+        {
+         "duration": 3,
+         "tweenEasing": 0,
+         "transform": {
+          "skX": 170,
+          "skY": 170
+         }
+        },
+        {
+         "duration": 3,
+         "tweenEasing": 0,
+         "transform": {
+          "skX": -170,
+          "skY": -170
          }
         },
         {
