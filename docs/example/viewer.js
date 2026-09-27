@@ -7,7 +7,13 @@
 // and copies its RGB565_SWAPPED frame buffer to the <canvas id="screen"> every frame.
 //
 // startDemoViewer({ wasm: 'demo3d.wasm', prefix: 'demo3d', scale: 2,
-//                   camera: { yaw, pitch, dist, pitchMin, pitchMax, distMin, distMax } })
+//                   camera: { yaw, pitch, dist, pitchMin, pitchMax, distMin, distMax },
+//                   screenQuery: false, pointer: false })
+//
+// screenQuery: take the frame buffer size from ?screen=WxH in the URL and pass it to
+//   <prefix>_set_screen(w, h) (returns 0 if rejected) before <prefix>_init().
+// pointer: pass the mouse / touch (one pointer) in frame buffer pixels to
+//   <prefix>_pointer_down(x, y), <prefix>_pointer_move(x, y) and <prefix>_pointer_up().
 
 'use strict';
 
@@ -42,6 +48,13 @@ async function startDemoViewer(opts) {
     const ex = instance.exports;
     const fn = (name) => ex[`${opts.prefix}_${name}`];
     if (ex._initialize) ex._initialize();
+    let sizeError = '';
+    if (opts.screenQuery) {
+      const wanted = parseScreenSize(new URLSearchParams(location.search));
+      if (wanted && !fn('set_screen')(wanted.w, wanted.h)) {
+        sizeError = `screen ${wanted.w}x${wanted.h} is not supported`;
+      }
+    }
     fn('init')();
 
     const W = fn('get_width')();
@@ -62,6 +75,7 @@ async function startDemoViewer(opts) {
     const rgba = imgData.data;
 
     if (cam) setupCameraInput(canvas, cam, clampCam);
+    if (opts.pointer) setupPointerInput(canvas, W, H, fn);
 
     // FPS counter
     let frames = 0;
@@ -99,7 +113,7 @@ async function startDemoViewer(opts) {
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
-    if (statusEl) statusEl.textContent = '';
+    if (statusEl) statusEl.textContent = sizeError;
   } catch (e) {
     if (statusEl) {
       statusEl.textContent = `Error: ${e.message} - this page does not work from file://.` +
@@ -107,6 +121,43 @@ async function startDemoViewer(opts) {
     }
     throw e;
   }
+}
+
+// ?screen=WxH (also W*H or WXH)
+function parseScreenSize(params) {
+  const value = params.get('screen');
+  const m = value && /^\s*(\d+)\s*[xX*]\s*(\d+)\s*$/.exec(value);
+  return m ? { w: parseInt(m[1], 10), h: parseInt(m[2], 10) } : null;
+}
+
+// One pointer (the first one down) in frame buffer pixels. style.css sets
+// touch-action: none on the canvas, so touches do not scroll the page.
+function setupPointerInput(canvas, W, H, fn) {
+  const down = fn('pointer_down'), move = fn('pointer_move'), up = fn('pointer_up');
+  let active = null;
+  // offsetX / offsetY are relative to the padding box, which is the canvas
+  // area scaled to clientWidth x clientHeight
+  const pos = (e) => [
+    Math.floor(e.offsetX * W / canvas.clientWidth),
+    Math.floor(e.offsetY * H / canvas.clientHeight),
+  ];
+  canvas.addEventListener('pointerdown', (e) => {
+    if (active !== null) return;
+    active = e.pointerId;
+    canvas.setPointerCapture(e.pointerId);
+    down(...pos(e));
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerId === active) move(...pos(e));
+  });
+  const release = (e) => {
+    if (e.pointerId !== active) return;
+    up();
+    active = null;
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
 }
 
 function setupCameraInput(canvas, cam, clampCam) {

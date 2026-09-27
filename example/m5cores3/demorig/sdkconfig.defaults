@@ -1,0 +1,28 @@
+# demorig on M5Stack CoreS3 (ESP32-S3, 16 MB flash). PSRAM is not used.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# USB-C goes to the chip's own USB-Serial/JTAG
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The atlas is read from flash through the data cache, in rotated and
+# scaled order: the largest cache there is.
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# Reaches the whole tree: the frame time is spent in ShapoGFX's blitters and
+# in M5GFX, not only in our own translation units.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+CONFIG_FREERTOS_HZ=1000
+
+# The frame loop draws with gfx2d on top of its own locals
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Both cores draw and neither yields for long, so the watchdog would fire on
+# whichever one the idle task never reaches.
+CONFIG_ESP_TASK_WDT_INIT=n
+
+# The character atlas alone is 338 KB: more than the 1 MB default app
+# partition leaves room for next to M5Unified.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y

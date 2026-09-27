@@ -100,7 +100,7 @@ demorig のキャラクタは次のコマンドで作られています (``make 
 .. code-block:: sh
 
    bin/dbones2cpp --scale 0.8 assets/2d/rgb_chan/rgb_chan_ske.json \
-       assets/2d/rgb_chan/Armature_animtion0.dbani example/wasm/demorig/model/rgb_chan.hpp
+       assets/2d/rgb_chan/Armature_animtion0.dbani example/common/demorig/model/rgb_chan.hpp
 
 変換結果は ``--preview`` の PNG で確認できます。プレビューは変換後のデータ (量子化した角度・倍率・カーブ) から
 描くので、実機の姿勢と一致します。

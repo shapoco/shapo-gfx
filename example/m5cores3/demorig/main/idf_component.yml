@@ -1,0 +1,7 @@
+dependencies:
+  # M5Unified brings the board up (PMIC, panel, touch); M5GFX is the panel
+  # and the SPI bus the strips go out on (public setWindow / writePixelsDMA /
+  # waitDMA only).
+  m5stack/m5gfx: "^0.2.25"
+  m5stack/m5unified: "^0.2.18"
+  idf: ">=5.5"

@@ -9,13 +9,17 @@ REPO_ROOT := ../../..
 OUT_DIR := $(REPO_ROOT)/docs/example/demorig
 OUT := $(OUT_DIR)/demorig.wasm
 
-SRCS := main.cpp scene.cpp $(wildcard $(REPO_ROOT)/src/gfx2d/*.cpp)
-HDRS := $(wildcard $(REPO_ROOT)/include/shapoco/gfx2d/*.hpp) \
-        scene.hpp model/rgb_chan.hpp
+COMMON := $(REPO_ROOT)/example/common/demorig
 
-CXXFLAGS := -O2 -std=c++17 -Wall -Wextra -I $(REPO_ROOT)/include -I .
+SRCS := main.cpp $(COMMON)/demorig.cpp $(COMMON)/scene.cpp \
+        $(wildcard $(REPO_ROOT)/src/gfx2d/*.cpp)
+HDRS := $(wildcard $(REPO_ROOT)/include/shapoco/gfx2d/*.hpp) \
+        $(COMMON)/demorig.hpp $(COMMON)/scene.hpp $(COMMON)/model/rgb_chan.hpp
+
+CXXFLAGS := -O2 -std=c++17 -Wall -Wextra -I $(REPO_ROOT)/include -I $(COMMON)
 
 EXPORTS := _demorig_init,_demorig_frame,_demorig_get_fb,_demorig_get_width,_demorig_get_height
+EXPORTS := $(EXPORTS),_demorig_set_screen,_demorig_pointer_down,_demorig_pointer_move,_demorig_pointer_up
 
 # The character (checked in; `make model` regenerates it from the assets)
 ASSETS := $(REPO_ROOT)/assets/2d/rgb_chan
@@ -31,7 +35,7 @@ $(OUT): $(SRCS) $(HDRS) Makefile
 
 model:
 	$(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.8 \
-		$(ASSETS)/rgb_chan_ske.json $(ASSETS)/Armature_animtion0.dbani model/rgb_chan.hpp
+		$(ASSETS)/rgb_chan_ske.json $(ASSETS)/Armature_animtion0.dbani $(COMMON)/model/rgb_chan.hpp
 
 # Native build: renders one frame to demorig.ppm
 native: $(SRCS) $(HDRS)

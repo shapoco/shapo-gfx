@@ -81,6 +81,9 @@ src/                     implementation
 bin/                     img2cpp, gltf2cpp, dbones2cpp and their requirements
 library.json             PlatformIO manifest
 example/wasm/            demo2d, demo3d, demorig (WASM and native entry points)
+example/common/demorig/  demorig's scene, view and overlay (shared by the WASM and M5Stack builds)
+example/m5*/demorig/     demorig on M5Stack CoreS3 / Tab5 (ESP-IDF projects)
+example/m5common/        their shared ESP-IDF components (see its README)
 docs/                    published site: demo pages and their WASM builds
 docsrc/                  Sphinx sources of the manual, deployed to /ref/ by CI
                          (`make -C docsrc preview` to read it locally)

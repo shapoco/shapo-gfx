@@ -9,10 +9,12 @@
 <body>
 <h1>ShapoGFX demorig (2D skeletal animation for embedded systems, running in WebAssembly)</h1>
 <canvas id="screen"></canvas>
-<div id="fps"></div>
 <div class="help">
   A DragonBones character converted by dbones2cpp and animated with rig::Instance: 24 fps keyframes
-  interpolated every frame.
+  interpolated every frame. The (+) / (-) buttons zoom in and out (1/4 to 16 times); drag to scroll.
+  The frame rate is drawn in the top left corner.
+  <code>?screen=WxH</code> in the URL sets the frame buffer size (default 480x320, e.g.
+  <a href="?screen=320x240">320x240</a>, <a href="?screen=640x360">640x360</a>).
 </div>
 <div id="status">Loading...</div>
 <div class="help">
@@ -22,7 +24,7 @@
 </div>
 <script src="../viewer.js"></script>
 <script>
-  startDemoViewer({ wasm: 'demorig.wasm', prefix: 'demorig' });
+  startDemoViewer({ wasm: 'demorig.wasm', prefix: 'demorig', screenQuery: true, pointer: true });
 </script>
 </body>
 </html>

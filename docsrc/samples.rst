@@ -15,9 +15,12 @@
   24 fps のアニメーションを毎フレーム補間し、上下に揺れるキャラクタの周りを加算合成の矩形のリングが回ります。
   リングの奥半分、キャラクタの左腕より奥 (``draw(g, 0, k)``)、リングの手前半分、キャラクタの残り (``draw(g, k, n)``)
   の順に描くので、左腕だけがリングの手前に出ます。背景では、demo2d と同じ線と塗りつぶしのカラフルな星が
-  回転しながら斜めに降ります。
+  回転しながら斜めに降ります。右端の (+) / (-) ボタンで 2 倍ずつズームイン / ズームアウト (1/4 〜 16 倍、滑らかに変化)、
+  それ以外の部分をドラッグ (タッチパネルならスワイプ) するとスクロールします。左上にフレームレートと倍率を表示します。
+  URL に ``?screen=WxH`` を付けると画面サイズを変えられます (例: `320x240 <../example/demorig/?screen=320x240>`__、
+  既定は 480x320)。
 
-いずれも 480x320 の RGB565_SWAPPED バッファに描画し、``docs/example/viewer.js`` が RGB565_SWAPPED をキャンバスに展開しています。
+いずれも 480x320 (demorig は指定したサイズ) の RGB565_SWAPPED バッファに描画し、``docs/example/viewer.js`` が RGB565_SWAPPED をキャンバスに展開しています。
 
 ソース
 ================================================================================
@@ -27,7 +30,10 @@
 
    "``example/wasm/demo2d/``", "``scene.cpp`` (描画)、``main.cpp`` (WASM エクスポートとネイティブ ``main()``)、``Makefile``、``CMakeLists.txt``"
    "``example/wasm/demo3d/``", "同上。``model/`` に風車の生成スクリプト、``.glb``、生成ヘッダ"
-   "``example/wasm/demorig/``", "同上。``model/rgb_chan.hpp`` は ``make model`` で ``assets/2d/rgb_chan/`` から生成"
+   "``example/wasm/demorig/``", "``main.cpp`` (WASM エクスポートとネイティブ ``main()``)、``Makefile``、``CMakeLists.txt``"
+   "``example/common/demorig/``", "demorig のシーン (``scene.cpp``) とビュー・ボタン・FPS 表示 (``demorig.cpp``)。ShapoGFX だけに依存し、WASM 版と M5Stack 版で共有。``model/rgb_chan.hpp`` は ``make -C example/wasm/demorig model`` で ``assets/2d/rgb_chan/`` から生成"
+   "``example/m5cores3/demorig/`` ほか", "M5Stack 版 demorig の ESP-IDF プロジェクト (下記)"
+   "``example/m5common/``", "M5Stack 版の共通コンポーネント (ShapoGFX、demorig の共通コード、M5Unified を使うフロントエンド)"
    "``docs/example/``", "``viewer.js`` (共通ビューア)、``style.css``、各デモの ``index.html`` と ``.wasm``"
 
 ネイティブ版は 1 フレームを PPM ファイルに書き出します (ブラウザなしで動作確認するため)。
@@ -36,6 +42,8 @@
 
    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
    ./build/example/wasm/demo3d/demo3d frame.ppm 1.5    # 第 2 引数は経過秒
+   # demorig: 経過秒、画面サイズ、倍率、画面中央に来るシーン上の点、バンド数
+   ./build/example/wasm/demorig/demorig frame.ppm 1.5 320x240 16 160 120 5
 
 WASM のビルド
 ================================================================================
@@ -52,6 +60,34 @@ WASM のビルド
 ``fetch()`` を使うため ``file://`` では動きません。WASM バイナリはリポジトリにコミットされており、
 ``docs/`` を GitHub Pages でそのまま公開できます。
 
+M5Stack 版 demorig
+================================================================================
+
+demorig は M5Stack CoreS3 と Tab5 でも動きます。ESP-IDF 5.5 のプロジェクトで、画面の初期化とタッチパネルに
+M5Unified / M5GFX を使います (依存コンポーネントは初回ビルド時にダウンロードされます)。
+
+.. csv-table::
+   :header: "機種", "プロジェクト", "画面", "操作"
+
+   "M5Stack CoreS3", "``example/m5cores3/demorig/``", "320x240 (SPI 40 MHz)", "ボタンとスワイプ"
+   "M5Stack Tab5", "``example/m5tab5/demorig/``", "640x360 に描画し PPA で 2 倍に拡大して 1280x720 へ", "ボタンとスワイプ"
+
+.. code-block:: sh
+
+   cd example/m5cores3/demorig
+   ./build.sh          # ビルド (ESP-IDF は IDF_ROOT、既定 ~/esp/5.5)
+   ./run.sh [PORT]     # ビルドして書き込み
+   ./monitor.sh [PORT] # シリアルログ
+
+フレームは 60 行のストリップ単位で描画します。1 つのストリップの上半分をコア 0、
+下半分をコア 1 が同時に描き、描き終えたストリップを SPI DMA (Tab5 は PPA) で送る間に次のストリップを
+もう一方のバッファに描きます。シリアルログには 2 秒ごとにフレームレート、倍率、1 フレームあたりの時間
+(シーンの更新、コア 0 / コア 1 の描画、コア 1 の待ち、パネル転送の待ち) が出ます。
+``idf.py -DM5DEMORIG_DUAL_CORE=0 build`` でビルドすると、コア 0 だけで描画します (比較用、元に戻すには ``-DM5DEMORIG_DUAL_CORE=1``)。
+
+CoreS3 は SPI 40 MHz で全画面を送るのに約 31 ms かかるので、フレームレートの上限は約 32 fps です。キャラクタを拡大すると、重なったパーツの描画面積が増えるため描画が重くなります
+(320x240、x86-64 の実行命令数で、等倍の約 410 万に対して 2 倍以上では約 1100 万)。
+
 新しいデモを作る
 ================================================================================
 
@@ -59,3 +95,6 @@ WASM のビルド
 エクスポート関数は ``<name>_init``, ``<name>_frame(t[, yaw, pitch, dist])``, ``<name>_get_fb``,
 ``<name>_get_width``, ``<name>_get_height`` の 5 つで、``docs/example/<name>/index.html`` から
 ``startDemoViewer({wasm, prefix, camera})`` を呼ぶだけです。
+``startDemoViewer`` に ``screenQuery: true`` を渡すと URL の ``?screen=WxH`` を ``<name>_set_screen(w, h)`` に、
+``pointer: true`` を渡すとマウス / タッチを ``<name>_pointer_down(x, y)``, ``<name>_pointer_move(x, y)``,
+``<name>_pointer_up()`` に渡します (demorig が使っています)。

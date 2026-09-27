@@ -1449,8 +1449,9 @@ served as a static site.
   backdrop (gradient, stars, caption) drawn with `Graphics2D`, then the 3D scene
   rendered in four bands with the clear disabled. Mouse and keyboard control the
   camera in the browser.
-- `example/wasm/demorig/`: a DragonBones character (`model/rgb_chan.hpp`, generated
-  with `dbones2cpp --scale 0.8` from `assets/2d/rgb_chan/` by `make model`: 29 bones,
+- `example/wasm/demorig/`: a DragonBones character
+  (`example/common/demorig/model/rgb_chan.hpp`, generated with
+  `dbones2cpp --scale 0.8` from `assets/2d/rgb_chan/` by `make model`: 29 bones,
   41 slots, a 512 x 326 ARGB4444 atlas, about 340 KB) posed by a `rig::Instance`
   from its 24 fps animation (`frameAt()` every frame) and bobbing up and down in a
   ring of additive rectangles that turns around it. The ring's back half is drawn
@@ -1459,6 +1460,32 @@ served as a static site.
   the character, so the arm reaches out in front of the ring. Behind it, colorful
   stars (outlined and filled polygons, like those of demo2d) turn and fall
   diagonally over a scrolling checkerboard.
+
+  The scene, the view and the overlay are `example/common/demorig/` (ShapoGFX
+  only), shared with the M5Stack builds. The scene is laid out in world pixels of
+  the screen size and scaled with the height (320 being the reference: the ring,
+  the character, the stars' size and speed, the checkerboard's squares). A view
+  zooms it about the screen center (1/4 to 16 times, in powers of two, animated in
+  log2) and scrolls it by dragging, the view center kept within the scene; the
+  background color fills the whole screen and the rest is clipped to the scene's
+  rectangle. (+) / (-) buttons at the bottom of the right edge and the frame rate
+  and zoom in the top left corner are drawn over it. `Demo::draw(g, bandY)` draws
+  any band of rows and is const, so two cores can draw two bands of one frame at
+  once; what a band does not show (stars, the ring's rectangles, rows of the
+  checkerboard) is skipped by boxes computed once per frame, which keeps the cost
+  of drawing a 320 x 240 frame in 8 bands 6% above drawing it at once. The browser
+  page takes the screen size from `?screen=WxH` (default 480 x 320) and the mouse or
+  touch through `viewer.js`; the native build takes the time, the size, the zoom,
+  the view center and a band count on the command line.
+- `example/m5cores3/demorig/`, `example/m5tab5/demorig/`: demorig on M5Stack
+  CoreS3 (320 x 240, touch) and Tab5 (a 640 x 360 frame scaled twice by the PPA,
+  touch), ESP-IDF 5.5 projects sharing the components of
+  `example/m5common/` (ShapoGFX, the scene, and the M5Unified front end). A frame
+  is drawn in strips of 60 rows, each split between the two cores,
+  into two buffers in internal RAM: one strip is drawn while the previous one goes
+  out by SPI DMA (the CoreS3) or the PPA (the Tab5), and the last one is
+  left in flight across the frame boundary. The serial console gets the frame rate
+  and the time per frame every 2 seconds.
 
 ## Tests
 

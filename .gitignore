@@ -22,3 +22,8 @@ docsrc/_build/
 
 # The manual is built and deployed by .github/workflows/publish-docs.yml
 docs/ref/
+
+# ESP-IDF projects (example/m5*/demorig/); dependencies.lock is kept
+example/m5*/*/managed_components/
+example/m5*/*/sdkconfig
+example/m5*/*/sdkconfig.old

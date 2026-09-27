@@ -1,0 +1,37 @@
+# demorig on M5Stack Tab5 (ESP32-P4, 16 MB flash). The board-level values
+# are the ones Devour Sphere's Tab5 front end runs with.
+CONFIG_IDF_TARGET="esp32p4"
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# Tab5 brings out USB-C only; the generic target would use UART0
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The panel framebuffer lives in PSRAM and the DSI reads it continuously
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+
+# ESP-IDF 5.5 defaults to chip revision >= v3.1; Tab5 units seen so far
+# report v1.0, which the bootloader would otherwise refuse
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_0=y
+
+# Reaches the whole tree: the frame time is spent in ShapoGFX's blitters and
+# in M5GFX, not only in our own translation units.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+CONFIG_FREERTOS_HZ=1000
+
+# The frame loop draws with gfx2d on top of its own locals
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Both cores draw and neither yields for long, so the watchdog would fire on
+# whichever one the idle task never reaches.
+CONFIG_ESP_TASK_WDT_INIT=n
+
+# The character atlas alone is 338 KB: more than the 1 MB default app
+# partition leaves room for next to M5Unified.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y

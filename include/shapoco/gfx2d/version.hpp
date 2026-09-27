@@ -5,8 +5,8 @@
 // one number. Keep it in sync with "version" in library.json.
 #define SHAPOGFX_VERSION_MAJOR 1
 #define SHAPOGFX_VERSION_MINOR 1
-#define SHAPOGFX_VERSION_PATCH 0
-#define SHAPOGFX_VERSION_STRING "1.1.0"
+#define SHAPOGFX_VERSION_PATCH 1
+#define SHAPOGFX_VERSION_STRING "1.1.1"
 
 // Single integer 0x00MMmmpp for #if comparisons, e.g.
 //   #if SHAPOGFX_VERSION >= SHAPOGFX_MAKE_VERSION(1, 2, 0)

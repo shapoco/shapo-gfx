@@ -1,0 +1,8 @@
+dependencies:
+  # Pinned exact, not a caret range: panel_ppa.cpp reaches into M5GFX's
+  # Panel_DSI header (not re-exported by M5GFX.h) for the panel framebuffer,
+  # as Devour Sphere's Tab5 front end does with these same versions. Bump
+  # deliberately and re-check those internals.
+  m5stack/m5gfx: "0.2.25"
+  m5stack/m5unified: "0.2.18"
+  idf: ">=5.5"
