@@ -359,6 +359,9 @@ class Graphics2D {
   // images (blend mode, opacity and color key of the state)
   void drawImage(const Texture &, int dx, int dy);
   void drawImage(const Texture &, int dx, int dy, const Rect &src);
+  void drawImage(const Texture &, int dx, int dy, const Rect &src,
+                 const int16_t *polygon, int count);                  // the part of src in a convex polygon
+  static constexpr int IMAGE_POLYGON_MAX = 16;
   void drawImage(const Texture &, const Rect &dst, const Rect &src);  // scaled
   void drawImage(const Texture &, const Rect &dst);
   void drawImage(const Texture &, int dx, int dy, int dw, int dh, int sx, int sy, int sw, int sh);
@@ -501,7 +504,16 @@ Semantics:
   destination rectangle, or a `SCALE` transform with the image's corners snapped like
   a rectangle's, so that it covers the pixels `fillRect()` covers) or a color key goes
   to the scaled path; a rotation or shear to the transformed path. Parts of the source
-  rectangle outside the image are not drawn and leave their place empty.
+  rectangle outside the image are not drawn and leave their place empty. The overload
+  with a convex polygon (`count` vertices as x, y pairs in image pixels relative to
+  the top-left corner of `src`, texel corners, either winding, 3 to
+  `IMAGE_POLYGON_MAX`) draws only the pixels whose source point lies in `src` and in
+  the polygon (edges included), always through the transformed path whatever the
+  transform is (with `SHAPOGFX2D_TRANSFORM=0` too, so the offset is not snapped the
+  way `TRANSLATE` snaps it); fewer than 3 vertices mean no polygon, more than the
+  maximum or a degenerate polygon draw nothing. It is what `rig` draws sprites with:
+  the pixels of a sprite's transparent margin cost the walk and the alpha test
+  whether or not they show, and a polygon around the opaque ones takes that off.
 - **Scaled drawImage** stretches the source rectangle over the destination
   rectangle with nearest-neighbor sampling at pixel centers: destination pixel
   `t` of `dw` shows source pixel `floor((2t + 1) sw / 2dw)`. A negative
@@ -528,7 +540,14 @@ Semantics:
   footprint, and from there the row is clipped exactly in 16.16 fixed point
   (the columns whose `u` and `v` lie in the part of the source rectangle inside
   the image), so the per-pixel walk (`u += du`, `v += dv`) needs no bounds
-  check and never reads outside that part. Images up to 16384 pixels and
+  check and never reads outside that part. A polygon narrows the row further:
+  each edge is a half-plane in source coordinates, which along a row is a bound
+  on the column that moves linearly with the row, so the setup turns the edges
+  into (column at the first row, change per row) pairs -- lower bounds and upper
+  bounds by the sign of the edge normal's component along the row, the edges
+  perpendicular to it narrowing the row range once -- and a row costs one
+  multiply-add per edge and two roundings, in float (the exact rectangle keeps
+  the walk safe whatever this rounds to). Images up to 16384 pixels and
   transforms that shrink by at most 4096 are drawn (the limits keep the fixed
   point within 32 bits). On a core without an FPU the per-row setup is a few
   software float operations; the pixels are integer only.
@@ -613,7 +632,8 @@ using angle16_t = int16_t;  // 1/65536 turn: differences wrap to the shortest wa
 using scale16_t = int16_t;  // Q12 (SCALE_ONE = 4096)
 struct Bone { const char *name; float x, y; angle16_t rotX, rotY;
               scale16_t scaleX, scaleY; uint8_t parent; };          // 24 B (32-bit)
-struct Attachment { const Texture *texture; Rect src; affine2f local; };  // 44 B
+struct Attachment { const Texture *texture; Rect src; affine2f local;
+                    const int16_t *hull; uint8_t hullCount; };       // 52 B
 struct Slot { const char *name; const Attachment *attachments; uint8_t attachmentCount;
               int8_t defaultAttachment; uint8_t bone, alpha; BlendMode blend; };  // 16 B
 struct Armature { const char *name; const Bone *bones; const Slot *slots;
@@ -645,7 +665,10 @@ float frameAt(const Animation &, float seconds, bool loop = true);
 - **Slots** are in the base draw order. A slot shows one of its attachments (-1:
   none). An attachment maps the top-left corner of `src` (a part of a texture atlas)
   to the bone's space; `texture == nullptr` marks a display that is not drawn (an
-  unsupported DragonBones display kept so that the indices match). `alpha` is the
+  unsupported DragonBones display kept so that the indices match). `hull` is a
+  convex polygon around the opaque pixels of `src` (x, y pairs relative to its
+  top-left corner, at most `Graphics2D::IMAGE_POLYGON_MAX` vertices; `nullptr` / 0
+  for the whole rectangle), the polygon `draw()` clips the image to. `alpha` is the
   slot's opacity, `blend` ALPHA or ADD.
 - **Animations** hold one timeline per channel of a bone (TRANSLATE, ROTATE, SCALE)
   or a slot (ATTACHMENT, ALPHA), sorted by bone / slot and channel, with keys in
@@ -686,7 +709,9 @@ float frameAt(const Animation &, float seconds, bool loop = true);
 - `draw(g)` / `draw(g, first, end)` draw the draw positions `[first, end)` (clamped)
   with `g`'s transform as the placement of the armature: per visible slot with a
   non-zero alpha, `setTransform(placement * world[bone] * local)` and
-  `drawImage(texture, 0, 0, src)` (the transformed path). The slot's alpha scales
+  `drawImage(texture, 0, 0, src, hull, hullCount)` (the transformed path; the hull
+  cuts only pixels that would not have shown, so the picture is that of the whole
+  rectangles). The slot's alpha scales
   `g`'s opacity, ADD slots draw additively unless `g`'s blend mode is NONE, and a
   keyed armature sets its key color for its images. Slots whose bounding box, mapped
   by the placement, lies outside `g`'s clip rectangle (a pixel wider) are skipped,
@@ -709,6 +734,16 @@ source pixels here). Drawing in 8 bands of 40 rows costs 3% more than at once
 instructions (27,000 without the skip). `src/gfx2d/rig.cpp` is 5.1 KB on a
 Cortex-M33 and 6.4 KB on a Cortex-M0+ (`-O2`, code and the sine table); it is not
 linked in when unused.
+
+What the pixel work costs is decided by the images: on x86-64 a transformed
+ARGB4444 pixel onto RGB565 retires about 25 instructions when it is transparent, 50
+when opaque and 70 when translucent, and the rectangle of a limb drawn diagonally
+is mostly transparent. The hulls dbones2cpp emits by default (`--hull 8`) take the
+demorig frame of 320 x 240 from 4.11 to 3.88 million instructions (-5.5%), the
+640 x 360 one from 8.34 to 7.63 million (-8.6%) and the frame zoomed in twice by
+10%, with the same pixels on screen; `--fit-rotate` on top takes 13% off the atlas
+(338 to 296 KB) and about 1% more off the zoomed frames, at the price of one
+resampling of the turned images.
 
 Not supported (the tool warns and drops them): mesh deformation (FFD, weighted
 meshes), IK, nested armatures, events, the RGB tint of slots, extra turns
@@ -1399,7 +1434,7 @@ module.
   normals are generated for them). Oversized index ranges and out-of-range indices are
   reported and skipped, so the generated data always satisfies the renderer's invariants.
 
-- **dbones2cpp** `[--namespace NS] [--armature A] [--skin S] [--scale S] [--anim-scale auto|S] [--in-key COLOR] [--out-format argb4444|rgb565_swapped|rgb565] [--out-key COLOR] [--alpha-threshold N] [--dither D] [--atlas-width auto|N|0] [--texture-dir DIR] [--preview FRAMES] [--dump-pose FRAMES] input_ske.json [extra.dbani ...] output.hpp`
+- **dbones2cpp** `[--namespace NS] [--armature A] [--skin S] [--scale S] [--anim-scale auto|S] [--in-key COLOR] [--out-format argb4444|rgb565_swapped|rgb565] [--out-key COLOR] [--alpha-threshold N] [--dither D] [--atlas-width auto|N|0] [--texture-dir DIR] [--fit-rotate] [--fit-min-gain PERCENT] [--hull N] [--preview FRAMES] [--dump-pose FRAMES] input_ske.json [extra.dbani ...] output.hpp`
   converts a DragonBones 5.x armature for `rig` (`shapogfx_dbones.py` is its core,
   shared with the tests). It reads the 5.0 (one `frame` timeline per bone with every
   channel) and 5.5 (`translateFrame` / `rotateFrame` / `scaleFrame`, `displayFrame`,
@@ -1414,10 +1449,24 @@ module.
   split into input (the images' alpha, or `--in-key`) and output: ARGB4444, or
   RGB565 with pixels below `--alpha-threshold` in `--out-key` (opaque pixels that
   quantize to the key get their blue LSB flipped) and `Armature::colorKeyEnabled`.
-  The images are shelf-packed into one atlas whose width (a power of two, 64..2048)
+  Each image is fitted before packing: its transparent margin (pixels below the
+  opaque threshold: alpha 9, the least that ARGB4444 keeps, or `--alpha-threshold`
+  for the keyed formats) is trimmed, the attachment's `local` taking up the offset;
+  with `--fit-rotate` an image is also turned so that the smallest-area bounding
+  rectangle of its opaque pixels' convex hull (rotating calipers) is upright, when
+  that saves at least `--fit-min-gain` (3%) of the area -- one bicubic resampling
+  from the original image with the scale folded in, premultiplied, stray pixels
+  farther than one pixel from a quarter-opaque one stripped, and the turn folded
+  into `local` -- so that a limb drawn diagonally no longer carries its empty
+  corners; and the convex hull of what remains is simplified to at most `--hull`
+  vertices (8; 0 for none) by replacing edges with the meeting point of their
+  neighbors, least added area first, rounded outward to integers and verified to
+  hold every opaque pixel, then emitted as `hull_<image>` and referenced by the
+  attachments (dropped where it would enclose over 98% of the rectangle). The
+  images are shelf-packed into one atlas whose width (a power of two, 64..2048)
   gives the smallest area, so the stride is a power of two (RP2 interpolator path);
   `--atlas-width 0` emits one texture per image. Output: `atlasData` / `atlas`,
-  `attachments_<slot>`, `bones`, `slots`, `armature`, per animation
+  `hull_<image>`, `attachments_<slot>`, `bones`, `slots`, `armature`, per animation
   `anim_<name>_curves`, key arrays, timelines, draw orders and `anim_<name>`, then
   `animations[]` and `ANIMATION_COUNT`. `--preview` renders poses of the first
   animation from the converted data to PNG, `--dump-pose` writes the poses of every
@@ -1451,8 +1500,9 @@ served as a static site.
   camera in the browser.
 - `example/wasm/demorig/`: a DragonBones character
   (`example/common/demorig/model/rgb_chan.hpp`, generated with
-  `dbones2cpp --scale 0.8` from `assets/2d/rgb_chan/` by `make model`: 29 bones,
-  41 slots, a 512 x 326 ARGB4444 atlas, about 340 KB) posed by a `rig::Instance`
+  `dbones2cpp --scale 0.8 --fit-rotate` from `assets/2d/rgb_chan/` by `make model`:
+  29 bones, 41 slots, a 256 x 566 ARGB4444 atlas of the trimmed and turned parts
+  with their hulls, about 296 KB) posed by a `rig::Instance`
   from its 24 fps animation (`frameAt()` every frame) and bobbing up and down in a
   ring of additive rectangles that turns around it. The ring's back half is drawn
   first, then the character up to its left arm (`draw(g, 0, k)` with
@@ -1498,7 +1548,13 @@ alpha of an ARGB4444 target), the state stack (what is saved and restored, the
 cursor kept, the depth limit, a clip rectangle restored onto a smaller target),
 scaled and transformed images (every format pair and blend against a per-pixel
 reference built from 1 x 1 blits, the mapping of the scaled path exactly, the
-transformed one wherever a pixel center is not within 1/500 texel of a texel edge;
+transformed one wherever a pixel center is not within 1/500 texel of a texel edge,
+and the polygon overload likewise -- source points within 1/500 texel of an edge of
+the polygon left out -- under rotations, shears, plain translations and scales,
+with a triangle, a diamond of the other winding, a hexagon and an octagon, plus a
+polygon around the whole rectangle drawing what the plain call draws, one beside
+it, a degenerate one and too many vertices drawing nothing, two vertices meaning
+no polygon, and the polygon applying without a transform;
 nothing outside the source rectangle is read even where centers fall on its edges;
 transforms without rotation equal the scaled path with snapped corners), the color
 key (plain, scaled and transformed, every format pair and blend, against 1 x 1 blits
@@ -1529,18 +1585,26 @@ the source pixels, that the packed model renders like the float one, and the
 generated scene graph (names, hierarchy, transforms, generated normals, traversal,
 visitor skipping and animation, deep-tree cut-off). For `rig`, `test/tools/make_test_rig.py`
 generates a small armature (four bones with rotation, skew and non-uniform scale;
-slots defined out of draw order, two attachments, alpha, an additive slot; an
+five slots defined out of draw order, two attachments, alpha, an additive slot, a
+diagonal bar with a transparent margin; an
 animation with a bezier curve, linear and held keys, offsets across the int16 wrap,
 attachment and alpha timelines and a draw order key; a `.dbani` at twice the size),
-converts it three ways (atlas, one texture per image, RGB565 with a key color),
+converts it four ways (atlas, one texture per image, RGB565 with a key color, and
+with `--fit-rotate`),
 checks that its 5.5-format / atlas variant converts to the same header, and writes
 the tool's poses as the expected values. The tests check the poses against them
 (world transforms within 1e-3, attachments, alphas, draw order, bounds), clamping,
 `frameAt()`, the signature check, the visitor, the accessors, `draw()` against the
-same `drawImage()` calls made by hand on two target formats, the separate textures
+same `drawImage()` calls made by hand on two target formats, the hulls (every
+attachment has one; drawn with them or with the whole rectangles the picture is
+the same, on the ARGB4444 atlas and the keyed one), the turned bar of the
+`--fit-rotate` conversion (a quarter of the texels, landing where the original
+does: centroid within a quarter texel, same angle and about the same area when
+drawn four times enlarged, the other parts pixel-identical), the separate textures
 and the key color, drawing in ranges and in bands against drawing at once, the
 restored `Graphics2D` state, drawn pixels within `bounds(placement)`, and the atlas
-pixels against the source images. The tests are meant to be run with AddressSanitizer and
+pixels against the source images (the trimmed bar included) with every hull
+holding the opaque pixels and leaving out transparent ones. The tests are meant to be run with AddressSanitizer and
 UndefinedBehaviorSanitizer on the native build. The CMake options of the renderer
 are passed to the tests as well, so a configuration with a feature compiled out
 skips the tests that need it and the rest must still pass.

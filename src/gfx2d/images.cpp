@@ -676,9 +676,20 @@ struct AffineRows {
   int bx0, bx1, by0, by1;
   int32_t uLo, uHi, vLo, vHi;
   Rect in;
+  // The convex polygon, if any, as bounds on the column x per row: an edge
+  // whose inward normal has a component along the row is x >= (or <=) a
+  // bound that changes linearly with the row (x0 at row by0, dx per row);
+  // one across the rows only narrows [by0, by1] once.
+  struct Bound {
+    float x0, dx;
+  };
+  Bound lo[Graphics2D::IMAGE_POLYGON_MAX], hi[Graphics2D::IMAGE_POLYGON_MAX];
+  int loCount = 0, hiCount = 0;
+  bool hasPolygon = false;
 
   bool init(const affine2f &m, const Rect &s, const Rect &readable,
-            const Rect &clip) {
+            const Rect &clip, const int16_t *polygon = nullptr,
+            int count = 0) {
     in = readable;
     if (in.isEmpty() || in.right() > AFFINE_SIZE_MAX ||
         in.bottom() > AFFINE_SIZE_MAX || in.x < 0 || in.y < 0)
@@ -717,7 +728,81 @@ struct AffineRows {
     iB = B != 0.0f ? 1.0f / B : 0.0f;
     uLo = in.x << 16, uHi = (in.right() << 16) - 1;
     vLo = in.y << 16, vHi = (in.bottom() << 16) - 1;
-    return true;
+    return initPolygon(polygon, count, s);
+  }
+
+  // `polygon`: `count` vertices as x, y pairs relative to the top-left corner
+  // of `s`. False for a degenerate polygon or too many vertices (nothing is
+  // drawn); fewer than 3 vertices mean no polygon.
+  bool initPolygon(const int16_t *poly, int count, const Rect &s) {
+    loCount = hiCount = 0;
+    hasPolygon = false;
+    if (!poly || count < 3) return true;
+    if (count > Graphics2D::IMAGE_POLYGON_MAX) return false;
+    // The winding, from the doubled signed area (int16 coordinates: the
+    // products fit 64 bits with room)
+    int64_t area2 = 0;
+    for (int i = 0; i < count; i++) {
+      const int j = (i + 1) % count;
+      area2 += (int64_t)poly[2 * i] * poly[2 * j + 1] -
+               (int64_t)poly[2 * j] * poly[2 * i + 1];
+    }
+    if (area2 == 0) return false;
+    const float sign = area2 > 0 ? 1.0f : -1.0f;
+    const float lim = 1e6f;
+    hasPolygon = true;
+    for (int i = 0; i < count; i++) {
+      const int j = (i + 1) % count;
+      const int ex = poly[2 * j] - poly[2 * i];
+      const int ey = poly[2 * j + 1] - poly[2 * i + 1];
+      if (ex == 0 && ey == 0) continue;  // a repeated vertex
+      // The inward unit normal of the edge (for a positive area, its left
+      // side): inside is nx u + ny v >= c, in absolute source coordinates
+      const float len = std::sqrt((float)ex * ex + (float)ey * ey);
+      const float nx = -(float)ey * sign / len, ny = (float)ex * sign / len;
+      const float c = nx * (float)(poly[2 * i] + s.x) +
+                      ny * (float)(poly[2 * i + 1] + s.y);
+      // With u = A x + C y + E, v = B x + D y + F that is
+      // g x >= h0 + hy y
+      const float g = nx * A + ny * B;
+      const float h0 = c - nx * E - ny * F, hy = -(nx * C + ny * D);
+      if (g == 0.0f) {
+        // Across the rows: hy y <= -h0
+        if (hy > 0.0f) {
+          by1 = std::min(by1, (int)std::floor(std::clamp(-h0 / hy, -lim, lim)));
+        } else if (hy < 0.0f) {
+          by0 = std::max(by0, (int)std::ceil(std::clamp(-h0 / hy, -lim, lim)));
+        } else if (h0 > 0.0f) {
+          return false;
+        }
+        continue;
+      }
+      const float ig = 1.0f / g;
+      const Bound b = {(h0 + hy * (float)by0) * ig, hy * ig};
+      if (g > 0.0f) {
+        lo[loCount++] = b;
+      } else {
+        hi[hiCount++] = b;
+      }
+    }
+    return by0 <= by1;
+  }
+
+  // Narrow [k0, k1] (columns relative to xr) to those inside the polygon on
+  // row y: the tightest of the lower and of the upper bounds, one multiply
+  // and add per edge. In float; the rectangle above keeps the walk within
+  // the image whatever this rounds to.
+  bool narrowToPolygon(int y, int xr, int &k0, int &k1) const {
+    const float dy = (float)(y - by0);
+    float xlo = -1e9f, xhi = 1e9f;
+    for (int i = 0; i < loCount; i++)
+      xlo = std::max(xlo, lo[i].x0 + lo[i].dx * dy);
+    for (int i = 0; i < hiCount; i++)
+      xhi = std::min(xhi, hi[i].x0 + hi[i].dx * dy);
+    const float lim = 1e6f;
+    k0 = std::max(k0, (int)std::ceil(std::clamp(xlo - (float)xr, -lim, lim)));
+    k1 = std::min(k1, (int)std::floor(std::clamp(xhi - (float)xr, -lim, lim)));
+    return k0 <= k1;
   }
 
   // fn(y, x, n, u, v): n pixels of row y from x, (u, v) at the first one
@@ -741,6 +826,7 @@ struct AffineRows {
       if (!narrowSpan(u, du, uLo, uHi, k0, k1) ||
           !narrowSpan(v, dv, vLo, vHi, k0, k1))
         continue;
+      if (hasPolygon && !narrowToPolygon(y, xr, k0, k1)) continue;
       // The 16.16 offsets are formed in uint32 so that an intermediate wraps
       // instead of overflowing (the sums lie within the image)
       fn(y, xr + k0, k1 - k0 + 1,
@@ -862,12 +948,14 @@ void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
 }
 
 // Transformed: `m` maps coordinates relative to the top-left corner of `s`
-// (normalized) to the target
+// (normalized) to the target; `polygon`, if any, clips the source further
+// (see Graphics2D::drawImage)
 void blitAffine(const Graphics2D &g, const Texture &img, const affine2f &m,
-                const Rect &s) {
+                const Rect &s, const int16_t *polygon = nullptr,
+                int count = 0) {
   AffineRows ar;
   if (!ar.init(m, s, s.intersect(Rect{0, 0, img.width, img.height}),
-               g.clipRect()))
+               g.clipRect(), polygon, count))
     return;
   ImageBlit b;
   if (!b.init(g, img.format)) return;
@@ -918,6 +1006,23 @@ void Graphics2D::drawImage(const Texture &img, int dx, int dy,
                state_.transform * affine2f::translation((float)dx, (float)dy),
                s);
   }
+}
+
+void Graphics2D::drawImage(const Texture &img, int dx, int dy,
+                           const Rect &srcRect, const int16_t *polygon,
+                           int count) {
+  if (!polygon || count < 3) {
+    drawImage(img, dx, dy, srcRect);
+    return;
+  }
+  if (!hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
+  const Rect s = srcRect.normalized();
+  if (s.isEmpty()) return;
+  // The transformed path whatever the transform: the plain and scaled paths
+  // have no polygon (and TRANSLATE snaps the offset, which this does not)
+  blitAffine(*this, img,
+             state_.transform * affine2f::translation((float)dx, (float)dy), s,
+             polygon, count);
 }
 
 void Graphics2D::drawImage(const Texture &img, const Rect &dst,

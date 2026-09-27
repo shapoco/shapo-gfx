@@ -21,6 +21,11 @@ Example:
   dbones2cpp --scale 0.5 chara_ske.json walk.dbani chara.hpp
   dbones2cpp --out-format rgb565_swapped --out-key '#FF00FF' chara_ske.json chara.hpp
   dbones2cpp --preview 0,12,24.5 chara_ske.json chara.hpp   # chara_preview_<frame>.png
+  dbones2cpp --fit-rotate chara_ske.json chara.hpp   # turn the parts to cut their transparent corners
+
+The transparent margin of every image is trimmed and a convex polygon around
+its opaque pixels (--hull) is emitted, which rig::Instance::draw() clips to;
+--fit-rotate also turns images so that their opaque pixels fill the rectangle.
 """
 
 import argparse
@@ -67,6 +72,14 @@ def main():
                          "0 makes one texture per image")
     ap.add_argument("--texture-dir", default=None,
                     help="folder of the images (default: <name>_texture next to the _ske.json)")
+    ap.add_argument("--fit-rotate", action="store_true",
+                    help="turn each image so that its opaque pixels fill the rectangle (resampled once, "
+                         "bicubic) when that saves at least --fit-min-gain of the area")
+    ap.add_argument("--fit-min-gain", type=float, default=3.0, metavar="PERCENT",
+                    help="the least area a turn must save to be worth resampling (default: 3)")
+    ap.add_argument("--hull", type=int, default=8, metavar="N",
+                    help="vertices of the convex polygon around the opaque pixels that the drawing is clipped "
+                         "to (3..16, default: 8; 0: none). The transparent margin is always trimmed.")
     ap.add_argument("--preview", type=frame_list, default=None, metavar="FRAMES",
                     help="also write <output stem>_preview_<frame>.png of the first animation, e.g. 0,12,24.5")
     ap.add_argument("--dump-pose", type=frame_list, default=None, metavar="FRAMES",
@@ -81,6 +94,10 @@ def main():
             ap.error("--atlas-width must be auto, 0 or a power of two in 64..2048")
     if not 0 <= args.alpha_threshold <= 255:
         ap.error("--alpha-threshold must be 0..255")
+    if args.hull != 0 and not 3 <= args.hull <= db.HULL_MAX:
+        ap.error(f"--hull must be 0 or 3..{db.HULL_MAX}")
+    if not 0 <= args.fit_min_gain <= 100:
+        ap.error("--fit-min-gain must be 0..100")
     if args.anim_scale != "auto":
         try:
             float(args.anim_scale)
@@ -91,7 +108,10 @@ def main():
         arm = db.load(ske, args.armature, args.skin, args.texture_dir, args.in_key)
         for path in extras:
             db.load_extra_animations(arm, path, args.anim_scale)
-        c = db.compile_armature(arm, args.scale)
+        opaque = db.ARGB4444_OPAQUE if args.out_format == "argb4444" else args.alpha_threshold
+        fit = db.fit_options(rotate=args.fit_rotate, min_gain=args.fit_min_gain / 100.0, hull=args.hull,
+                             alpha=opaque)
+        c = db.compile_armature(arm, args.scale, fit)
         namespace = args.namespace or conv.sanitize_identifier(db._stem(ske))
         guard = conv.sanitize_identifier(namespace).upper() + "_" + conv.identifiers_from_path(output)[0] + "_HPP"
         opts = {"out_format": args.out_format, "out_key": args.out_key, "dither": args.dither,
@@ -118,8 +138,10 @@ def main():
         with open(path, "w", encoding="utf-8") as f:
             json.dump(db.dump_pose(c, args.dump_pose), f, indent=1)
         print(f"wrote {path}")
+    f = c.fit
     print(f"Generated {output}: {len(c.bones)} bones, {len(c.slots)} slots, "
-          f"{len(c.animations)} animation(s), ~{stats['bytes']} bytes")
+          f"{len(c.animations)} animation(s), ~{stats['bytes']} bytes; images {f['texels_before']} -> "
+          f"{f['texels_after']} pixels ({f['turned']} turned), {f['hulls']} hulls of {round(f['hull_area'])} pixels")
 
 
 if __name__ == "__main__":

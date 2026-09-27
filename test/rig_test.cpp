@@ -9,6 +9,7 @@
 #include "check.hpp"
 #include "data/test_rig.hpp"
 #include "data/test_rig_expected.hpp"
+#include "data/test_rig_fit.hpp"
 #include "data/test_rig_keyed.hpp"
 #include "data/test_rig_sep.hpp"
 #include "shapoco/gfx2d/rig.hpp"
@@ -59,11 +60,12 @@ static void testRigInit() {
   const rig::Armature &arm = test_rig::armature;
   CHECK_EQ(arm.boneCount, ex::BONES);
   CHECK_EQ(arm.slotCount, ex::SLOTS);
-  // 4 world transforms, 4 slot states, 4 order bytes; 3 bytes of slack
-  CHECK_EQ(rig::Instance::bytes(arm), 3u + 4 * 24 + 4 * 12 + 4);
+  // 4 world transforms, 5 slot states, 5 order bytes rounded up to a
+  // multiple of 4; 3 bytes of slack
+  CHECK_EQ(rig::Instance::bytes(arm), 3u + 4 * 24 + 5 * 12 + 8);
   rig::Instance inst;
   CHECK(!inst.isInitialized());
-  CHECK(!inst.init(arm, rigMemory, 4 * 24 + 4 * 12 + 4 - 1));
+  CHECK(!inst.init(arm, rigMemory, 4 * 24 + 5 * 12 + 5 - 1));
   CHECK(!inst.isInitialized());
   CHECK(!inst.init(arm, nullptr, sizeof(rigMemory)));
   // Unaligned memory of bytes(): the slack covers the alignment
@@ -264,7 +266,9 @@ static void clearTarget(g2::Graphics2D &g) {
 }
 
 // What draw() is documented to do, spelled out with the public accessors
-static void drawByHand(g2::Graphics2D &g, const rig::Instance &inst) {
+// (without the hulls: the whole rectangles)
+static void drawByHand(g2::Graphics2D &g, const rig::Instance &inst,
+                       bool hulls = true) {
   const rig::Armature &arm = *inst.armature();
   const g2::affine2f base = g.transform();
   for (int i = 0; i < arm.slotCount; i++) {
@@ -275,7 +279,11 @@ static void drawByHand(g2::Graphics2D &g, const rig::Instance &inst) {
     const rig::Attachment &at = sl.attachments[att];
     g.setBlend(sl.blend, alpha == 255 ? 255 : (255 * alpha + 127) / 255);
     g.setTransform(base * inst.boneTransform(sl.bone) * at.local);
-    g.drawImage(*at.texture, 0, 0, at.src);
+    if (hulls) {
+      g.drawImage(*at.texture, 0, 0, at.src, at.hull, at.hullCount);
+    } else {
+      g.drawImage(*at.texture, 0, 0, at.src);
+    }
   }
   g.setTransform(base);
   g.setBlend(g2::BlendMode::ALPHA, 255);
@@ -292,6 +300,34 @@ static int countDiffering(const g2::OwnedSurface &a,
   int n = 0;
   for (int i = 0; i < DW * DH; i++) n += pa[i] != pb[i];
   return n;
+}
+
+// Count, centroid and orientation (radians, of the longer axis) of the
+// pixels drawn at least half opaque into a transparent ARGB4444 target
+struct Blob {
+  int count;
+  float cx, cy, angle;
+};
+static Blob blobOf(const g2::OwnedSurface &s) {
+  const g2::Graphics2D g(s);
+  double n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+  for (int y = 0; y < s.height(); y++) {
+    for (int x = 0; x < s.width(); x++) {
+      if (g2::colorA(g.getPixel(x, y)) < 128) continue;
+      n++;
+      sx += x;
+      sy += y;
+      sxx += (double)x * x;
+      syy += (double)y * y;
+      sxy += (double)x * y;
+    }
+  }
+  if (n == 0) return {0, 0, 0, 0};
+  const double mx = sx / n, my = sy / n;
+  const double cxx = sxx / n - mx * mx, cyy = syy / n - my * my,
+               cxy = sxy / n - mx * my;
+  return {(int)n, (float)mx, (float)my,
+          (float)(0.5 * std::atan2(2 * cxy, cxx - cyy))};
 }
 
 static void testRigDraw() {
@@ -319,6 +355,103 @@ static void testRigDraw() {
     clearTarget(ge);
     CHECK(countDiffering(a, empty) > 200);
   }
+}
+
+// The hulls cut only pixels that would not have been drawn: with them or
+// without, the picture is the same, on the ARGB4444 atlas and the keyed one
+static void testRigHulls() {
+  int hulls = 0;
+  for (int s = 0; s < test_rig::armature.slotCount; s++) {
+    const rig::Slot &sl = test_rig::armature.slots[s];
+    for (int a = 0; a < sl.attachmentCount; a++) hulls += sl.attachments[a].hullCount >= 3;
+  }
+  CHECK_EQ(hulls, 6);  // every attachment of the test armature has one
+  const struct {
+    const rig::Armature *arm;
+    const rig::Animation *anim;
+  } cases[] = {{&test_rig::armature, &test_rig::anim_move},
+               {&test_rig_keyed::armature, &test_rig_keyed::anim_move}};
+  for (const auto &c : cases) {
+    const rig::Armature *arm = c.arm;
+    g2::OwnedSurface a = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+    g2::OwnedSurface b = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+    g2::Graphics2D ga(a), gb(b);
+    rig::Instance inst;
+    CHECK(inst.init(*arm, rigMemory, sizeof(rigMemory)));
+    for (float f : {0.0f, 5.0f, 9.25f}) {
+      inst.pose(*c.anim, f);
+      for (float sc : {1.0f, 2.5f}) {
+        clearTarget(ga);
+        clearTarget(gb);
+        const g2::affine2f p = g2::affine2f::placement(36, 28, 0.3f, sc, sc, 24, 20);
+        ga.setTransform(p);
+        gb.setTransform(p);
+        if (arm->colorKeyEnabled) gb.setColorKey(arm->colorKey);
+        inst.draw(ga);
+        drawByHand(gb, inst, false);
+        gb.clearColorKey();
+        CHECK(samePixels(a, b));
+      }
+    }
+  }
+}
+
+// --fit-rotate: the diagonal bar e is turned upright (a quarter of the
+// texels) and drawn back where it was, resampled once
+static void testRigFit() {
+  const rig::Armature &fit = test_rig_fit::armature;
+  const rig::Armature &ref = test_rig::armature;
+  rig::Instance a, b;
+  alignas(4) static uint8_t memA[256], memB[256];
+  CHECK(a.init(fit, memA, sizeof(memA)));
+  CHECK(b.init(ref, memB, sizeof(memB)));
+  const int se = b.slotIndex("se");
+  CHECK(se >= 0 && a.slotIndex("se") == se);
+  const rig::Attachment &atFit = fit.slots[se].attachments[0];
+  const rig::Attachment &atRef = ref.slots[se].attachments[0];
+  CHECK(atFit.src.width * atFit.src.height * 2 < atRef.src.width * atRef.src.height);
+  CHECK(atFit.hullCount >= 3);
+  // Only e is turned: the others are the same pixels at the same places
+  g2::OwnedSurface sa = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+  g2::OwnedSurface sb = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+  g2::Graphics2D ga(sa), gb(sb);
+  a.poseBind();
+  b.poseBind();
+  for (int s = 0; s < ref.slotCount; s++) {
+    if (s == se) {
+      a.setAttachment(s, -1);
+      b.setAttachment(s, -1);
+    }
+  }
+  clearTarget(ga);
+  clearTarget(gb);
+  ga.setTransform(placement());
+  gb.setTransform(placement());
+  a.draw(ga);
+  b.draw(gb);
+  CHECK(samePixels(sa, sb));
+  // e alone, four times enlarged: the bar lands where the original does
+  // (centroid within a pixel, so within a quarter of a texel), at the same
+  // angle and about the same size. Its resampled edges differ pixel by
+  // pixel, which is why the pixels are not compared one by one.
+  a.poseBind();
+  b.poseBind();
+  g2::OwnedSurface la = g2::createSurface(g2::PixelFormat::ARGB4444, 160, 120);
+  g2::OwnedSurface lb = g2::createSurface(g2::PixelFormat::ARGB4444, 160, 120);
+  g2::Graphics2D gla(la), glb(lb);
+  const g2::affine2f p = g2::affine2f::placement(80, 60, 0.3f, 4.0f, 4.0f, 24, 20);
+  const int k = b.drawIndexOf(se);
+  gla.clear(g2::Colors::TRANSPARENT);
+  glb.clear(g2::Colors::TRANSPARENT);
+  gla.setTransform(p);
+  glb.setTransform(p);
+  a.draw(gla, k, k + 1);
+  b.draw(glb, k, k + 1);
+  const Blob fa = blobOf(la), fb = blobOf(lb);
+  CHECK(fb.count > 400);
+  CHECK(fa.count > fb.count * 7 / 10 && fa.count < fb.count * 14 / 10);
+  CHECK(std::fabs(fa.cx - fb.cx) <= 1.0f && std::fabs(fa.cy - fb.cy) <= 1.0f);
+  CHECK(std::fabs(fa.angle - fb.angle) <= 0.06f);
 }
 
 // One texture per image draws what the atlas draws
@@ -513,6 +646,8 @@ void testRig() {
   testRigSlots();
 #if RIG_DRAW_TESTS
   testRigDraw();
+  testRigHulls();
+  testRigFit();
   testRigSeparateTextures();
   testRigColorKey();
   testRigDrawRange();

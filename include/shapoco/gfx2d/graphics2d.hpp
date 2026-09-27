@@ -326,6 +326,19 @@ class Graphics2D {
   // The part `src` of the image with its top-left corner at (dx, dy). Parts
   // of `src` outside the image are not drawn and leave their place empty.
   void drawImage(const Texture &img, int dx, int dy, const Rect &src);
+  // Only the part of `src` inside a convex polygon: `polygon` holds `count`
+  // vertices as x, y pairs in image pixels relative to the top-left corner
+  // of `src` (texel corners, either winding), 3 to IMAGE_POLYGON_MAX. A
+  // target pixel is drawn when the source point under its center lies in
+  // `src` and in the polygon (edges included). Always drawn by the
+  // transformed path, whatever the transform (so with SHAPOGFX2D_TRANSFORM=0
+  // too); a sprite whose transparent margin the polygon cuts off costs its
+  // area only. Fewer than 3 vertices draw the whole rectangle like the call
+  // above; more than IMAGE_POLYGON_MAX, or a degenerate polygon, draw
+  // nothing.
+  static constexpr int IMAGE_POLYGON_MAX = 16;
+  void drawImage(const Texture &img, int dx, int dy, const Rect &src,
+                 const int16_t *polygon, int count);
   // Scaled: `src` stretched over `dst`. A negative width or height of `dst`
   // mirrors the image in that direction. Sizes beyond 32767 draw nothing.
   void drawImage(const Texture &img, const Rect &dst, const Rect &src);

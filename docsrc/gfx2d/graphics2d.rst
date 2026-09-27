@@ -212,6 +212,8 @@ Graphics2D
 
    void drawImage(const Texture &img, int dx, int dy);
    void drawImage(const Texture &img, int dx, int dy, const Rect &src);
+   void drawImage(const Texture &img, int dx, int dy, const Rect &src,
+                  const int16_t *polygon, int count);                   // 凸多角形の内側だけ
    void drawImage(const Texture &img, const Rect &dst, const Rect &src);   // 拡大縮小
    void drawImage(const Texture &img, const Rect &dst);
    void drawImage(const Texture &img, int dx, int dy, int dw, int dh,
@@ -224,6 +226,13 @@ Graphics2D
 - ``dst`` を与えると ``src`` をその大きさに引き伸ばします (最近傍)。描画先のピクセル ``t`` (``dw`` ピクセル中) は、
   その中心の下にあるソースピクセル ``floor((2t + 1) sw / 2dw)`` を表示します。
   ``dst`` の幅・高さが負ならその方向に鏡像反転します。幅・高さは 32767 まで (それを超えると何も描かない)。
+- ``polygon`` を与えると、``src`` のうち凸多角形の内側だけを描きます。頂点は ``src`` の左上を原点とする
+  画像ピクセル座標の x, y の組 (テクセルの角。巻き方向は問わない) で、3 〜 ``IMAGE_POLYGON_MAX`` (16) 個です。
+  描画先のピクセルは、その中心に対応するソースの点が ``src`` と多角形の両方の内側 (辺の上を含む) にあるとき描かれます。
+  変換行列によらず常にアフィン写像のパスで描きます (``SHAPOGFX2D_TRANSFORM=0`` でも有効)。頂点が 3 個未満なら
+  多角形なし (上の呼び出しと同じ)、多すぎるか面積のない多角形は何も描きません。
+  透明な余白の多いスプライトは、余白のピクセルも走査と α 判定のコストを払うので、不透明部分を囲む多角形で
+  描くとその分だけ速くなります (``rig`` はこれでパーツを描きます。多角形は dbones2cpp が作ります)。
 
 処理の重さに応じてコードパスが分かれます。
 
@@ -239,6 +248,9 @@ Graphics2D
   同じ変換の ``fillRect()`` と同じピクセルを覆います。
 - アフィン写像では、幅・高さ 16384 ピクセルを超える画像と、4096 分の 1 より強く縮小する変換は何も描きません
   (固定小数点を 32 ビットに収めるための制限)。
+- 多角形は行の範囲をさらに狭めます。各辺はソース座標の半平面で、1 行の上では列に対する線形の境界になるので、
+  呼び出し時に辺ごとに (最初の行での境界の列, 1 行あたりの変化) を求めておき、行ごとに辺あたり 1 回の積和と
+  2 回の丸めで済ませます (float。画像の外に出ないことは矩形の切り出しが保証します)。
 - RP2040 / RP2350 では ``SHAPOGFX2D_RP2_INTERP`` (既定で有効) により、アフィン写像のうちストライドが 2 の冪の
   16 ビット画像 (幅 16 / 32 / 64 などの ARGB4444 / RGB565 スプライト) のピクセル参照を SIO interpolator ``interp0`` で行います。
   呼び出し中は ``interp0`` を保存・復元するので、その間に割り込みハンドラで ``interp0`` を使わないでください。
@@ -256,6 +268,10 @@ Graphics2D
    g.setColorKey(g2::Colors::MAGENTA);
    g.drawImage(sheet, 10, 10, g2::Rect{32, 0, 16, 16});
    g.clearColorKey();
+
+   // 16x16 のスプライトの角を落とした八角形の内側だけを描く
+   static const int16_t octagon[] = {4, 0, 12, 0, 16, 4, 16, 12, 12, 16, 4, 16, 0, 12, 0, 4};
+   g.drawImage(sprite, x, y, g2::Rect{0, 0, 16, 16}, octagon, 8);
 
 ビットマップ
 --------------------------------------------------------------------------------

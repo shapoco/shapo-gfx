@@ -19,7 +19,7 @@ import statistics
 import sys
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import shapogfx_imgconv as conv
 
@@ -660,12 +660,247 @@ def load_extra_animations(arm, path, anim_scale="auto"):
 # Quantized model (what the header holds)
 
 
+# ---------------------------------------------------------------------------
+# Fitting the images: the transparent margin is trimmed, an image may be
+# turned so that its opaque pixels fill the rectangle (the smallest-area
+# bounding rectangle of their convex hull is made upright, which is what
+# takes the empty corners off a limb drawn diagonally), and a convex polygon
+# around the opaque pixels is kept for Graphics2D::drawImage() to clip to.
+# The drawn area of a transformed image is what its rectangle covers, so both
+# cut the pixels that are read only to be found transparent.
+
+HULL_MAX = 16  # Graphics2D::IMAGE_POLYGON_MAX
+# Alpha from which a pixel is opaque in ARGB4444 (rounding to 4 bits: 8
+# becomes 0, 9 becomes 1)
+ARGB4444_OPAQUE = 9
+
+
+def fit_options(rotate=False, min_gain=0.03, hull=8, alpha=ARGB4444_OPAQUE, resample=Image.BICUBIC):
+    """rotate: turn images to their smallest bounding rectangle when that saves
+    at least min_gain of the area; hull: at most this many vertices (0: none);
+    alpha: the smallest alpha that counts as opaque."""
+    return {"rotate": rotate, "min_gain": min_gain, "hull": min(hull, HULL_MAX), "alpha": alpha,
+            "resample": resample}
+
+
+def _opaque_points(img, threshold):
+    """Corners of the outermost pixels of every row with alpha >= threshold
+    (every vertex of the convex hull of the opaque pixels' areas is one of
+    them); None when there is no such pixel."""
+    alpha = np.asarray(img)[:, :, 3] >= threshold
+    rows = np.nonzero(alpha.any(axis=1))[0]
+    if len(rows) == 0:
+        return None
+    pts = []
+    for y in rows:
+        xs = np.nonzero(alpha[y])[0]
+        x0, x1 = int(xs[0]), int(xs[-1]) + 1
+        pts += [(x0, int(y)), (x0, int(y) + 1), (x1, int(y)), (x1, int(y) + 1)]
+    return pts
+
+
+def convex_hull(points):
+    """Vertices of the convex hull of integer points (Andrew's monotone chain),
+    without collinear points, in a consistent winding."""
+    pts = sorted(set(points))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _area2(poly):
+    return sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(poly, poly[1:] + poly[:1]))
+
+
+def min_rect_angle(hull):
+    """The angle (radians, within +-pi/4) that turns the hull so that its
+    smallest-area bounding rectangle is upright, and that rectangle's area.
+    A side of that rectangle lies along a side of the hull (rotating
+    calipers), so only the sides' angles are tried."""
+    pts = np.array(hull, dtype=np.float64)
+
+    def area(t):
+        c, s = math.cos(t), math.sin(t)
+        u = pts[:, 0] * c + pts[:, 1] * s
+        v = -pts[:, 0] * s + pts[:, 1] * c
+        return (u.max() - u.min()) * (v.max() - v.min())
+
+    best_t, best = 0.0, area(0.0)
+    for (x0, y0), (x1, y1) in zip(hull, hull[1:] + hull[:1]):
+        if x0 == x1 and y0 == y1:
+            continue
+        # The same rectangle comes back every quarter turn: the turn nearest
+        # to upright
+        t = (math.atan2(y1 - y0, x1 - x0) + math.pi / 4) % (math.pi / 2) - math.pi / 4
+        a = area(t)
+        if a < best - 1e-6:
+            best_t, best = t, a
+    return best_t, best
+
+
+def _intersection(a, b, c, d):
+    """Intersection of the lines a-b and c-d, or None if parallel."""
+    r = (b[0] - a[0], b[1] - a[1])
+    q = (d[0] - c[0], d[1] - c[1])
+    den = r[0] * q[1] - r[1] * q[0]
+    if abs(den) < 1e-12:
+        return None
+    t = ((c[0] - a[0]) * q[1] - (c[1] - a[1]) * q[0]) / den
+    return (a[0] + t * r[0], a[1] + t * r[1])
+
+
+def simplify_hull(hull, n_max, far):
+    """Outer approximation of a convex polygon by at most n_max vertices:
+    an edge is replaced by the point where its neighbors meet, the edge whose
+    removal adds the least area first. None when it cannot be done (a meeting
+    point farther than `far` from the origin, or none at all)."""
+    poly = [(float(x), float(y)) for x, y in hull]
+    while len(poly) > n_max:
+        k = len(poly)
+        best = None
+        for i in range(k):
+            a, b = poly[i - 1], poly[i]
+            c, d = poly[(i + 1) % k], poly[(i + 2) % k]
+            p = _intersection(a, b, c, d)
+            if p is None:
+                continue
+            # Beyond b along a-b and beyond c along d-c, or the polygon would
+            # not stay convex
+            if ((p[0] - b[0]) * (b[0] - a[0]) + (p[1] - b[1]) * (b[1] - a[1]) <= 0 or
+                    (p[0] - c[0]) * (c[0] - d[0]) + (p[1] - c[1]) * (c[1] - d[1]) <= 0):
+                continue
+            if abs(p[0]) > far or abs(p[1]) > far:
+                continue
+            added = abs((p[0] - b[0]) * (c[1] - b[1]) - (p[1] - b[1]) * (c[0] - b[0]))
+            if best is None or added < best[0]:
+                best = (added, i, p)
+        if best is None:
+            return None
+        _, i, p = best
+        j = (i + 1) % k
+        poly = [p] + poly[1:i] if j == 0 else poly[:i] + [p] + poly[j + 1:]
+    return poly
+
+
+def _contains(poly, p):
+    """Whether the convex polygon holds p (edges included)."""
+    sign = 1.0 if _area2(poly) >= 0 else -1.0
+    for (x0, y0), (x1, y1) in zip(poly, poly[1:] + poly[:1]):
+        if sign * ((x1 - x0) * (p[1] - y0) - (y1 - y0) * (p[0] - x0)) < -1e-9:
+            return False
+    return True
+
+
+def integer_hull(poly, inside):
+    """The polygon's vertices rounded to integers away from its centroid, which
+    keeps it a superset; verified to hold every point of `inside`, the
+    polygon being pushed outward a little and rounded again if rounding cut
+    one. None if that fails or a coordinate leaves int16."""
+    n = len(poly)
+    cx = sum(x for x, _ in poly) / n
+    cy = sum(y for _, y in poly) / n
+    for push in (0.0, 0.5, 1.0, 2.0):
+        r = []
+        for x, y in poly:
+            dx, dy = x - cx, y - cy
+            d = math.hypot(dx, dy)
+            if d > 0 and push > 0:
+                x += dx / d * push
+                y += dy / d * push
+            r.append((math.floor(x) if x < cx else math.ceil(x), math.floor(y) if y < cy else math.ceil(y)))
+        r = [p for i, p in enumerate(r) if p != r[i - 1]]  # merged vertices
+        if len(r) < 3:
+            return None
+        if all(abs(v) <= 32000 for p in r for v in p) and all(_contains(r, p) for p in inside):
+            return r
+    return None
+
+
+def _strip_ringing(img):
+    """Bicubic resampling overshoots: a hard edge leaves faint pixels a pixel
+    or two out. Everything farther than one pixel from a pixel at least a
+    quarter opaque is made transparent, which keeps the antialiased edge."""
+    arr = np.array(img)
+    core = arr[:, :, 3] >= 64
+    near = core.copy()
+    near[1:, :] |= core[:-1, :]
+    near[:-1, :] |= core[1:, :]
+    near[:, 1:] |= near[:, :-1].copy()
+    near[:, :-1] |= near[:, 1:].copy()
+    arr[~near] = 0
+    return Image.fromarray(arr, "RGBA")
+
+
+def fit_image(orig, scaled, opts):
+    """Trim, maybe turn, and hull one image. `scaled` is `orig` resized (the
+    scale may differ per axis by the rounding of the size). Returns (image,
+    M, hull, turned): M maps the new image's coordinates to those of
+    `scaled`, hull the polygon as (x, y) vertices in the new image (None for
+    none), turned whether the image was resampled."""
+    identity = (1, 0, 0, 1, 0, 0)
+    pts = _opaque_points(scaled, opts["alpha"])
+    if pts is None:
+        return scaled, identity, None, False
+    hull = convex_hull(pts)
+    xs = [x for x, _ in hull]
+    ys = [y for _, y in hull]
+    x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+    t = 0.0
+    if opts["rotate"] and len(hull) >= 3:
+        t, area = min_rect_angle(hull)
+        if area > (x1 - x0) * (y1 - y0) * (1.0 - opts["min_gain"]):
+            t = 0.0
+    if t == 0.0:
+        img = scaled.crop((x0, y0, x1, y1))
+        m = (1, 0, 0, 1, x0, y0)
+    else:
+        c, s = math.cos(t), math.sin(t)
+        u = [x * c + y * s for x, y in hull]
+        v = [-x * s + y * c for x, y in hull]
+        u0, v0 = math.floor(min(u)), math.floor(min(v))
+        nw, nh = math.ceil(max(u)) - u0, math.ceil(max(v)) - v0
+        # New coordinates -> scaled image (Flash matrix) -> original image,
+        # in one resampling from the original (premultiplied, so that the
+        # transparent pixels do not bleed their color)
+        m = (c, s, -s, c, c * u0 - s * v0, s * u0 + c * v0)
+        sx, sy = orig.width / scaled.width, orig.height / scaled.height
+        pil = (m[0] * sx, m[2] * sx, m[4] * sx, m[1] * sy, m[3] * sy, m[5] * sy)
+        img = orig.convert("RGBa").transform((nw, nh), Image.AFFINE, pil, resample=opts["resample"]).convert("RGBA")
+        img = _strip_ringing(img)
+    poly = None
+    if opts["hull"] >= 3:
+        pts = _opaque_points(img, opts["alpha"])
+        h2 = convex_hull(pts) if pts else None
+        if h2 and len(h2) >= 3:
+            simple = simplify_hull(h2, opts["hull"], 4 * max(img.width, img.height) + 64)
+            poly = integer_hull(simple, h2) if simple else None
+            # Not worth a clip when it leaves nearly the whole rectangle
+            if poly and abs(_area2(poly)) >= 2 * 0.98 * img.width * img.height:
+                poly = None
+    return img, m, poly, t != 0.0
+
+
 class CAttachment:
-    def __init__(self, image_key, image, local, w, h):
+    def __init__(self, image_key, image, local, w, h, hull=None):
         self.image_key = image_key  # dedup key of the scaled image, or None (not drawn)
-        self.image = image  # scaled RGBA image
+        self.image = image  # scaled (and fitted) RGBA image
         self.local = local
         self.w, self.h = w, h
+        self.hull = hull  # convex polygon around the opaque pixels, or None
         self.texture = None  # name of the Texture, after packing
         self.src = (0, 0, w, h)
 
@@ -687,11 +922,13 @@ def _scaled_image(img, scale):
     return img.convert("RGBa").resize((w, h), Image.LANCZOS).convert("RGBA")
 
 
-def compile_armature(arm, scale=1.0):
+def compile_armature(arm, scale=1.0, fit=None):
+    """fit: fit_options(), or None to keep the images as they are."""
     c = Compiled()
     c.name = arm.name
     c.frame_rate = arm.frame_rate
     c.scale = scale
+    c.fit = {"images": 0, "turned": 0, "hulls": 0, "texels_before": 0, "texels_after": 0, "hull_area": 0.0}
     c.bones = []
     for b in arm.bones:
         parent = NO_PARENT if b.parent is None else arm._bone_index[b.parent]
@@ -711,8 +948,16 @@ def compile_armature(arm, scale=1.0):
                 continue
             key = (d.path, id(d.image))
             if key not in scaled:
-                scaled[key] = _scaled_image(d.image, scale)
-            simg = scaled[key]
+                simg = _scaled_image(d.image, scale)
+                fitted, fm, hull, turned = fit_image(d.image, simg, fit) if fit else (simg, None, None, False)
+                scaled[key] = (simg, fitted, fm, hull)
+                c.fit["images"] += 1
+                c.fit["turned"] += turned
+                c.fit["hulls"] += hull is not None
+                c.fit["texels_before"] += simg.width * simg.height
+                c.fit["texels_after"] += fitted.width * fitted.height
+                c.fit["hull_area"] += abs(_area2(hull)) / 2 if hull else fitted.width * fitted.height
+            simg, fitted, fm, hull = scaled[key]
             ow, oh = d.image.size
             if d.frame is not None:
                 fx, fy, fw, fh = d.frame
@@ -725,7 +970,10 @@ def compile_armature(arm, scale=1.0):
             sx, sy = ow * scale / simg.width, oh * scale / simg.height
             if sx != 1.0 or sy != 1.0:
                 m = mat_mul(m, (sx, 0, 0, sy, 0, 0))
-            atts.append(CAttachment(key, simg, m, simg.width, simg.height))
+            # The fitted image's coordinates to the scaled image's
+            if fm is not None:
+                m = mat_mul(m, fm)
+            atts.append(CAttachment(key, fitted, m, fitted.width, fitted.height, hull))
         c.slots.append({
             "name": s.name, "attachments": atts, "default": s.display_index, "bone": s.bone,
             "alpha": s.alpha, "blend": "ADD" if s.blend == "add" else "ALPHA",
@@ -960,7 +1208,14 @@ def render_preview(c, anim, frame, margin=8, background=(40, 40, 48, 255)):
             continue
         m = mat_mul(view, mat_mul(pose["world"][s["bone"]], a.local))
         ia, ib, ic, id_, itx, ity = mat_inv(m)
-        layer = a.image.transform((W, H), Image.AFFINE, (ia, ic, itx, ib, id_, ity), resample=Image.BILINEAR)
+        src = a.image
+        if a.hull:
+            # What the runtime clips to
+            mask = Image.new("L", src.size, 0)
+            ImageDraw.Draw(mask).polygon([(x, y) for x, y in a.hull], fill=255)
+            r, g, b, al = src.split()
+            src = Image.merge("RGBA", (r, g, b, Image.fromarray(np.minimum(np.asarray(al), np.asarray(mask)))))
+        layer = src.transform((W, H), Image.AFFINE, (ia, ic, itx, ib, id_, ity), resample=Image.BILINEAR)
         if pose["alpha"][si] < 255:
             r, g, b, al = layer.split()
             al = al.point(lambda v, k=pose["alpha"][si]: v * k // 255)
@@ -1162,6 +1417,17 @@ def generate_header(c, namespace, guard, opts, sources):
         warn(f"{stats['escaped']} opaque pixels had the key color: blue LSB flipped")
 
     body = tex_lines
+    # Hulls: one per image that has one
+    hull_names = {}
+    for s in c.slots:
+        for a in s["attachments"]:
+            if a.hull is None or a.image_key in hull_names:
+                continue
+            hn = names.get("hull_" + os.path.basename(a.image_key[0]))
+            hull_names[a.image_key] = (hn, len(a.hull))
+            body += ["", f"static const int16_t {hn}[] = {{"
+                     + ", ".join(f"{x}, {y}" for x, y in a.hull) + "};"]
+            stats["bytes"] += 4 * len(a.hull)
     # Attachments
     att_names = []
     for s in c.slots:
@@ -1174,9 +1440,10 @@ def generate_header(c, namespace, guard, opts, sources):
         for a in s["attachments"]:
             tex = f"&{a.texture}" if a.image_key is not None else "nullptr"
             loc = ", ".join(fmt_float(v) for v in a.local)
-            body.append(f"  {{{tex}, {{{a.src[0]}, {a.src[1]}, {a.src[2]}, {a.src[3]}}}, {{{loc}}}}},")
+            hn, hc = hull_names.get(a.image_key, ("nullptr", 0))
+            body.append(f"  {{{tex}, {{{a.src[0]}, {a.src[1]}, {a.src[2]}, {a.src[3]}}}, {{{loc}}}, {hn}, {hc}}},")
         body.append("};")
-        stats["bytes"] += 44 * len(s["attachments"])
+        stats["bytes"] += 52 * len(s["attachments"])
     names.used.update(("bones", "slots", "armature", "animations", "ANIMATION_COUNT"))
     body += ["", f"static const {RIG}::Bone bones[] = {{"]
     for b in c.bones:
@@ -1285,6 +1552,11 @@ def generate_header(c, namespace, guard, opts, sources):
             f"// scale {c.scale:g}, {fmt}" + (f" (key #{key[0]:02X}{key[1]:02X}{key[2]:02X})" if keyed else "")
             + f", {atlas_desc}, about {stats['bytes']} bytes",
             ]
+    if c.fit["images"]:
+        f = c.fit
+        head.append(f"// images: {f['texels_before']} pixels trimmed to {f['texels_after']}"
+                    f" ({f['turned']} of {f['images']} turned), {f['hulls']} hulls"
+                    f" enclosing {round(f['hull_area'])} pixels")
     ws = warnings()
     if ws:
         head.append(f"// {len(ws)} warning(s):")

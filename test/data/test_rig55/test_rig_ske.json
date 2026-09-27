@@ -72,6 +72,11 @@
      "parent": "root",
      "z": 1,
      "blendMode": "add"
+    },
+    {
+     "name": "se",
+     "parent": "c",
+     "z": 4
     }
    ],
    "animation": [
@@ -283,6 +288,21 @@
          "path": "d",
          "transform": {
           "y": -3
+         }
+        }
+       ]
+      },
+      {
+       "name": "se",
+       "display": [
+        {
+         "name": "e",
+         "path": "e",
+         "transform": {
+          "x": 6,
+          "y": 4,
+          "skX": -20,
+          "skY": -20
          }
         }
        ]

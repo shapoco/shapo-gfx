@@ -4,9 +4,9 @@
 // Version of ShapoGFX. gfx2d and gfx3d are released together and share this
 // one number. Keep it in sync with "version" in library.json.
 #define SHAPOGFX_VERSION_MAJOR 1
-#define SHAPOGFX_VERSION_MINOR 1
-#define SHAPOGFX_VERSION_PATCH 1
-#define SHAPOGFX_VERSION_STRING "1.1.1"
+#define SHAPOGFX_VERSION_MINOR 2
+#define SHAPOGFX_VERSION_PATCH 0
+#define SHAPOGFX_VERSION_STRING "1.2.0"
 
 // Single integer 0x00MMmmpp for #if comparisons, e.g.
 //   #if SHAPOGFX_VERSION >= SHAPOGFX_MAKE_VERSION(1, 2, 0)

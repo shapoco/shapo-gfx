@@ -346,7 +346,7 @@ void Instance::draw(Graphics2D &g, int first, int end) const {
       curBlend = bm;
     }
     g.setTransform(base * world_[sl.bone] * at.local);
-    g.drawImage(*at.texture, 0, 0, at.src);
+    g.drawImage(*at.texture, 0, 0, at.src, at.hull, at.hullCount);
   }
   g.setTransform(base);
   if (curOpacity != opacity || curBlend != blend) g.setBlend(blend, opacity);

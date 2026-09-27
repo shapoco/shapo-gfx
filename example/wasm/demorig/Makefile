@@ -34,7 +34,7 @@ $(OUT): $(SRCS) $(HDRS) Makefile
 		-o $@
 
 model:
-	$(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.8 \
+	$(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.8 --fit-rotate \
 		$(ASSETS)/rgb_chan_ske.json $(ASSETS)/Armature_animtion0.dbani $(COMMON)/model/rgb_chan.hpp
 
 # Native build: renders one frame to demorig.ppm

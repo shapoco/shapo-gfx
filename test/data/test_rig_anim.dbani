@@ -72,6 +72,11 @@
      "parent": "root",
      "z": 1,
      "blendMode": "add"
+    },
+    {
+     "name": "se",
+     "parent": "c",
+     "z": 4
     }
    ],
    "animation": [

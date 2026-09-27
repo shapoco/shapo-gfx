@@ -247,13 +247,53 @@ static void testDeepTree() {
   CHECK_EQ(st.badIndices, 0);
 }
 
-// Same formula as test/tools/make_test_rig.py
+// Same formula as test/tools/make_test_rig.py (image 4 is a diagonal bar)
 static g2::Color rigImagePixel(int index, int x, int y, int w, int h) {
   const bool cornerX = x == 0 || x == w - 1, cornerY = y == 0 || y == h - 1;
-  const int a = (cornerX && cornerY) ? 0 : ((cornerX || cornerY) ? 136 : 255);
+  int a = (cornerX && cornerY) ? 0 : ((cornerX || cornerY) ? 136 : 255);
+  if (index == 4) a = (x >= 1 && x <= 13 && std::abs(x - y) <= 1) ? 255 : 0;
   return g2::makeColor((40 + 60 * index + 13 * x) % 256,
                        (200 + 70 * index + 17 * y) % 256,
                        (90 * index + 7 * x * y) % 256, a);
+}
+
+// The hull of an attachment holds every opaque pixel of its image (their
+// corners), has at most 8 vertices, and leaves out some of the transparent
+// ones: `opaque` says which pixels of the image count
+template <typename F>
+static void checkHull(const shapoco::gfx2d::rig::Attachment &at, F opaque) {
+  const int n = at.hullCount;
+  CHECK(at.hull != nullptr && n >= 3 && n <= 8);
+  if (!at.hull || n < 3) return;
+  const int16_t *h = at.hull;
+  long area2 = 0;
+  for (int i = 0; i < n; i++) {
+    const int j = (i + 1) % n;
+    area2 += (long)h[2 * i] * h[2 * j + 1] - (long)h[2 * j] * h[2 * i + 1];
+  }
+  const long sign = area2 >= 0 ? 1 : -1;
+  auto inside = [&](int x, int y) {
+    for (int i = 0; i < n; i++) {
+      const int j = (i + 1) % n;
+      const long f = (long)(h[2 * j] - h[2 * i]) * (y - h[2 * i + 1]) -
+                     (long)(h[2 * j + 1] - h[2 * i + 1]) * (x - h[2 * i]);
+      if (sign * f < 0) return false;
+    }
+    return true;
+  };
+  int transparentOut = 0;
+  for (int y = 0; y < at.src.height; y++) {
+    for (int x = 0; x < at.src.width; x++) {
+      const bool in = inside(x, y) && inside(x + 1, y) && inside(x, y + 1) &&
+                      inside(x + 1, y + 1);
+      if (opaque(x, y)) {
+        CHECK(in);
+      } else if (!in) {
+        transparentOut++;
+      }
+    }
+  }
+  CHECK(transparentOut > 0);
 }
 
 // The atlas of dbones2cpp holds the images of the test armature where the
@@ -269,7 +309,9 @@ static void checkRigAtlas(const shapoco::gfx2d::rig::Armature &arm,
                 {"sb", 1, 3, 4, 4},
                 {"sroot", 0, 3, 4, 4},
                 {"sa", 0, 0, 8, 6},
-                {"sc", 0, 2, 7, 7}};
+                {"sc", 0, 2, 7, 7},
+                // e's transparent columns 0, 14 and 15 are trimmed off
+                {"se", 0, 4, 13, 14}};
   g2::Graphics2D g;
   for (const auto &e : expect) {
     const shapoco::gfx2d::rig::Slot *slot = nullptr;
@@ -281,6 +323,12 @@ static void checkRigAtlas(const shapoco::gfx2d::rig::Armature &arm,
     const shapoco::gfx2d::rig::Attachment &at = slot->attachments[e.attachment];
     CHECK_EQ(at.src.width, e.w);
     CHECK_EQ(at.src.height, e.h);
+    // The images' opaque pixels after the trim (e lost its first column)
+    const int ox = e.image == 4 ? 1 : 0;
+    checkHull(at, [&](int x, int y) {
+      return g2::colorA(rigImagePixel(e.image, x + ox, y, e.w + ox, e.h)) >=
+             (keyed ? 128 : 9);
+    });
     const g2::Texture &t = *at.texture;
     g2::Surface s = {t.format, t.width, t.height, t.stride,
                      const_cast<void *>(t.pixels)};
@@ -288,7 +336,7 @@ static void checkRigAtlas(const shapoco::gfx2d::rig::Armature &arm,
     if (!g.hasTarget()) continue;  // format disabled
     for (int y = 0; y < e.h; y++) {
       for (int x = 0; x < e.w; x++) {
-        const g2::Color want = rigImagePixel(e.image, x, y, e.w, e.h);
+        const g2::Color want = rigImagePixel(e.image, x + ox, y, e.w + ox, e.h);
         const g2::Color got = g.getPixel(at.src.x + x, at.src.y + y, false);
         if (keyed && g2::colorA(want) < 128) {
           CHECK_EQ(got & 0xFFFFFFu, arm.colorKey & 0xFFFFFFu);

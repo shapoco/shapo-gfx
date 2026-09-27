@@ -12,6 +12,8 @@ armature in the 5.5 animation format with a texture atlas), then runs:
       test/data/test_rig_ske.json test/data/test_rig_sep.hpp
   bin/dbones2cpp --out-format rgb565_swapped --out-key '#FF00FF' --namespace test_rig_keyed \\
       test/data/test_rig_ske.json test/data/test_rig_keyed.hpp
+  bin/dbones2cpp --atlas-width 64 --fit-rotate --namespace test_rig_fit \\
+      test/data/test_rig_ske.json test/data/test_rig_fit.hpp
 
 checks that the 5.5 / atlas variant converts to the same header, and turns
 test_rig_pose.json (the tool's reference poses) into test_rig_expected.hpp.
@@ -31,14 +33,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.normpath(os.path.join(HERE, "..", "data"))
 TOOL = os.path.normpath(os.path.join(HERE, "..", "..", "bin", "dbones2cpp"))
 
-IMAGES = [("a", 8, 6), ("b", 5, 9), ("c", 7, 7), ("d", 4, 4)]
+# e is a diagonal bar: a transparent margin to trim on the sides, a hull
+# that cuts most of the rectangle, and a turn worth taking with --fit-rotate
+IMAGES = [("a", 8, 6), ("b", 5, 9), ("c", 7, 7), ("d", 4, 4), ("e", 16, 14)]
 
 
 def pixel(index, x, y, w, h):
-    # Keep in sync with rigImagePixel() in test/rig_test.cpp
+    # Keep in sync with rigImagePixel() in test/tools_test.cpp
     r = (40 + 60 * index + 13 * x) % 256
     g = (200 + 70 * index + 17 * y) % 256
     b = (90 * index + 7 * x * y) % 256
+    if index == 4:
+        return (r, g, b, 255 if 1 <= x <= 13 and abs(x - y) <= 1 else 0)
     corner = (x == 0 or x == w - 1) and (y == 0 or y == h - 1)
     edge = x == 0 or y == 0 or x == w - 1 or y == h - 1
     return (r, g, b, 0 if corner else (136 if edge else 255))
@@ -70,6 +76,7 @@ def armature(k, animations, skin=True):
             {"name": "sb", "parent": "b", "z": 0},
             {"name": "sc", "parent": "c", "z": 3, "color": {"aM": 50}},
             {"name": "sroot", "parent": "root", "z": 1, "blendMode": "add"},
+            {"name": "se", "parent": "c", "z": 4},
         ],
         "animation": animations,
     }
@@ -80,6 +87,7 @@ def armature(k, animations, skin=True):
                                        {"name": "d", "path": "d", "transform": t(x=2)}]},
             {"name": "sc", "display": [{"name": "c", "path": "c"}]},
             {"name": "sroot", "display": [{"name": "d", "path": "d", "transform": t(y=-3)}]},
+            {"name": "se", "display": [{"name": "e", "path": "e", "transform": t(x=6, y=4, skX=-20, skY=-20)}]},
         ]}]
     return arm
 
@@ -269,6 +277,8 @@ def main():
     run("--atlas-width", "0", "--namespace", "test_rig_sep", ske, os.path.join(DATA, "test_rig_sep.hpp"))
     run("--out-format", "rgb565_swapped", "--out-key", "#FF00FF", "--namespace", "test_rig_keyed", ske,
         os.path.join(DATA, "test_rig_keyed.hpp"))
+    run("--atlas-width", "64", "--fit-rotate", "--namespace", "test_rig_fit", ske,
+        os.path.join(DATA, "test_rig_fit.hpp"))
 
     # The 5.0 and 5.5 formats, folder and atlas images: the same header
     with tempfile.TemporaryDirectory() as tmp:

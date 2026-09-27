@@ -57,6 +57,11 @@ struct Attachment {
   const Texture *texture;  // nullptr: not drawn (an unsupported display)
   Rect src;                // the part of `texture` (a texture atlas)
   affine2f local;          // the top-left corner of `src` to the bone's space
+  // Convex polygon around the opaque pixels, as x, y pairs relative to the
+  // top-left corner of `src` (Graphics2D::drawImage with a polygon); nullptr
+  // / 0: the whole rectangle
+  const int16_t *hull;
+  uint8_t hullCount;
 };
 
 struct Slot {

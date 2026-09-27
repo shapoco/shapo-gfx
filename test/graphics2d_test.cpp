@@ -738,7 +738,175 @@ static void testAffineImage() {
   ga.drawImage(img, 0, 0);
   CHECK_EQ(countColor(ga, Colors::BLACK), 32 * 16);
 }
+
+// drawImage() with a convex polygon against the texel under each pixel
+// center whose source point lies in the polygon, in double; pixels whose
+// source point is within 1/500 texel of a texel edge or of an edge of the
+// polygon may go either way and are not compared.
+static void checkPolygonImage(const Texture &img, const affine2f &m,
+                              const Rect &src, const int16_t *poly, int n,
+                              PixelFormat df, int blend, uint32_t fill,
+                              int &failures, const char *what) {
+  OwnedSurface a = createSurface(df, 40, 32), b = createSurface(df, 40, 32);
+  fillRandom(a, fill);
+  std::memcpy(b.pixels(), a.pixels(), a.bytes());
+  Graphics2D ga(a), gb(b);
+  ga.setTransform(m);
+  setBlendCase(ga, blend);
+  setBlendCase(gb, blend);
+  ga.drawImage(img, 0, 0, src, poly, n);
+  const double det = (double)m.a * m.d - (double)m.b * m.c;
+  const double ia = m.d / det, ib = -m.b / det, ic = -m.c / det, id = m.a / det;
+  const Rect s = src.normalized();
+  const Rect in = s.intersect({0, 0, img.width, img.height});
+  double area2 = 0;
+  for (int i = 0; i < n; i++) {
+    const int j = (i + 1) % n;
+    area2 += (double)poly[2 * i] * poly[2 * j + 1] -
+             (double)poly[2 * j] * poly[2 * i + 1];
+  }
+  const double sign = area2 >= 0 ? 1.0 : -1.0;
+  bool sure[32][40];
+  for (int y = 0; y < 32; y++) {
+    for (int x = 0; x < 40; x++) {
+      const double X = x + 0.5 - m.tx, Y = y + 0.5 - m.ty;
+      const double u = ia * X + ic * Y + s.x, v = ib * X + id * Y + s.y;
+      const double fu = u - std::floor(u), fv = v - std::floor(v);
+      bool ok = fu > 0.002 && fu < 0.998 && fv > 0.002 && fv < 0.998;
+      bool inside = true;
+      for (int i = 0; i < n; i++) {
+        const int j = (i + 1) % n;
+        const double x0 = poly[2 * i] + s.x, y0 = poly[2 * i + 1] + s.y;
+        const double dx = poly[2 * j] - poly[2 * i];
+        const double dy = poly[2 * j + 1] - poly[2 * i + 1];
+        const double len = std::sqrt(dx * dx + dy * dy);
+        if (len == 0) continue;
+        const double f = sign * (-dy * (u - x0) + dx * (v - y0)) / len;
+        if (std::fabs(f) < 0.002) ok = false;
+        if (f < 0) inside = false;
+      }
+      sure[y][x] = ok;
+      const int tu = (int)std::floor(u), tv = (int)std::floor(v);
+      if (!ok || !inside || !in.contains(tu, tv)) continue;
+      gb.drawImage(img, x, y, Rect{tu, tv, 1, 1});
+    }
+  }
+  int bad = 0;
+  for (int y = 0; y < 32; y++) {
+    for (int x = 0; x < 40; x++)
+      bad += sure[y][x] && ga.getPixel(x, y, false) != gb.getPixel(x, y);
+  }
+  if (bad && failures++ < 5) {
+    std::printf("  polygon (%s): %d pixels differ, src fmt %d dst fmt %d\n",
+                what, bad, (int)img.format, (int)df);
+    CHECK(false);
+  }
+}
+
+static void testPolygonImage() {
+  uint32_t seed = 4242;
+  int failures = 0;
+  // A triangle, a diamond (the other way round), a hexagon and an octagon
+  // that cuts the corners of a 16 x 16 image
+  static const int16_t tri[] = {0, 0, 16, 2, 3, 16};
+  static const int16_t diamond[] = {8, -1, -1, 8, 8, 17, 17, 8};
+  static const int16_t hexa[] = {4, 0, 12, 0, 16, 8, 12, 16, 4, 16, 0, 8};
+  static const int16_t octa[] = {3, 0, 13, 0, 16, 3, 16, 13,
+                                 13, 16, 3, 16, 0, 13, 0, 3};
+  const struct {
+    const int16_t *v;
+    int n;
+  } polys[] = {{tri, 3}, {diamond, 4}, {hexa, 6}, {octa, 8}};
+  for (PixelFormat sf : kFormats) {
+    OwnedSurface sq = createSurface(sf, 16, 16);
+    OwnedSurface odd = createSurface(sf, 13, 9);
+    fillRandom(sq, nextRand(seed));
+    fillRandom(odd, nextRand(seed));
+    for (PixelFormat df : kFormats) {
+      for (int k = 0; k < 12; k++) {
+        const OwnedSurface &img = k % 3 == 2 ? odd : sq;
+        const auto &p = polys[k % 4];
+        affine2f m;
+        if (k < 3) {
+          // No rotation: the plain and scaled kinds take this path too
+          m = affine2f::translation((float)randInt(seed, 2, 20),
+                                    (float)randInt(seed, 2, 14));
+          if (k == 1) m.scale(1.5f, 0.75f);
+        } else {
+          const float angle = ((float)randInt(seed, 0, 359) + 0.5f) * PI / 180;
+          const float sx = (float)randInt(seed, 60, 250) / 100.0f *
+                           (k % 5 == 0 ? -1.0f : 1.0f);
+          const float sy = (float)randInt(seed, 60, 250) / 100.0f;
+          m = affine2f::placement((float)randInt(seed, 5, 35),
+                                  (float)randInt(seed, 5, 27), angle, sx, sy,
+                                  img.width() * 0.5f, img.height() * 0.5f);
+          if (k % 3 == 1) m.shear(0.3f, -0.2f);
+        }
+        Rect src = {0, 0, img.width(), img.height()};
+        if (k % 4 == 3) src = {2, 1, 12, 13};  // the polygon is relative to it
+        checkPolygonImage(img.surface(), m, src, p.v, p.n, df, k, k, failures,
+                          "random");
+      }
+    }
+  }
+
+  // A polygon around the whole rectangle draws what the plain call draws; one
+  // beside it, a degenerate one, or too many vertices draw nothing; fewer
+  // than three vertices mean no polygon
+  OwnedSurface img = createSurface(PixelFormat::ARGB4444, 10, 7);
+  fillRandom(img, 5);
+  static const int16_t around[] = {-1, -1, 11, -1, 11, 8, -1, 8};
+  static const int16_t beside[] = {20, 0, 30, 0, 25, 7};
+  static const int16_t flat[] = {0, 0, 5, 5, 10, 10};
+  static const int16_t two[] = {0, 0, 3, 3};
+  int16_t many[2 * (Graphics2D::IMAGE_POLYGON_MAX + 1)];
+  for (int i = 0; i <= Graphics2D::IMAGE_POLYGON_MAX; i++) {
+    const float a = 2 * PI * i / (Graphics2D::IMAGE_POLYGON_MAX + 1);
+    many[2 * i] = (int16_t)std::lround(5 + 8 * std::cos(a));
+    many[2 * i + 1] = (int16_t)std::lround(3 + 8 * std::sin(a));
+  }
+  const affine2f ms[] = {affine2f::translation(3, 2),
+                         affine2f::placement(15, 8, 0.4f, 1.3f, 1.3f)};
+  for (const affine2f &m : ms) {
+    OwnedSurface a = createSurface(PixelFormat::RGB565_SWAPPED, 32, 20);
+    OwnedSurface b = createSurface(PixelFormat::RGB565_SWAPPED, 32, 20);
+    Graphics2D ga(a), gb(b);
+    ga.setTransform(m);
+    gb.setTransform(m);
+    ga.drawImage(img, 0, 0, Rect{0, 0, 10, 7}, around, 4);
+    gb.drawImage(img, 0, 0);
+    CHECK(sameSurface(a, b));
+    ga.clear(Colors::BLACK);
+    gb.clear(Colors::BLACK);
+    ga.drawImage(img, 0, 0, Rect{0, 0, 10, 7}, two, 2);
+    gb.drawImage(img, 0, 0);
+    CHECK(sameSurface(a, b));
+    ga.clear(Colors::BLACK);
+    ga.drawImage(img, 0, 0, Rect{0, 0, 10, 7}, beside, 3);
+    ga.drawImage(img, 0, 0, Rect{0, 0, 10, 7}, flat, 3);
+    ga.drawImage(img, 0, 0, Rect{0, 0, 10, 7}, many,
+                 Graphics2D::IMAGE_POLYGON_MAX + 1);
+    CHECK_EQ(countColor(ga, Colors::BLACK), 32 * 20);
+  }
+}
 #endif  // SHAPOGFX2D_TRANSFORM
+
+// The polygon applies without a transform as well (SHAPOGFX2D_TRANSFORM=0
+// included): a triangle over half of a white square
+static void testPolygonImagePlain() {
+  OwnedSurface img = createSurface(PixelFormat::RGB565_SWAPPED, 8, 8);
+  Graphics2D(img).clear(Colors::WHITE);
+  OwnedSurface t = createSurface(PixelFormat::RGB565_SWAPPED, 16, 16);
+  Graphics2D g(t);
+  static const int16_t tri[] = {0, 0, 8, 0, 0, 8};
+  g.drawImage(img, 4, 4, Rect{0, 0, 8, 8}, tri, 3);
+  // Pixel centers with x + y + 1 <= 8: 36 with the diagonal, 28 without
+  const int white = countColor(g, Colors::WHITE);
+  CHECK(white >= 28 && white <= 36);
+  CHECK_EQ(g.getPixel(4, 4), Colors::WHITE);
+  CHECK_EQ(g.getPixel(11, 11), Colors::BLACK);
+  CHECK_EQ(g.getPixel(3, 4), Colors::BLACK);
+}
 
 static void testAffineHelpers() {
   auto near = [](const vec2f &p, float x, float y) {
@@ -1386,6 +1554,10 @@ void testGraphics2D() {
   testScaledImage();
 #if SHAPOGFX2D_TRANSFORM
   testAffineImage();
+  testPolygonImage();
+#endif
+  testPolygonImagePlain();
+#if SHAPOGFX2D_TRANSFORM
   testTransformedShapes();
 #endif
 #if SHAPOGFX2D_COLOR_KEY
