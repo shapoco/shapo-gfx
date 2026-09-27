@@ -28,6 +28,10 @@
 #ifndef SHAPOGFX2D_COLOR_KEY
 #define SHAPOGFX2D_COLOR_KEY 1
 #endif
+// Skeletal animation (rig.hpp); 0 leaves rig::Instance doing nothing
+#ifndef SHAPOGFX2D_RIG
+#define SHAPOGFX2D_RIG 1
+#endif
 
 namespace shapoco::gfx2d::detail {
 
@@ -37,6 +41,7 @@ constexpr int STACK_DEPTH = SHAPOGFX2D_STACK_DEPTH;
 constexpr bool TRANSFORM = SHAPOGFX2D_TRANSFORM != 0;
 constexpr bool BLEND = SHAPOGFX2D_BLEND != 0;
 constexpr bool COLOR_KEY = SHAPOGFX2D_COLOR_KEY != 0;
+constexpr bool RIG = SHAPOGFX2D_RIG != 0;
 
 // ---------------------------------------------------------------------------
 // Integer helpers

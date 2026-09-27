@@ -37,6 +37,9 @@
 #ifndef SHAPOGFX2D_STACK_DEPTH
 #define SHAPOGFX2D_STACK_DEPTH 16
 #endif
+#ifndef SHAPOGFX2D_RIG
+#define SHAPOGFX2D_RIG 1
+#endif
 
 extern int g_checkFailures;
 
@@ -62,5 +65,6 @@ void testPixel();
 void testGraphics2D();
 void testGfx3D();
 void testTools();
+void testRig();
 
 #endif
