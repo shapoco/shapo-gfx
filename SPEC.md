@@ -24,6 +24,7 @@ src/gfx2d/internal.hpp   internal declarations of the 2D renderer (options, span
 src/gfx2d/graphics2d.cpp 2D row operations, state, rectangles, lines, text
 src/gfx2d/shapes.cpp     2D ellipses, arcs, rounded rectangles, polygons
 src/gfx2d/images.cpp     2D images and 1-bit masks (bitmaps, glyphs)
+src/gfx2d/rig.cpp        2D skeletal animation (rig::Instance)
 src/gfx2d/arch.hpp       architecture hooks of the 2D renderer (internal; RP2)
 src/gfx3d/arch/          architecture hooks of the 3D renderer (internal; generic + RP2)
 example/wasm/            sample programs (WASM and native)
@@ -31,7 +32,8 @@ docs/example/            browser pages for the samples
 test/                    self-checking tests
 ```
 
-Users include `shapoco/gfx2d/gfx2d.hpp` and/or `shapoco/gfx3d/gfx3d.hpp` and compile
+Users include `shapoco/gfx2d/gfx2d.hpp` and/or `shapoco/gfx3d/gfx3d.hpp` (and the
+optional `shapoco/gfx2d/fonts.hpp`, `surface_alloc.hpp` and `rig.hpp`) and compile
 `src/gfx2d/*.cpp` and `src/gfx3d/*.cpp`. Header guards and compile-time options use
 the prefixes `SHAPOGFX_` (shared), `SHAPOGFX2D_` and `SHAPOGFX3D_`.
 
@@ -67,6 +69,7 @@ in `library.json`; each release is tagged `v<version>` in git.
 | `SHAPOGFX2D_BLEND` | 1 | 2D blend modes other than `ALPHA` and the opacity; 0 removes them (`setBlend()` does nothing) |
 | `SHAPOGFX2D_COLOR_KEY` | 1 | Color key of `drawImage()`; 0 removes it (`setColorKey()` does nothing) |
 | `SHAPOGFX2D_STACK_DEPTH` | 16 | Levels of the 2D state stack (`pushState()`) |
+| `SHAPOGFX2D_RIG` | 1 | Skeletal animation (`rig.hpp`); 0 removes it (`rig::Instance::init()` returns false, the rest does nothing) |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise); see "Placing the rasterization side" |
 | `SHAPOGFX_ARCH_SPLIT_MUL64` | 1 on Cortex-M0/M0+ and ESP8266, else 0 | 1 forms 32x32 -> 64-bit products from four 16x16-bit ones inline instead of calling a library routine, for a core whose multiplier yields only the low 32 bits (fixed-point vertex stage, setup, perspective division); same results either way |
@@ -595,6 +598,110 @@ are radians and turn clockwise on screen. The member functions work like a canva
 context: `translation(x, y).rotate(a).scale(s).translate(-w / 2, -h / 2)` centers an
 image on `(x, y)`, which is what `placement(x, y, a, s, s, w / 2, h / 2)` builds
 directly.
+
+### Skeletal animation (`rig.hpp`, optional)
+
+`shapoco::gfx2d::rig` poses armatures (trees of bones carrying images) from keyframed
+animations and draws them with `Graphics2D`. The data is static (`static const`, in
+flash) and is generated from DragonBones by `bin/dbones2cpp`; `rig::Instance` keeps
+the pose of one armature in memory the user provides. `gfx2d.hpp` does not include
+the header. Conventions are those of DragonBones: y down, angles clockwise, Flash
+matrices (`x' = a x + c y + tx`, as `affine2f`).
+
+```c++
+using angle16_t = int16_t;  // 1/65536 turn: differences wrap to the shortest way
+using scale16_t = int16_t;  // Q12 (SCALE_ONE = 4096)
+struct Bone { const char *name; float x, y; angle16_t rotX, rotY;
+              scale16_t scaleX, scaleY; uint8_t parent; };          // 24 B (32-bit)
+struct Attachment { const Texture *texture; Rect src; affine2f local; };  // 44 B
+struct Slot { const char *name; const Attachment *attachments; uint8_t attachmentCount;
+              int8_t defaultAttachment; uint8_t bone, alpha; BlendMode blend; };  // 16 B
+struct Armature { const char *name; const Bone *bones; const Slot *slots;
+                  uint8_t boneCount, slotCount; bool colorKeyEnabled; Color colorKey;
+                  RectF bounds; uint32_t signature; };
+struct Curve { int16_t y[17]; };  // easing at x = i / 16, Q14
+struct TranslateKey { uint16_t frame; uint8_t curve, pad; float x, y; };
+struct RotateKey { uint16_t frame; uint8_t curve, pad; angle16_t rotX, rotY; };
+struct ScaleKey { uint16_t frame; uint8_t curve, pad; scale16_t scaleX, scaleY; };
+struct AttachmentKey { uint16_t frame; int8_t attachment; uint8_t pad; };
+struct AlphaKey { uint16_t frame; uint8_t curve, alpha; };
+struct BoneTimeline { const void *keys; uint16_t keyCount; uint8_t bone; Channel channel; };
+struct SlotTimeline { const void *keys; uint16_t keyCount; uint8_t slot; Channel channel; };
+struct DrawOrderKey { uint16_t frame; const uint8_t *order; };
+struct Animation { const char *name; uint16_t duration; uint8_t frameRate,
+                   boneTimelineCount, slotTimelineCount, curveCount;
+                   uint16_t drawOrderKeyCount; const BoneTimeline *boneTimelines;
+                   const SlotTimeline *slotTimelines; const DrawOrderKey *drawOrderKeys;
+                   const Curve *curves; uint32_t signature; };
+float frameAt(const Animation &, float seconds, bool loop = true);
+```
+
+- **Bones** are ordered parents first (`parent` is a smaller index or `NO_PARENT`;
+  indices are `uint8_t`, at most 255 bones and slots). A bone's local transform is
+  `a = cos(rotY) sx, b = sin(rotY) sx, c = -sin(rotX) sy, d = cos(rotX) sy,
+  (tx, ty) = (x, y)` (DragonBones' skX / skY: equal for a rotation, different for a
+  skew); its world transform is the parent's world transform times the local one
+  (a plain affine product, so a child of a non-uniformly scaled bone is sheared).
+- **Slots** are in the base draw order. A slot shows one of its attachments (-1:
+  none). An attachment maps the top-left corner of `src` (a part of a texture atlas)
+  to the bone's space; `texture == nullptr` marks a display that is not drawn (an
+  unsupported DragonBones display kept so that the indices match). `alpha` is the
+  slot's opacity, `blend` ALPHA or ADD.
+- **Animations** hold one timeline per channel of a bone (TRANSLATE, ROTATE, SCALE)
+  or a slot (ATTACHMENT, ALPHA), sorted by bone / slot and channel, with keys in
+  frame order starting at frame 0. Bone key values are offsets added to the bind
+  pose (angles wrap in int16, positions add in float), scale keys multiply it (Q12);
+  slot key values replace the slot's. `curve` is the easing from a key to the next:
+  `CURVE_LINEAR`, `CURVE_STEP` (hold) or an index into `curves`. Draw order keys
+  hold complete orders (draw position -> slot; `nullptr` returns to the base order).
+  `signature` (FNV-1a of the bone and slot names) ties an animation to its armature.
+- `frameAt()` converts seconds to a frame (`seconds * frameRate`), wrapped to
+  `[0, duration)` or clamped to `[0, duration]`.
+
+`rig::Instance` (a small handle; copies share the memory):
+
+- `static size_t bytes(const Armature &)`: 24 bytes per bone (world transforms), 12
+  per slot (bounding box, attachment, alpha) and 1 per slot (draw order), rounded up
+  to 4, plus 3 bytes of alignment slack. `init(armature, memory, size)` fails if the
+  memory is too small and starts in the bind pose; nothing is allocated.
+- `pose(anim, frame, visitor = nullptr)` clamps `frame` to `[0, duration]` (NaN to 0)
+  and refuses (false, nothing changes) an animation whose signature differs. Per
+  bone it starts from the bind values, adds each of its timelines (the key at or
+  before the frame, `k0`, and the next, `k1`: `t = (frame - k0.frame) / (k1.frame -
+  k0.frame)` in float; the Q14 easing `e` is `0` for STEP, `(int)(t * 16384)` for
+  LINEAR, else the table interpolated linearly at `u = 16 t`; values are `a + (b -
+  a) e / 16384` in float for positions, `a + (((int16)(b - a) e) >> 14)` for angles
+  and `a + (((b - a) e) >> 14)` for scales and alphas), calls
+  `BoneVisitor::onBone(bone, BonePose &)` if given, and multiplies the local matrix
+  (one sin/cos pair when rotX == rotY) onto the parent's. Then each slot takes its
+  attachment and alpha, and its bounding box in the armature's space (the four
+  corners of `src` through `world * local`, floor / ceil, int16). The draw order is
+  that of the last key at or before the frame, copied only when it changes (an order
+  with an index out of range falls back to the base order). `poseBind()` does the
+  same without an animation. `bin/shapogfx_dbones.py` evaluates poses with the same
+  arithmetic (float32 progress, integer easing), the reference of the tests.
+- `draw(g)` / `draw(g, first, end)` draw the draw positions `[first, end)` (clamped)
+  with `g`'s transform as the placement of the armature: per visible slot with a
+  non-zero alpha, `setTransform(placement * world[bone] * local)` and
+  `drawImage(texture, 0, 0, src)` (the transformed path). The slot's alpha scales
+  `g`'s opacity, ADD slots draw additively unless `g`'s blend mode is NONE, and a
+  keyed armature sets its key color for its images. Slots whose bounding box, mapped
+  by the placement, lies outside `g`'s clip rectangle (a pixel wider) are skipped,
+  so drawing in bands costs little. The transform, opacity, blend mode and color key
+  of `g` are restored (no state stack is used). Without `SHAPOGFX2D_TRANSFORM`
+  nothing is drawn. Drawing something between two slots is `draw(g, 0, k)`, the
+  drawing, `draw(g, k, n)` with `k = drawIndexOf(slot)`.
+- Accessors: `drawIndexOf(slot)`, `slotAt(drawIndex)`, `boneIndex(name)`,
+  `slotIndex(name)` (linear `strcmp`, -1 if none), `boneTransform(bone)` (armature
+  space), `attachmentOf` / `setAttachment` and `alphaOf` / `setAlpha` (overrides
+  until the next pose), `bounds()` (union of the visible slots' boxes) and
+  `bounds(placement)` (the box of its corners after `placement`).
+
+Not supported (the tool warns and drops them): mesh deformation (FFD, weighted
+meshes), IK, nested armatures, events, the RGB tint of slots, extra turns
+(`clockwise` / `tweenRotate`), bones not inheriting rotation or scale, several skins
+at run time, blending of animations. They would be added in `rig` as new kinds
+(e.g. `MeshAttachment`, `IkConstraint`) with more memory behind `Instance::bytes()`.
 
 ## `shapoco::gfx3d`
 
@@ -1279,9 +1386,33 @@ module.
   normals are generated for them). Oversized index ranges and out-of-range indices are
   reported and skipped, so the generated data always satisfies the renderer's invariants.
 
+- **dbones2cpp** `[--namespace NS] [--armature A] [--skin S] [--scale S] [--anim-scale auto|S] [--in-key COLOR] [--out-format argb4444|rgb565_swapped|rgb565] [--out-key COLOR] [--alpha-threshold N] [--dither D] [--atlas-width auto|N|0] [--texture-dir DIR] [--preview FRAMES] [--dump-pose FRAMES] input_ske.json [extra.dbani ...] output.hpp`
+  converts a DragonBones 5.x armature for `rig` (`shapogfx_dbones.py` is its core,
+  shared with the tests). It reads the 5.0 (one `frame` timeline per bone with every
+  channel) and 5.5 (`translateFrame` / `rotateFrame` / `scaleFrame`, `displayFrame`,
+  `colorFrame`) animation formats, `zOrder` timelines, and the images from the
+  `<name>_texture/` folder or a `<name>_tex.json` atlas (trimmed and rotated
+  sub-textures). Bones are sorted parents first, slots by `z`. Channels whose keys
+  all equal the bind pose are dropped; curves (`curve` bezier arrays, single or
+  piecewise, and `tweenEasing`) become deduplicated 17-sample Q14 tables. `--scale`
+  resizes the images (premultiplied Lanczos) and every position; `.dbani` files add
+  animations of the same armature (same bone and slot names), their positions scaled
+  by `--anim-scale` (auto: the median ratio of the bone lengths). Transparency is
+  split into input (the images' alpha, or `--in-key`) and output: ARGB4444, or
+  RGB565 with pixels below `--alpha-threshold` in `--out-key` (opaque pixels that
+  quantize to the key get their blue LSB flipped) and `Armature::colorKeyEnabled`.
+  The images are shelf-packed into one atlas whose width (a power of two, 64..2048)
+  gives the smallest area, so the stride is a power of two (RP2 interpolator path);
+  `--atlas-width 0` emits one texture per image. Output: `atlasData` / `atlas`,
+  `attachments_<slot>`, `bones`, `slots`, `armature`, per animation
+  `anim_<name>_curves`, key arrays, timelines, draw orders and `anim_<name>`, then
+  `animations[]` and `ANIMATION_COUNT`. `--preview` renders poses of the first
+  animation from the converted data to PNG, `--dump-pose` writes the poses of every
+  animation as JSON. Unsupported features are listed in the header's comment.
+
 ## Sample programs
 
-Both samples are 480x320 and render into an RGB565_SWAPPED buffer. Each has a WASM entry
+The samples are 480x320 and render into an RGB565_SWAPPED buffer. Each has a WASM entry
 point (`<name>_init`, `<name>_frame`, `<name>_get_fb`, `<name>_get_width`,
 `<name>_get_height`) driven by `docs/example/viewer.js`, and a native `main()` that
 writes one frame as a PPM file. The WASM binaries are committed so that `docs/` can be
@@ -1305,6 +1436,14 @@ served as a static site.
   backdrop (gradient, stars, caption) drawn with `Graphics2D`, then the 3D scene
   rendered in four bands with the clear disabled. Mouse and keyboard control the
   camera in the browser.
+- `example/wasm/demorig/`: a DragonBones character (`model/rgb_chan.hpp`, generated
+  with `dbones2cpp --scale 0.5` from `assets/2d/rgb_chan/` by `make model`: 29 bones,
+  41 slots, a 128 x 492 ARGB4444 atlas, about 130 KB) posed by three `rig::Instance`s
+  at different times of the 24 fps animation (`frameAt()` every frame): as
+  converted, mirrored by a negative scale, and enlarged and swaying. The center one
+  is drawn in two ranges with a ball drawn between them, behind its hand
+  (`drawIndexOf`, `boneTransform`), and the bounding boxes (`bounds(placement)`)
+  are outlined.
 
 ## Tests
 
@@ -1346,7 +1485,20 @@ small glTF model with the headers generated from them in both vertex forms
 (`test/tools` regenerates them); the tests verify the generated textures against
 the source pixels, that the packed model renders like the float one, and the
 generated scene graph (names, hierarchy, transforms, generated normals, traversal,
-visitor skipping and animation, deep-tree cut-off). The tests are meant to be run with AddressSanitizer and
+visitor skipping and animation, deep-tree cut-off). For `rig`, `test/tools/make_test_rig.py`
+generates a small armature (four bones with rotation, skew and non-uniform scale;
+slots defined out of draw order, two attachments, alpha, an additive slot; an
+animation with a bezier curve, linear and held keys, offsets across the int16 wrap,
+attachment and alpha timelines and a draw order key; a `.dbani` at twice the size),
+converts it three ways (atlas, one texture per image, RGB565 with a key color),
+checks that its 5.5-format / atlas variant converts to the same header, and writes
+the tool's poses as the expected values. The tests check the poses against them
+(world transforms within 1e-3, attachments, alphas, draw order, bounds), clamping,
+`frameAt()`, the signature check, the visitor, the accessors, `draw()` against the
+same `drawImage()` calls made by hand on two target formats, the separate textures
+and the key color, drawing in ranges and in bands against drawing at once, the
+restored `Graphics2D` state, drawn pixels within `bounds(placement)`, and the atlas
+pixels against the source images. The tests are meant to be run with AddressSanitizer and
 UndefinedBehaviorSanitizer on the native build. The CMake options of the renderer
 are passed to the tests as well, so a configuration with a feature compiled out
 skips the tests that need it and the rest must still pass.

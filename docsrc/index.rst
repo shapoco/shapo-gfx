@@ -6,7 +6,7 @@ ShapoGFX は、小さなディスプレイを駆動するマイクロコント�
 スキャンライン方式の 3D レンダラと、ビットマップフォント付きの 2D 描画 API を提供します。
 
 - GitHub: `github.com/shapoco/shapo-gfx <https://github.com/shapoco/shapo-gfx>`__
-- ブラウザで動くデモ: `demo2d <../example/demo2d/>`__ / `demo3d <../example/demo3d/>`__
+- ブラウザで動くデモ: `demo2d <../example/demo2d/>`__ / `demo3d <../example/demo3d/>`__ / `demorig <../example/demorig/>`__
 - 英語の設計仕様書: `SPEC.md <https://github.com/shapoco/shapo-gfx/blob/main/SPEC.md>`__
 
 .. toctree::
@@ -24,6 +24,7 @@ ShapoGFX は、小さなディスプレイを駆動するマイクロコント�
    gfx2d/surface.rst
    gfx2d/graphics2d.rst
    gfx2d/fonts.rst
+   gfx2d/rig.rst
 
 .. toctree::
    :maxdepth: 2
@@ -41,6 +42,7 @@ ShapoGFX は、小さなディスプレイを駆動するマイクロコント�
 
    tools/img2cpp.rst
    tools/gltf2cpp.rst
+   tools/dbones2cpp.rst
 
 .. toctree::
    :maxdepth: 1

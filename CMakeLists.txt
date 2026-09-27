@@ -110,6 +110,7 @@ endforeach()
 if(SHAPOGFX_BUILD_EXAMPLES AND NOT EMSCRIPTEN)
     add_subdirectory(example/wasm/demo2d)
     add_subdirectory(example/wasm/demo3d)
+    add_subdirectory(example/wasm/demorig)
 endif()
 
 if(SHAPOGFX_BUILD_TESTS AND NOT EMSCRIPTEN)

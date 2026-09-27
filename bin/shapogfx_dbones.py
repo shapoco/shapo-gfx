@@ -1167,13 +1167,13 @@ def generate_header(c, namespace, guard, opts, sources):
                     f"{b['rotX']}, {b['rotY']}, {b['scaleX']}, {b['scaleY']}, "
                     f"{'0xFF' if b['parent'] == NO_PARENT else b['parent']}}},")
     body.append("};")
-    stats["bytes"] += 20 * len(c.bones)
+    stats["bytes"] += 24 * len(c.bones)
     body += ["", f"static const {RIG}::Slot slots[] = {{"]
     for s, an in zip(c.slots, att_names):
         body.append(f"  {{{c_string(s['name'])}, {an}, {len(s['attachments'])}, {s['default']}, {s['bone']}, "
                     f"{s['alpha']}, shapoco::gfx2d::BlendMode::{s['blend']}}},")
     body.append("};")
-    stats["bytes"] += 12 * len(c.slots)
+    stats["bytes"] += 16 * len(c.slots)
     if c.bounds is not None:
         bounds = c.bounds
     else:

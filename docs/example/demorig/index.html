@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShapoGFX demorig</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<h1>ShapoGFX demorig (2D skeletal animation for embedded systems, running in WebAssembly)</h1>
+<canvas id="screen"></canvas>
+<div id="fps"></div>
+<div class="help">
+  A DragonBones character converted by dbones2cpp and animated with rig::Instance: 24 fps keyframes
+  interpolated every frame, three placements (as converted, mirrored, enlarged and swaying), a ball drawn
+  between two slots of the draw order and the bounding boxes, drawn into an RGB565 frame buffer.
+</div>
+<div id="status">Loading...</div>
+<div class="help">
+  <a href="../demo2d/">demo2d</a> &nbsp;|&nbsp;
+  <a href="../demo3d/">demo3d</a> &nbsp;|&nbsp;
+  <a href="https://github.com/shapoco/shapo-gfx">github.com/shapoco/shapo-gfx</a>
+</div>
+<script src="../viewer.js"></script>
+<script>
+  startDemoViewer({ wasm: 'demorig.wasm', prefix: 'demorig' });
+</script>
+</body>
+</html>

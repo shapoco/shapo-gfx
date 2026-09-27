@@ -96,7 +96,7 @@ static void testRigPose() {
   // its bind pose (25 degrees) relative to its parent
   CHECK(inst.pose(test_rig::anim_move, 7.0f));
   const g2::affine2f &pa = inst.boneTransform(1), &pb = inst.boneTransform(3);
-  g2::affine2f ia;
+  g2::affine2f ia = g2::affine2f::identity();
   CHECK(pa.invert(ia));
   const g2::affine2f rel = ia * pb;
   const float angle = std::atan2(rel.b, rel.a) * 180.0f / 3.14159265f;
@@ -189,8 +189,9 @@ static void testRigVisitor() {
   CHECK(!nearlyEqual(wa.a, wb.a));
   CHECK(nearlyEqual(std::atan2(wa.b, wa.a) - std::atan2(wb.b, wb.a),
                     3.14159265f / 4.0f));
-  g2::affine2f ia, ib;
-  CHECK(wa.invert(ia) && wb.invert(ib));
+  g2::affine2f ia = g2::affine2f::identity(), ib = ia;
+  CHECK(wa.invert(ia));
+  CHECK(wb.invert(ib));
   const g2::affine2f ra = ia * a.boneTransform(boneB);
   const g2::affine2f rb = ib * b.boneTransform(boneB);
   const float va[6] = {ra.a, ra.b, ra.c, ra.d, ra.tx, ra.ty};

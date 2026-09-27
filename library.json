@@ -53,6 +53,7 @@
     "exclude": [
       ".github",
       ".gitignore",
+      "assets",
       "CLAUDE.md",
       "bin",
       "docs",

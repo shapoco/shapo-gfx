@@ -2,6 +2,7 @@
 build/
 example/wasm/*/demo2d
 example/wasm/*/demo3d
+example/wasm/*/demorig
 *.ppm
 
 # Editor / tool state

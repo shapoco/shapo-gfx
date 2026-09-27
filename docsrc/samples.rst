@@ -11,7 +11,11 @@
   glTF から生成した頂点カラーの風車 (``putScene`` と ``NodeVisitor``)。``Graphics2D`` で描いた背景の上に、
   背景クリアを無効にして 3D を重ねています。マウスドラッグ / 矢印キーで回転、ホイール / PageUp・PageDown でズームします。
 
-どちらも 480x320 の RGB565_SWAPPED バッファに描画し、``docs/example/viewer.js`` が RGB565_SWAPPED をキャンバスに展開しています。
+- `demorig <../example/demorig/>`__: DragonBones のキャラクタ (``dbones2cpp`` で変換) を ``rig::Instance`` で動かします。
+  24 fps のアニメーションを毎フレーム補間し、そのまま・左右反転・拡大して揺らした 3 体を描きます。中央の 1 体は
+  ``draw(g, 0, k)`` と ``draw(g, k, n)`` の間にボールを描いて手の奥に置き、各体の境界 (``bounds(placement)``) を枠で示します。
+
+いずれも 480x320 の RGB565_SWAPPED バッファに描画し、``docs/example/viewer.js`` が RGB565_SWAPPED をキャンバスに展開しています。
 
 ソース
 ================================================================================
@@ -21,6 +25,7 @@
 
    "``example/wasm/demo2d/``", "``scene.cpp`` (描画)、``main.cpp`` (WASM エクスポートとネイティブ ``main()``)、``Makefile``、``CMakeLists.txt``"
    "``example/wasm/demo3d/``", "同上。``model/`` に風車の生成スクリプト、``.glb``、生成ヘッダ"
+   "``example/wasm/demorig/``", "同上。``model/rgb_chan.hpp`` は ``make model`` で ``assets/2d/rgb_chan/`` から生成"
    "``docs/example/``", "``viewer.js`` (共通ビューア)、``style.css``、各デモの ``index.html`` と ``.wasm``"
 
 ネイティブ版は 1 フレームを PPM ファイルに書き出します (ブラウザなしで動作確認するため)。
@@ -39,6 +44,7 @@ WASM のビルド
 
    (cd example/wasm/demo2d && make)   # docs/example/demo2d/demo2d.wasm
    (cd example/wasm/demo3d && make)   # docs/example/demo3d/demo3d.wasm
+   (cd example/wasm/demorig && make)  # docs/example/demorig/demorig.wasm
    ./launch_web_server.sh             # docs/ を http://localhost:52880/ で配信
 
 ``fetch()`` を使うため ``file://`` では動きません。WASM バイナリはリポジトリにコミットされており、
