@@ -1,0 +1,36 @@
+{
+ "name": "test_rig",
+ "imagePath": "test_rig_tex.png",
+ "width": 28,
+ "height": 9,
+ "SubTexture": [
+  {
+   "name": "a",
+   "x": 0,
+   "y": 0,
+   "width": 8,
+   "height": 6
+  },
+  {
+   "name": "b",
+   "x": 9,
+   "y": 0,
+   "width": 5,
+   "height": 9
+  },
+  {
+   "name": "c",
+   "x": 15,
+   "y": 0,
+   "width": 7,
+   "height": 7
+  },
+  {
+   "name": "d",
+   "x": 23,
+   "y": 0,
+   "width": 4,
+   "height": 4
+  }
+ ]
+}

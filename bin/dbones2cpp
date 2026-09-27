@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["Pillow>=9.0", "numpy>=1.22"]
+# ///
+"""Convert a DragonBones armature to a C++ header for shapoco::gfx2d::rig.
+
+Reads a DragonBones 5.x *_ske.json (5.0 or 5.5 animation format) with its
+images (the <name>_texture/ folder or a <name>_tex.json / .png atlas) and any
+number of *.dbani files holding more animations of the same armature. The
+output is a set of `static const` objects that live in flash: the images packed
+into one texture atlas, the bones, slots and attachments (rig::Armature) and
+the keyframed animations (rig::Animation). Pose and draw them with
+rig::Instance (include "shapoco/gfx2d/rig.hpp").
+
+Not supported (warned and ignored): meshes and FFD, IK, nested armatures,
+events, the RGB tint of slots, extra turns (clockwise / tweenRotate), bones
+that do not inherit rotation or scale, more than one skin.
+
+Example:
+  dbones2cpp --scale 0.5 chara_ske.json walk.dbani chara.hpp
+  dbones2cpp --out-format rgb565_swapped --out-key '#FF00FF' chara_ske.json chara.hpp
+  dbones2cpp --preview 0,12,24.5 chara_ske.json chara.hpp   # chara_preview_<frame>.png
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shapogfx_dbones as db  # noqa: E402
+import shapogfx_imgconv as conv  # noqa: E402
+
+
+def frame_list(s):
+    return [float(v) for v in s.split(",") if v.strip()]
+
+
+def fmt_frame(f):
+    return f"{f:g}"
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("inputs", nargs="+", help="input _ske.json, then optional .dbani files, then the output .hpp")
+    ap.add_argument("--namespace", default=None,
+                    help="namespace of the generated objects (default: the input name without _ske)")
+    ap.add_argument("--armature", default=None, help="armature to convert (default: the first)")
+    ap.add_argument("--skin", default=None, help="skin to convert (default: the first)")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="scale of the images and of every position (default: 1)")
+    ap.add_argument("--anim-scale", default="auto",
+                    help="scale of the positions of the .dbani animations; auto (default) takes the "
+                         "median ratio of the bone lengths")
+    ap.add_argument("--in-key", type=conv.parse_key_color, default=None,
+                    help="make pixels of this color transparent in the input images (default: use their alpha)")
+    ap.add_argument("--out-format", choices=("argb4444", "rgb565_swapped", "rgb565"), default="argb4444",
+                    help="pixel format of the atlas; the rgb565 ones draw transparent pixels in --out-key")
+    ap.add_argument("--out-key", type=conv.parse_key_color, default=(255, 0, 255),
+                    help="key color of the rgb565 formats (default: #FF00FF)")
+    ap.add_argument("--alpha-threshold", type=int, default=128,
+                    help="alpha from which a pixel is opaque in the rgb565 formats (default: 128)")
+    ap.add_argument("--dither", choices=conv.DITHERS, default="none", help="dithering (default: none)")
+    ap.add_argument("--atlas-width", default="auto",
+                    help="atlas width (power of two, 64..2048); auto (default) takes the smallest area; "
+                         "0 makes one texture per image")
+    ap.add_argument("--texture-dir", default=None,
+                    help="folder of the images (default: <name>_texture next to the _ske.json)")
+    ap.add_argument("--preview", type=frame_list, default=None, metavar="FRAMES",
+                    help="also write <output stem>_preview_<frame>.png of the first animation, e.g. 0,12,24.5")
+    ap.add_argument("--dump-pose", type=frame_list, default=None, metavar="FRAMES",
+                    help="also write the poses of every animation to <output stem>_pose.json")
+    args = ap.parse_args()
+    if len(args.inputs) < 2:
+        ap.error("an input _ske.json and an output .hpp are required")
+    ske, extras, output = args.inputs[0], args.inputs[1:-1], args.inputs[-1]
+    if args.atlas_width not in ("auto", "0"):
+        w = int(args.atlas_width)
+        if w not in db.ATLAS_WIDTHS:
+            ap.error("--atlas-width must be auto, 0 or a power of two in 64..2048")
+    if not 0 <= args.alpha_threshold <= 255:
+        ap.error("--alpha-threshold must be 0..255")
+    if args.anim_scale != "auto":
+        try:
+            float(args.anim_scale)
+        except ValueError:
+            ap.error("--anim-scale must be auto or a number")
+
+    try:
+        arm = db.load(ske, args.armature, args.skin, args.texture_dir, args.in_key)
+        for path in extras:
+            db.load_extra_animations(arm, path, args.anim_scale)
+        c = db.compile_armature(arm, args.scale)
+        namespace = args.namespace or conv.sanitize_identifier(db._stem(ske))
+        guard = conv.sanitize_identifier(namespace).upper() + "_" + conv.identifiers_from_path(output)[0] + "_HPP"
+        opts = {"out_format": args.out_format, "out_key": args.out_key, "dither": args.dither,
+                "threshold": args.alpha_threshold,
+                "atlas_width": 0 if args.atlas_width == "0" else args.atlas_width}
+        sources = [os.path.basename(p) for p in [ske] + extras]
+        code, stats = db.generate_header(c, namespace, guard, opts, sources)
+    except db.ConvertError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    os.makedirs(os.path.dirname(os.path.abspath(output)) or ".", exist_ok=True)
+    with open(output, "w", encoding="utf-8") as f:
+        f.write(code)
+    stem = os.path.splitext(output)[0]
+    if args.preview:
+        anim = c.animations[0] if c.animations else None
+        for fr in args.preview:
+            path = f"{stem}_preview_{fmt_frame(fr)}.png"
+            db.render_preview(c, anim, fr).save(path)
+            print(f"wrote {path}")
+    if args.dump_pose:
+        path = f"{stem}_pose.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(db.dump_pose(c, args.dump_pose), f, indent=1)
+        print(f"wrote {path}")
+    print(f"Generated {output}: {len(c.bones)} bones, {len(c.slots)} slots, "
+          f"{len(c.animations)} animation(s), ~{stats['bytes']} bytes")
+
+
+if __name__ == "__main__":
+    main()

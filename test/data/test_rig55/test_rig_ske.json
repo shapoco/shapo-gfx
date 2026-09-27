@@ -1,0 +1,285 @@
+{
+ "frameRate": 24,
+ "name": "test_rig",
+ "version": "5.0",
+ "armature": [
+  {
+   "type": "Armature",
+   "name": "Armature",
+   "frameRate": 24,
+   "bone": [
+    {
+     "name": "root",
+     "transform": {
+      "x": 20,
+      "y": 16
+     }
+    },
+    {
+     "name": "a",
+     "parent": "root",
+     "length": 12,
+     "transform": {
+      "x": 6,
+      "y": -2,
+      "skX": 30,
+      "skY": 30
+     }
+    },
+    {
+     "name": "b",
+     "parent": "a",
+     "length": 8,
+     "transform": {
+      "x": 12,
+      "skX": 40,
+      "skY": 25
+     }
+    },
+    {
+     "name": "c",
+     "parent": "root",
+     "length": 6,
+     "transform": {
+      "x": -6,
+      "y": 8,
+      "scX": 1.5,
+      "scY": 0.75
+     }
+    }
+   ],
+   "slot": [
+    {
+     "name": "sa",
+     "parent": "a",
+     "z": 2
+    },
+    {
+     "name": "sb",
+     "parent": "b",
+     "z": 0
+    },
+    {
+     "name": "sc",
+     "parent": "c",
+     "z": 3,
+     "color": {
+      "aM": 50
+     }
+    },
+    {
+     "name": "sroot",
+     "parent": "root",
+     "z": 1,
+     "blendMode": "add"
+    }
+   ],
+   "animation": [
+    {
+     "name": "move",
+     "duration": 12,
+     "playTimes": 0,
+     "bone": [
+      {
+       "name": "a",
+       "translateFrame": [
+        {
+         "duration": 4,
+         "curve": [
+          0.5,
+          0,
+          0.5,
+          1
+         ]
+        },
+        {
+         "duration": 4,
+         "tweenEasing": 0,
+         "x": 3,
+         "y": -2
+        },
+        {
+         "duration": 4,
+         "x": 1,
+         "y": 1
+        },
+        {
+         "duration": 0
+        }
+       ],
+       "rotateFrame": [
+        {
+         "duration": 4,
+         "curve": [
+          0.5,
+          0,
+          0.5,
+          1
+         ]
+        },
+        {
+         "duration": 4,
+         "tweenEasing": 0,
+         "rotate": 30
+        },
+        {
+         "duration": 4,
+         "rotate": -20
+        },
+        {
+         "duration": 0
+        }
+       ]
+      },
+      {
+       "name": "b",
+       "rotateFrame": [
+        {
+         "duration": 6,
+         "tweenEasing": 0
+        },
+        {
+         "duration": 6,
+         "tweenEasing": 0,
+         "rotate": -350
+        },
+        {
+         "duration": 0
+        }
+       ]
+      },
+      {
+       "name": "c",
+       "scaleFrame": [
+        {
+         "duration": 6,
+         "tweenEasing": 0
+        },
+        {
+         "duration": 6,
+         "tweenEasing": 0,
+         "x": 1.5,
+         "y": 0.5
+        },
+        {
+         "duration": 0
+        }
+       ]
+      }
+     ],
+     "slot": [
+      {
+       "name": "sb",
+       "displayFrame": [
+        {
+         "duration": 6,
+         "value": 0
+        },
+        {
+         "duration": 6,
+         "value": 1
+        },
+        {
+         "duration": 0,
+         "value": 1
+        }
+       ]
+      },
+      {
+       "name": "sa",
+       "colorFrame": [
+        {
+         "duration": 8,
+         "tweenEasing": 0,
+         "value": {}
+        },
+        {
+         "duration": 4,
+         "value": {
+          "aM": 30
+         }
+        }
+       ]
+      }
+     ],
+     "zOrder": {
+      "frame": [
+       {
+        "duration": 7
+       },
+       {
+        "duration": 5,
+        "zOrder": [
+         0,
+         1
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "skin": [
+    {
+     "name": "",
+     "slot": [
+      {
+       "name": "sa",
+       "display": [
+        {
+         "name": "a",
+         "path": "a",
+         "transform": {
+          "x": 4,
+          "skX": 10,
+          "skY": 10
+         }
+        }
+       ]
+      },
+      {
+       "name": "sb",
+       "display": [
+        {
+         "name": "b",
+         "path": "b",
+         "pivot": {
+          "x": 0,
+          "y": 0
+         }
+        },
+        {
+         "name": "d",
+         "path": "d",
+         "transform": {
+          "x": 2
+         }
+        }
+       ]
+      },
+      {
+       "name": "sc",
+       "display": [
+        {
+         "name": "c",
+         "path": "c"
+        }
+       ]
+      },
+      {
+       "name": "sroot",
+       "display": [
+        {
+         "name": "d",
+         "path": "d",
+         "transform": {
+          "y": -3
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
