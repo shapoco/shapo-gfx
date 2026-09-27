@@ -740,7 +740,13 @@ linked in when unused.
 What the pixel work costs is decided by the images: on x86-64 a transformed
 ARGB4444 pixel onto RGB565 retires about 25 instructions when it is transparent, 50
 when opaque and 70 when translucent, and the rectangle of a limb drawn diagonally
-is mostly transparent. The hulls dbones2cpp emits by default (`--hull 8`) take the
+is mostly transparent. On the microcontrollers, whether the images fit the cache
+in front of the flash weighs as much as the instruction count: every part is read
+once per frame, so when their bytes exceed the cache they come from the flash
+every frame (M5Stack Tab5, 256 KB L2: 30 fps with the 321 KB the atlas rows
+touched, 42 fps once the per-image textures brought that to 216 KB; the CoreS3's
+64 KB holds neither and did not move). `--scale`, `--fit-rotate` and
+`--atlas-width 0` all shrink that footprint. The hulls dbones2cpp emits by default (`--hull 8`) take the
 demorig frame of 320 x 240 from 4.11 to 3.88 million instructions (-5.5%), the
 640 x 360 one from 8.34 to 7.63 million (-8.6%) and the frame zoomed in twice by
 10%, with the same pixels on screen; `--fit-rotate` on top takes 13% off the atlas
@@ -1456,7 +1462,8 @@ module.
   key threshold merely hardens, while those away from any are meant to show
   through, so an image with more than `--auto-alpha` (5%) of the latter among its
   visible pixels stays ARGB4444 and the rest become RGB565_SWAPPED with the key
-  (rgb_chan: the ties and bracelets against 33 keyed parts). Keyed images are
+  (rgb_chan: the ties and bracelets against 33 keyed parts; demorig does not use
+  it, for the look of the edges). Keyed images are
   drawn by copies instead of blends -- a rotated pixel costs about 20 instructions
   whether transparent or opaque, against 25 / 50 / 70 for ARGB4444 -- which took
   the rgb_chan frame from 3.90 to 2.73 million instructions at 320 x 240 (-30%)
@@ -1526,13 +1533,15 @@ served as a static site.
   camera in the browser.
 - `example/wasm/demorig/`: a DragonBones character
   (`example/common/demorig/model/rgb_chan.hpp`, generated with
-  `dbones2cpp --scale 0.8 --fit-rotate --out-format auto` from `assets/2d/rgb_chan/`
-  by `make model`: 29 bones, 41 slots, the trimmed and turned parts with their
-  hulls in a 128 x 66 ARGB4444 atlas (the translucent ties and bracelets) and a
-  256 x 523 keyed RGB565 one (the other 33), about 291 KB; `model/rgb_chan_sep.hpp`
-  is the same with `--atlas-width 0`, one texture per image, 220 KB, which
-  `scene.cpp` includes when a build defines `DEMORIG_MODEL_HEADER` to it) posed by
-  a `rig::Instance`
+  `dbones2cpp --scale 0.4 --fit-rotate` from `assets/2d/rgb_chan/`, whose images
+  are drawn at twice the size they show at so that the turned parts are
+  resampled from something finer, by `make model`: 29 bones, 41 slots, the
+  trimmed and turned parts with their hulls in a 256 x 568 ARGB4444 atlas, about
+  297 KB; `model/rgb_chan_sep.hpp` is the same with `--atlas-width 0`, one texture
+  per image, 228 KB, which `scene.cpp` includes when a build defines
+  `DEMORIG_MODEL_HEADER` to it. `--out-format auto` was tried and not kept: it
+  made the CoreS3 draw at 27 fps instead of 24 and the Tab5 at 56 instead of 42,
+  but the hard edges showed) posed by a `rig::Instance`
   from its 24 fps animation (`frameAt()` every frame) and bobbing up and down in a
   ring of additive rectangles that turns around it. The ring's back half is drawn
   first, then the character up to its left arm (`draw(g, 0, k)` with

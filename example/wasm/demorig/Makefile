@@ -27,7 +27,7 @@ EXPORTS := $(EXPORTS),_demorig_set_screen,_demorig_pointer_down,_demorig_pointer
 # come from flash through a cache and are then stored without row padding
 # (a third fewer cache lines per frame)
 ASSETS := $(REPO_ROOT)/assets/2d/rgb_chan
-DBONES := $(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.8 --fit-rotate --out-format auto
+DBONES := $(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.4 --fit-rotate
 INPUTS := $(ASSETS)/rgb_chan_ske.json $(ASSETS)/Armature_animtion0.dbani
 
 .PHONY: all clean serve native model
