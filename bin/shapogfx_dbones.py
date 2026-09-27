@@ -678,9 +678,50 @@ ARGB4444_OPAQUE = 9
 def fit_options(rotate=False, min_gain=0.03, hull=8, alpha=ARGB4444_OPAQUE, resample=Image.BICUBIC):
     """rotate: turn images to their smallest bounding rectangle when that saves
     at least min_gain of the area; hull: at most this many vertices (0: none);
-    alpha: the smallest alpha that counts as opaque."""
+    alpha: the smallest alpha that counts as opaque (a keyed image uses the
+    key threshold instead, see format_options)."""
     return {"rotate": rotate, "min_gain": min_gain, "hull": min(hull, HULL_MAX), "alpha": alpha,
             "resample": resample}
+
+
+def format_options(out_format="argb4444", threshold=128, inner_max=0.05):
+    """out_format: argb4444, rgb565_swapped, rgb565, or auto (argb4444 for the
+    images whose translucent pixels are not just an antialiased edge,
+    rgb565_swapped with the key for the rest); threshold: alpha from which a
+    pixel of a keyed image is opaque; inner_max: with auto, the share of
+    translucent pixels away from any transparent one above which an image keeps
+    its alpha."""
+    return {"out_format": out_format, "threshold": threshold, "inner_max": inner_max}
+
+
+def opaque_threshold(fmt, threshold):
+    """The smallest alpha the format keeps."""
+    return ARGB4444_OPAQUE if fmt == "argb4444" else threshold
+
+
+def choose_format(img, fmts):
+    """The format of one image under format_options() `fmts`. With auto, the
+    translucent pixels (alpha 1..14 after 4-bit quantization) next to a
+    transparent one -- the antialiased edge, which a key threshold turns hard
+    -- do not count; those away from any are meant to be seen through, and
+    an image with more than inner_max of them among its visible pixels keeps
+    its alpha."""
+    if fmts["out_format"] != "auto":
+        return fmts["out_format"]
+    q = np.rint(np.asarray(img)[:, :, 3] / 17.0).astype(int)
+    transparent = q == 0
+    translucent = (q > 0) & (q < 15)
+    if not translucent.any():
+        return "rgb565_swapped"
+    pad = np.pad(transparent, 1, constant_values=True)
+    h, w = transparent.shape
+    near = np.zeros_like(transparent)
+    for dy in (0, 1, 2):
+        for dx in (0, 1, 2):
+            near |= pad[dy:dy + h, dx:dx + w]
+    inner = int((translucent & ~near).sum())
+    visible = int((~transparent).sum())
+    return "argb4444" if inner > fmts["inner_max"] * visible else "rgb565_swapped"
 
 
 def _opaque_points(img, threshold):
@@ -895,12 +936,13 @@ def fit_image(orig, scaled, opts):
 
 
 class CAttachment:
-    def __init__(self, image_key, image, local, w, h, hull=None):
+    def __init__(self, image_key, image, local, w, h, hull=None, fmt="argb4444"):
         self.image_key = image_key  # dedup key of the scaled image, or None (not drawn)
         self.image = image  # scaled (and fitted) RGBA image
         self.local = local
         self.w, self.h = w, h
         self.hull = hull  # convex polygon around the opaque pixels, or None
+        self.fmt = fmt  # pixel format of the image (argb4444, rgb565_swapped, rgb565)
         self.texture = None  # name of the Texture, after packing
         self.src = (0, 0, w, h)
 
@@ -922,13 +964,17 @@ def _scaled_image(img, scale):
     return img.convert("RGBa").resize((w, h), Image.LANCZOS).convert("RGBA")
 
 
-def compile_armature(arm, scale=1.0, fit=None):
-    """fit: fit_options(), or None to keep the images as they are."""
+def compile_armature(arm, scale=1.0, fit=None, fmts=None):
+    """fit: fit_options(), or None to keep the images as they are; fmts:
+    format_options() (default: argb4444)."""
     c = Compiled()
     c.name = arm.name
     c.frame_rate = arm.frame_rate
     c.scale = scale
-    c.fit = {"images": 0, "turned": 0, "hulls": 0, "texels_before": 0, "texels_after": 0, "hull_area": 0.0}
+    c.fit = {"images": 0, "turned": 0, "hulls": 0, "texels_before": 0, "texels_after": 0, "hull_area": 0.0,
+             "keyed": 0}
+    fmts = fmts or format_options()
+    c.threshold = fmts["threshold"]
     c.bones = []
     for b in arm.bones:
         parent = NO_PARENT if b.parent is None else arm._bone_index[b.parent]
@@ -949,15 +995,21 @@ def compile_armature(arm, scale=1.0, fit=None):
             key = (d.path, id(d.image))
             if key not in scaled:
                 simg = _scaled_image(d.image, scale)
-                fitted, fm, hull, turned = fit_image(d.image, simg, fit) if fit else (simg, None, None, False)
-                scaled[key] = (simg, fitted, fm, hull)
+                fmt = choose_format(simg, fmts)
+                if fit:
+                    fitted, fm, hull, turned = fit_image(
+                        d.image, simg, dict(fit, alpha=opaque_threshold(fmt, fmts["threshold"])))
+                else:
+                    fitted, fm, hull, turned = simg, None, None, False
+                scaled[key] = (simg, fitted, fm, hull, fmt)
                 c.fit["images"] += 1
+                c.fit["keyed"] += fmt != "argb4444"
                 c.fit["turned"] += turned
                 c.fit["hulls"] += hull is not None
                 c.fit["texels_before"] += simg.width * simg.height
                 c.fit["texels_after"] += fitted.width * fitted.height
                 c.fit["hull_area"] += abs(_area2(hull)) / 2 if hull else fitted.width * fitted.height
-            simg, fitted, fm, hull = scaled[key]
+            simg, fitted, fm, hull, fmt = scaled[key]
             ow, oh = d.image.size
             if d.frame is not None:
                 fx, fy, fw, fh = d.frame
@@ -973,7 +1025,7 @@ def compile_armature(arm, scale=1.0, fit=None):
             # The fitted image's coordinates to the scaled image's
             if fm is not None:
                 m = mat_mul(m, fm)
-            atts.append(CAttachment(key, fitted, m, fitted.width, fitted.height, hull))
+            atts.append(CAttachment(key, fitted, m, fitted.width, fitted.height, hull, fmt))
         c.slots.append({
             "name": s.name, "attachments": atts, "default": s.display_index, "bone": s.bone,
             "alpha": s.alpha, "blend": "ADD" if s.blend == "add" else "ALPHA",
@@ -1209,6 +1261,10 @@ def render_preview(c, anim, frame, margin=8, background=(40, 40, 48, 255)):
         m = mat_mul(view, mat_mul(pose["world"][s["bone"]], a.local))
         ia, ib, ic, id_, itx, ity = mat_inv(m)
         src = a.image
+        if a.fmt != "argb4444":
+            # What the key threshold leaves: opaque or nothing
+            r, g, b, al = src.split()
+            src = Image.merge("RGBA", (r, g, b, al.point(lambda v: 255 if v >= c.threshold else 0)))
         if a.hull:
             # What the runtime clips to
             mask = Image.new("L", src.size, 0)
@@ -1364,20 +1420,23 @@ RIG = "shapoco::gfx2d::rig"
 def generate_header(c, namespace, guard, opts, sources):
     """C++ header text. opts: dict(out_format, out_key, dither, threshold,
     atlas_width). Returns (text, stats)."""
-    fmt = opts["out_format"]
-    keyed = fmt != "argb4444"
     names = Names()
     lines = []
     w = lines.append
     stats = {"bytes": 0, "escaped": 0}
 
-    # Images: one per distinct scaled image
+    # Images: one per distinct scaled image, with its format (one per image
+    # with --out-format auto)
     images = {}
+    formats = {}
     for s in c.slots:
         for a in s["attachments"]:
             if a.image_key is not None and a.image_key not in images:
                 images[a.image_key] = a.image
+                formats[a.image_key] = a.fmt
     keys = list(images)
+    fmt_list = [f for f in ("argb4444", "rgb565_swapped", "rgb565") if f in formats.values()]
+    keyed = any(f != "argb4444" for f in fmt_list)
     tex_lines = []
     atlas_desc = ""
     if opts["atlas_width"] in (0, "0"):
@@ -1385,29 +1444,37 @@ def generate_header(c, namespace, guard, opts, sources):
         for k in keys:
             img = images[k]
             base = names.get("tex_" + os.path.basename(k[0]))
-            data, stride, esc = convert_pixels(img, fmt, opts["dither"], opts["out_key"], opts["threshold"])
+            data, stride, esc = convert_pixels(img, formats[k], opts["dither"], opts["out_key"], opts["threshold"])
             stats["escaped"] += esc
             tex_lines += [""] + conv.format_array(base + "Data", data, "uint16_t")
-            tex_lines += conv.format_texture(base, fmt, img.width, img.height, stride, base + "Data")
+            tex_lines += conv.format_texture(base, formats[k], img.width, img.height, stride, base + "Data")
             stats["bytes"] += stride * img.height
             tex_names[k] = (base, (0, 0))
         atlas_desc = f"{len(keys)} textures"
     else:
-        sizes = [images[k].size for k in keys]
-        aw, pos, ah = choose_atlas(sizes, opts["atlas_width"])
-        ah = max(ah, 1)
-        atlas = Image.new("RGBA", (aw, ah), (0, 0, 0, 0))
-        for k, p in zip(keys, pos):
-            atlas.paste(images[k], p)
-        data, stride, esc = convert_pixels(atlas, fmt, opts["dither"], opts["out_key"], opts["threshold"])
-        stats["escaped"] += esc
-        names.used.update(("atlas", "atlasData"))
-        tex_lines += [""] + conv.format_array("atlasData", data, "uint16_t")
-        tex_lines += conv.format_texture("atlas", fmt, aw, ah, stride, "atlasData")
-        stats["bytes"] += stride * ah
-        tex_names = {k: ("atlas", p) for k, p in zip(keys, pos)}
-        used = sum(sz[0] * sz[1] for sz in sizes)
-        atlas_desc = f"atlas {aw}x{ah} ({used} of {aw * ah} pixels used)"
+        # One atlas per format: `atlas`, or `atlas` (ARGB4444) and
+        # `atlasKeyed` when the formats are mixed
+        tex_names = {}
+        descs = []
+        for fmt in fmt_list:
+            fkeys = [k for k in keys if formats[k] == fmt]
+            sizes = [images[k].size for k in fkeys]
+            aw, pos, ah = choose_atlas(sizes, opts["atlas_width"])
+            ah = max(ah, 1)
+            atlas = Image.new("RGBA", (aw, ah), (0, 0, 0, 0))
+            for k, p in zip(fkeys, pos):
+                atlas.paste(images[k], p)
+            data, stride, esc = convert_pixels(atlas, fmt, opts["dither"], opts["out_key"], opts["threshold"])
+            stats["escaped"] += esc
+            name = "atlas" if len(fmt_list) == 1 or fmt == "argb4444" else "atlasKeyed"
+            names.used.update((name, name + "Data"))
+            tex_lines += [""] + conv.format_array(name + "Data", data, "uint16_t")
+            tex_lines += conv.format_texture(name, fmt, aw, ah, stride, name + "Data")
+            stats["bytes"] += stride * ah
+            tex_names.update({k: (name, p) for k, p in zip(fkeys, pos)})
+            used = sum(sz[0] * sz[1] for sz in sizes)
+            descs.append(f"{name} {aw}x{ah} ({used} of {aw * ah} pixels used)")
+        atlas_desc = ", ".join(descs)
     for s in c.slots:
         for a in s["attachments"]:
             if a.image_key is not None:
@@ -1549,7 +1616,10 @@ def generate_header(c, namespace, guard, opts, sources):
             f"// Generated by dbones2cpp from {', '.join(sources)}",
             f"// armature {c_string(c.name)}: {len(c.bones)} bones, {len(c.slots)} slots, "
             f"{sum(len(s['attachments']) for s in c.slots)} attachments, {len(c.animations)} animation(s)",
-            f"// scale {c.scale:g}, {fmt}" + (f" (key #{key[0]:02X}{key[1]:02X}{key[2]:02X})" if keyed else "")
+            f"// scale {c.scale:g}, " + ", ".join(
+                f"{f}" + (f" (key #{key[0]:02X}{key[1]:02X}{key[2]:02X})" if f != "argb4444" else "")
+                + (f" for {sum(1 for v in formats.values() if v == f)} images" if len(fmt_list) > 1 else "")
+                for f in fmt_list)
             + f", {atlas_desc}, about {stats['bytes']} bytes",
             ]
     if c.fit["images"]:

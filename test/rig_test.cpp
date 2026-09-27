@@ -11,6 +11,7 @@
 #include "data/test_rig_expected.hpp"
 #include "data/test_rig_fit.hpp"
 #include "data/test_rig_keyed.hpp"
+#include "data/test_rig_mixed.hpp"
 #include "data/test_rig_sep.hpp"
 #include "shapoco/gfx2d/rig.hpp"
 #include "shapoco/gfx2d/surface_alloc.hpp"
@@ -60,12 +61,12 @@ static void testRigInit() {
   const rig::Armature &arm = test_rig::armature;
   CHECK_EQ(arm.boneCount, ex::BONES);
   CHECK_EQ(arm.slotCount, ex::SLOTS);
-  // 4 world transforms, 5 slot states, 5 order bytes rounded up to a
+  // 4 world transforms, 6 slot states, 6 order bytes rounded up to a
   // multiple of 4; 3 bytes of slack
-  CHECK_EQ(rig::Instance::bytes(arm), 3u + 4 * 24 + 5 * 12 + 8);
+  CHECK_EQ(rig::Instance::bytes(arm), 3u + 4 * 24 + 6 * 12 + 8);
   rig::Instance inst;
   CHECK(!inst.isInitialized());
-  CHECK(!inst.init(arm, rigMemory, 4 * 24 + 5 * 12 + 5 - 1));
+  CHECK(!inst.init(arm, rigMemory, 4 * 24 + 6 * 12 + 6 - 1));
   CHECK(!inst.isInitialized());
   CHECK(!inst.init(arm, nullptr, sizeof(rigMemory)));
   // Unaligned memory of bytes(): the slack covers the alignment
@@ -266,7 +267,8 @@ static void clearTarget(g2::Graphics2D &g) {
 }
 
 // What draw() is documented to do, spelled out with the public accessors
-// (without the hulls: the whole rectangles)
+// (without the hulls: the whole rectangles). A keyed armature's key goes on
+// for its keyed textures only.
 static void drawByHand(g2::Graphics2D &g, const rig::Instance &inst,
                        bool hulls = true) {
   const rig::Armature &arm = *inst.armature();
@@ -277,6 +279,13 @@ static void drawByHand(g2::Graphics2D &g, const rig::Instance &inst,
     if (att < 0 || alpha == 0) continue;
     const rig::Slot &sl = arm.slots[s];
     const rig::Attachment &at = sl.attachments[att];
+    if (arm.colorKeyEnabled) {
+      if (at.texture->format != g2::PixelFormat::ARGB4444) {
+        g.setColorKey(arm.colorKey);
+      } else {
+        g.clearColorKey();
+      }
+    }
     g.setBlend(sl.blend, alpha == 255 ? 255 : (255 * alpha + 127) / 255);
     g.setTransform(base * inst.boneTransform(sl.bone) * at.local);
     if (hulls) {
@@ -287,6 +296,7 @@ static void drawByHand(g2::Graphics2D &g, const rig::Instance &inst,
   }
   g.setTransform(base);
   g.setBlend(g2::BlendMode::ALPHA, 255);
+  if (arm.colorKeyEnabled) g.clearColorKey();
 }
 
 static bool samePixels(const g2::OwnedSurface &a, const g2::OwnedSurface &b) {
@@ -386,14 +396,76 @@ static void testRigHulls() {
         const g2::affine2f p = g2::affine2f::placement(36, 28, 0.3f, sc, sc, 24, 20);
         ga.setTransform(p);
         gb.setTransform(p);
-        if (arm->colorKeyEnabled) gb.setColorKey(arm->colorKey);
         inst.draw(ga);
         drawByHand(gb, inst, false);
-        gb.clearColorKey();
         CHECK(samePixels(a, b));
       }
     }
   }
+}
+
+// --out-format auto: f, translucent inside, keeps its alpha (ARGB4444) while
+// the others get the key color; each part draws what it draws in the
+// armature converted to that format alone, and draw() switches the key
+// between them
+static void testRigMixed() {
+  const rig::Armature &mixed = test_rig_mixed::armature;
+  CHECK(mixed.colorKeyEnabled);
+  CHECK_EQ(mixed.colorKey & 0xFFFFFFu, test_rig_keyed::armature.colorKey & 0xFFFFFFu);
+  rig::Instance m, k, a;
+  alignas(4) static uint8_t memM[256], memK[256], memA[256];
+  CHECK(m.init(mixed, memM, sizeof(memM)));
+  CHECK(k.init(test_rig_keyed::armature, memK, sizeof(memK)));
+  CHECK(a.init(test_rig::armature, memA, sizeof(memA)));
+  const int sf = m.slotIndex("sf");
+  CHECK(sf >= 0);
+  for (int s = 0; s < mixed.slotCount; s++) {
+    const rig::Slot &sl = mixed.slots[s];
+    for (int i = 0; i < sl.attachmentCount; i++) {
+      CHECK_EQ((int)sl.attachments[i].texture->format,
+               (int)(s == sf ? g2::PixelFormat::ARGB4444 : g2::PixelFormat::RGB565_SWAPPED));
+    }
+  }
+  g2::OwnedSurface sm = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+  g2::OwnedSurface so = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+  g2::Graphics2D gm(sm), go(so);
+  for (float f : {0.0f, 5.0f, 9.25f}) {
+    m.pose(test_rig_mixed::anim_move, f);
+    k.pose(test_rig_keyed::anim_move, f);
+    a.pose(test_rig::anim_move, f);
+    // Everything but f against the keyed conversion, f alone against the
+    // ARGB4444 one
+    for (int pass = 0; pass < 2; pass++) {
+      rig::Instance &other = pass == 0 ? k : a;
+      for (int s = 0; s < mixed.slotCount; s++) {
+        if ((s == sf) == (pass == 0)) {
+          m.setAttachment(s, -1);
+          other.setAttachment(s, -1);
+        }
+      }
+      clearTarget(gm);
+      clearTarget(go);
+      gm.setTransform(placement());
+      go.setTransform(placement());
+      m.draw(gm);
+      other.draw(go);
+      CHECK(samePixels(sm, so));
+      m.pose(test_rig_mixed::anim_move, f);
+      other.pose(pass == 0 ? test_rig_keyed::anim_move : test_rig::anim_move, f);
+    }
+    // The whole thing is drawByHand's picture too, with the key toggled
+    clearTarget(gm);
+    clearTarget(go);
+    gm.setTransform(placement());
+    go.setTransform(placement());
+    m.draw(gm);
+    drawByHand(go, m);
+    CHECK(samePixels(sm, so));
+  }
+  // A key the caller had set is back afterwards
+  gm.setColorKey(g2::Colors::RED);
+  m.draw(gm);
+  CHECK(gm.hasColorKey() && gm.colorKey() == g2::Colors::RED);
 }
 
 // --fit-rotate: the diagonal bar e is turned upright (a quarter of the
@@ -647,6 +719,7 @@ void testRig() {
 #if RIG_DRAW_TESTS
   testRigDraw();
   testRigHulls();
+  testRigMixed();
   testRigFit();
   testRigSeparateTextures();
   testRigColorKey();

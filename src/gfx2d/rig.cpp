@@ -312,7 +312,9 @@ void Instance::draw(Graphics2D &g, int first, int end) const {
   const BlendMode blend = g.blendMode();
   const bool hadKey = g.hasColorKey();
   const Color oldKey = g.colorKey();
-  if (arm.colorKeyEnabled) g.setColorKey(arm.colorKey);
+  // A keyed armature sets its key for its keyed textures only: an ARGB4444
+  // texture has alpha, and comparing its pixels with a key would cost
+  bool keyOn = hadKey;
   // The clip rectangle a pixel wider (the image paths round positions)
   const Rect clip = g.clipRect();
   const float cx0 = (float)(clip.x - 1), cy0 = (float)(clip.y - 1);
@@ -344,6 +346,17 @@ void Instance::draw(Graphics2D &g, int first, int end) const {
       g.setBlend(bm, op);
       curOpacity = op;
       curBlend = bm;
+    }
+    if (arm.colorKeyEnabled) {
+      const bool wantKey = at.texture->format != PixelFormat::ARGB4444;
+      if (wantKey != keyOn) {
+        if (wantKey) {
+          g.setColorKey(arm.colorKey);
+        } else {
+          g.clearColorKey();
+        }
+        keyOn = wantKey;
+      }
     }
     g.setTransform(base * world_[sl.bone] * at.local);
     g.drawImage(*at.texture, 0, 0, at.src, at.hull, at.hullCount);

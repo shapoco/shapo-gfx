@@ -247,11 +247,13 @@ static void testDeepTree() {
   CHECK_EQ(st.badIndices, 0);
 }
 
-// Same formula as test/tools/make_test_rig.py (image 4 is a diagonal bar)
+// Same formula as test/tools/make_test_rig.py (image 4 is a diagonal bar,
+// image 5 translucent inside an opaque border)
 static g2::Color rigImagePixel(int index, int x, int y, int w, int h) {
   const bool cornerX = x == 0 || x == w - 1, cornerY = y == 0 || y == h - 1;
   int a = (cornerX && cornerY) ? 0 : ((cornerX || cornerY) ? 136 : 255);
   if (index == 4) a = (x >= 1 && x <= 13 && std::abs(x - y) <= 1) ? 255 : 0;
+  if (index == 5) a = (cornerX || cornerY) ? 255 : 128;
   return g2::makeColor((40 + 60 * index + 13 * x) % 256,
                        (200 + 70 * index + 17 * y) % 256,
                        (90 * index + 7 * x * y) % 256, a);
@@ -311,7 +313,8 @@ static void checkRigAtlas(const shapoco::gfx2d::rig::Armature &arm,
                 {"sa", 0, 0, 8, 6},
                 {"sc", 0, 2, 7, 7},
                 // e's transparent columns 0, 14 and 15 are trimmed off
-                {"se", 0, 4, 13, 14}};
+                {"se", 0, 4, 13, 14},
+                {"sf", 0, 5, 8, 8}};
   g2::Graphics2D g;
   for (const auto &e : expect) {
     const shapoco::gfx2d::rig::Slot *slot = nullptr;
@@ -323,12 +326,17 @@ static void checkRigAtlas(const shapoco::gfx2d::rig::Armature &arm,
     const shapoco::gfx2d::rig::Attachment &at = slot->attachments[e.attachment];
     CHECK_EQ(at.src.width, e.w);
     CHECK_EQ(at.src.height, e.h);
-    // The images' opaque pixels after the trim (e lost its first column)
+    // The images' opaque pixels after the trim (e lost its first column); f
+    // is a full rectangle, which gets no hull
     const int ox = e.image == 4 ? 1 : 0;
-    checkHull(at, [&](int x, int y) {
-      return g2::colorA(rigImagePixel(e.image, x + ox, y, e.w + ox, e.h)) >=
-             (keyed ? 128 : 9);
-    });
+    if (e.image == 5) {
+      CHECK_EQ(at.hullCount, 0);
+    } else {
+      checkHull(at, [&](int x, int y) {
+        return g2::colorA(rigImagePixel(e.image, x + ox, y, e.w + ox, e.h)) >=
+               (keyed ? 128 : 9);
+      });
+    }
     const g2::Texture &t = *at.texture;
     g2::Surface s = {t.format, t.width, t.height, t.stride,
                      const_cast<void *>(t.pixels)};

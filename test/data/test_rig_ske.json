@@ -77,6 +77,11 @@
      "name": "se",
      "parent": "c",
      "z": 4
+    },
+    {
+     "name": "sf",
+     "parent": "root",
+     "z": 5
     }
    ],
    "animation": [
@@ -305,6 +310,19 @@
           "y": 4,
           "skX": -20,
           "skY": -20
+         }
+        }
+       ]
+      },
+      {
+       "name": "sf",
+       "display": [
+        {
+         "name": "f",
+         "path": "f",
+         "transform": {
+          "x": -10,
+          "y": -6
          }
         }
        ]

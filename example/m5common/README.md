@@ -47,6 +47,7 @@ Sending a whole frame takes about 31 ms on the CoreS3 (SPI at 40 MHz), which cap
 it at about 32 fps. Measured at zoom 1 (2026-09-27): CoreS3 24 fps, Tab5 42 fps
 with the per-image textures (Tab5 was 30 fps with the atlas, whose footprint does
 not fit its 256 KB L2 cache while the dense textures do; the CoreS3's 64 KB cache
-holds neither, so it did not change). `dbones2cpp --out-format rgb565_swapped`
-(a key color instead of alpha: copies instead of blends, no soft edges) would take
-another third off the drawing time; see docsrc/tools/dbones2cpp.rst.
+holds neither, so it did not change), before `--out-format auto` took another 30%
+off the drawing instructions (the parts that are translucent only along their
+edges are copied with a key color instead of blended); see
+docsrc/tools/dbones2cpp.rst.

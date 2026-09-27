@@ -1,7 +1,7 @@
 {
  "name": "test_rig",
  "imagePath": "test_rig_tex.png",
- "width": 45,
+ "width": 54,
  "height": 14,
  "SubTexture": [
   {
@@ -38,6 +38,13 @@
    "y": 0,
    "width": 16,
    "height": 14
+  },
+  {
+   "name": "f",
+   "x": 45,
+   "y": 0,
+   "width": 8,
+   "height": 8
   }
  ]
 }

@@ -713,7 +713,9 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   cuts only pixels that would not have shown, so the picture is that of the whole
   rectangles). The slot's alpha scales
   `g`'s opacity, ADD slots draw additively unless `g`'s blend mode is NONE, and a
-  keyed armature sets its key color for its images. Slots whose bounding box, mapped
+  keyed armature sets its key color for its keyed textures and clears it for its
+  ARGB4444 ones (a conversion with `--out-format auto` mixes them; comparing pixels
+  that have alpha with a key would only cost). Slots whose bounding box, mapped
   by the placement, lies outside `g`'s clip rectangle (a pixel wider) are skipped,
   so drawing in bands costs little. The transform, opacity, blend mode and color key
   of `g` are restored (no state stack is used). Without `SHAPOGFX2D_TRANSFORM`
@@ -1434,7 +1436,7 @@ module.
   normals are generated for them). Oversized index ranges and out-of-range indices are
   reported and skipped, so the generated data always satisfies the renderer's invariants.
 
-- **dbones2cpp** `[--namespace NS] [--armature A] [--skin S] [--scale S] [--anim-scale auto|S] [--in-key COLOR] [--out-format argb4444|rgb565_swapped|rgb565] [--out-key COLOR] [--alpha-threshold N] [--dither D] [--atlas-width auto|N|0] [--texture-dir DIR] [--fit-rotate] [--fit-min-gain PERCENT] [--hull N] [--preview FRAMES] [--dump-pose FRAMES] input_ske.json [extra.dbani ...] output.hpp`
+- **dbones2cpp** `[--namespace NS] [--armature A] [--skin S] [--scale S] [--anim-scale auto|S] [--in-key COLOR] [--out-format argb4444|rgb565_swapped|rgb565|auto] [--auto-alpha PERCENT] [--out-key COLOR] [--alpha-threshold N] [--dither D] [--atlas-width auto|N|0] [--texture-dir DIR] [--fit-rotate] [--fit-min-gain PERCENT] [--hull N] [--preview FRAMES] [--dump-pose FRAMES] input_ske.json [extra.dbani ...] output.hpp`
   converts a DragonBones 5.x armature for `rig` (`shapogfx_dbones.py` is its core,
   shared with the tests). It reads the 5.0 (one `frame` timeline per bone with every
   channel) and 5.5 (`translateFrame` / `rotateFrame` / `scaleFrame`, `displayFrame`,
@@ -1448,7 +1450,21 @@ module.
   by `--anim-scale` (auto: the median ratio of the bone lengths). Transparency is
   split into input (the images' alpha, or `--in-key`) and output: ARGB4444, or
   RGB565 with pixels below `--alpha-threshold` in `--out-key` (opaque pixels that
-  quantize to the key get their blue LSB flipped) and `Armature::colorKeyEnabled`.
+  quantize to the key get their blue LSB flipped) and `Armature::colorKeyEnabled`,
+  or `auto`, which decides per image: the translucent pixels (alpha 1..14 after
+  4-bit quantization) next to a transparent one are an antialiased edge, which a
+  key threshold merely hardens, while those away from any are meant to show
+  through, so an image with more than `--auto-alpha` (5%) of the latter among its
+  visible pixels stays ARGB4444 and the rest become RGB565_SWAPPED with the key
+  (rgb_chan: the ties and bracelets against 33 keyed parts). Keyed images are
+  drawn by copies instead of blends -- a rotated pixel costs about 20 instructions
+  whether transparent or opaque, against 25 / 50 / 70 for ARGB4444 -- which took
+  the rgb_chan frame from 3.90 to 2.73 million instructions at 320 x 240 (-30%)
+  and from 7.60 to 4.96 million at 640 x 360, at the price of hard edges on those
+  parts. Mixed formats go into two atlases (`atlas` ARGB4444, `atlasKeyed`) or
+  into per-image textures of their own format; `Instance::draw()` sets the key
+  for the keyed textures only, and `--preview` draws keyed images with their
+  edges hardened as the device will.
   Each image is fitted before packing: its transparent margin (pixels below the
   opaque threshold: alpha 9, the least that ARGB4444 keeps, or `--alpha-threshold`
   for the keyed formats) is trimmed, the attachment's `local` taking up the offset;
@@ -1472,9 +1488,10 @@ module.
   changed nothing on the CoreS3 (64 KB: neither fits); the atlas keeps the RP2
   interpolator path. The measured costs of the options on the rgb_chan frame
   (320 x 240, x86-64): the hulls -5.5%, `--fit-rotate` mostly flash (-13%),
-  `--out-format rgb565_swapped` -33% (opaque pixels are copied, not blended, and
-  the edges lose their antialiasing), `--scale` flash and cache footprint only (the
-  drawn pixels are the screen's). Output: `atlasData` / `atlas`,
+  `--out-format auto` -30% (the parts that are only translucent along their edges
+  are copied with a key instead of blended, and lose that antialiasing; all keyed
+  would be -33% and lose the translucent parts), `--scale` flash and cache
+  footprint only (the drawn pixels are the screen's). Output: `atlasData` / `atlas`,
   `hull_<image>`, `attachments_<slot>`, `bones`, `slots`, `armature`, per animation
   `anim_<name>_curves`, key arrays, timelines, draw orders and `anim_<name>`, then
   `animations[]` and `ANIMATION_COUNT`. `--preview` renders poses of the first
@@ -1509,11 +1526,13 @@ served as a static site.
   camera in the browser.
 - `example/wasm/demorig/`: a DragonBones character
   (`example/common/demorig/model/rgb_chan.hpp`, generated with
-  `dbones2cpp --scale 0.8 --fit-rotate` from `assets/2d/rgb_chan/` by `make model`:
-  29 bones, 41 slots, a 256 x 566 ARGB4444 atlas of the trimmed and turned parts
-  with their hulls, about 296 KB; `model/rgb_chan_sep.hpp` is the same with
-  `--atlas-width 0`, one texture per image, 227 KB, which `scene.cpp` includes
-  when a build defines `DEMORIG_MODEL_HEADER` to it) posed by a `rig::Instance`
+  `dbones2cpp --scale 0.8 --fit-rotate --out-format auto` from `assets/2d/rgb_chan/`
+  by `make model`: 29 bones, 41 slots, the trimmed and turned parts with their
+  hulls in a 128 x 66 ARGB4444 atlas (the translucent ties and bracelets) and a
+  256 x 523 keyed RGB565 one (the other 33), about 291 KB; `model/rgb_chan_sep.hpp`
+  is the same with `--atlas-width 0`, one texture per image, 220 KB, which
+  `scene.cpp` includes when a build defines `DEMORIG_MODEL_HEADER` to it) posed by
+  a `rig::Instance`
   from its 24 fps animation (`frameAt()` every frame) and bobbing up and down in a
   ring of additive rectangles that turns around it. The ring's back half is drawn
   first, then the character up to its left arm (`draw(g, 0, k)` with
@@ -1603,8 +1622,9 @@ five slots defined out of draw order, two attachments, alpha, an additive slot, 
 diagonal bar with a transparent margin; an
 animation with a bezier curve, linear and held keys, offsets across the int16 wrap,
 attachment and alpha timelines and a draw order key; a `.dbani` at twice the size),
-converts it four ways (atlas, one texture per image, RGB565 with a key color, and
-with `--fit-rotate`),
+converts it five ways (atlas, one texture per image, RGB565 with a key color,
+with `--fit-rotate`, and with `--out-format auto`, where a sixth slot's image,
+translucent inside an opaque border, keeps its alpha while the others get the key),
 checks that its 5.5-format / atlas variant converts to the same header, and writes
 the tool's poses as the expected values. The tests check the poses against them
 (world transforms within 1e-3, attachments, alphas, draw order, bounds), clamping,
@@ -1614,8 +1634,10 @@ attachment has one; drawn with them or with the whole rectangles the picture is
 the same, on the ARGB4444 atlas and the keyed one), the turned bar of the
 `--fit-rotate` conversion (a quarter of the texels, landing where the original
 does: centroid within a quarter texel, same angle and about the same area when
-drawn four times enlarged, the other parts pixel-identical), the separate textures
-and the key color, drawing in ranges and in bands against drawing at once, the
+drawn four times enlarged, the other parts pixel-identical), the mixed formats
+(the ARGB4444 part draws what the ARGB4444 conversion draws and the keyed parts
+what the keyed one draws, `draw()` toggling the key and restoring the caller's),
+the separate textures and the key color, drawing in ranges and in bands against drawing at once, the
 restored `Graphics2D` state, drawn pixels within `bounds(placement)`, and the atlas
 pixels against the source images (the trimmed bar included) with every hull
 holding the opaque pixels and leaving out transparent ones. The tests are meant to be run with AddressSanitizer and

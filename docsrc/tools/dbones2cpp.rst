@@ -25,7 +25,8 @@ dbones2cpp: DragonBones のアーマチュアを C++ コードに変換する
    "``--scale S``", "1", "画像と全座標 (ボーン、display、キーの位置、境界) の縮尺。角度と倍率は変わらない"
    "``--anim-scale auto|S``", "``auto``", "追加アニメーションの位置の縮尺。``auto`` はボーンの ``length`` の比の中央値 (1% 以内なら 1)。検出値を表示する"
    "``--in-key COLOR``", "なし (α を使う)", "入力画像でこの色のピクセルを透明にしてから処理する"
-   "``--out-format F``", "``argb4444``", "``argb4444`` / ``rgb565_swapped`` / ``rgb565``。後の 2 つはキーカラーで透明を表す"
+   "``--out-format F``", "``argb4444``", "``argb4444`` / ``rgb565_swapped`` / ``rgb565`` / ``auto``。``rgb565`` 系はキーカラーで透明を表す。``auto`` は画像ごとに選ぶ (下記)"
+   "``--auto-alpha PERCENT``", "5", "``auto`` で、縁以外の半透明ピクセルが可視ピクセルのこの割合を超える画像を ``argb4444`` に残す"
    "``--out-key COLOR``", "``#FF00FF``", "キーカラー出力で透明部分を塗る色。``Armature::colorKey`` に入る"
    "``--alpha-threshold N``", "128", "キーカラー出力で不透明とみなす α (0..255)"
    "``--dither D``", "``none``", "画素変換のディザ (``none`` / ``diffusion`` / ``pattern``)"
@@ -66,6 +67,16 @@ dbones2cpp: DragonBones のアーマチュアを C++ コードに変換する
   一致したときは青の最下位ビットを反転して逃がします (件数を警告)。
 
 縮小は乗算済み α で行うので、透明部分の色がにじみません。
+
+``--out-format auto`` は画像ごとに形式を選びます。半透明のピクセル (4 ビット量子化後の α が 1〜14) のうち、
+透明なピクセルに隣接するものはアンチエイリアスの縁で、キーカラー化するとくっきりするだけです。隣接しないものは
+透けて見せるためのものなので、それが可視ピクセルの ``--auto-alpha`` (5%) を超える画像は ``argb4444`` のまま、
+残りは ``rgb565_swapped`` + キーカラーにします (rgb_chan では tie と bracelet の 8 枚が ``argb4444``、33 枚が
+キーカラー)。キーカラーの画像はブレンドでなくコピーで描かれるので速く (回転描画の 1 ピクセルが透明・不透明とも
+約 20 命令。ARGB4444 は 25 / 50 / 70)、そのぶん縁のアンチエイリアスがなくなります。
+形式が混ざるとアトラスは ``atlas`` (ARGB4444) と ``atlasKeyed`` の 2 枚になり、``--atlas-width 0`` なら
+テクスチャごとの形式になります。``Instance::draw()`` はキーカラーのテクスチャを描く間だけキーを設定します。
+``--preview`` はキーカラーの画像の縁を実機と同じように硬くして描きます。
 
 アトラス
 ================================================================================
@@ -132,12 +143,13 @@ demorig の rgb_chan では、凸包で 320x240 のフレームが 5.5% (640x360
    "``--hull`` (既定 8)", "透明なピクセルの走査を省く。フレーム −5.5% (640x360 で −9%、2 倍ズームで −10%)", "パーツの形が矩形から遠いほど (手足、髪、斜めのもの)。矩形のパーツには付かないので損はしない", "アタッチメント 1 つあたり 4 バイト × 頂点数と、パーツ 1 枚につき行ごとの積和が数十命令"
    "``--fit-rotate``", "余白を落としてアトラスを縮める (338 KB → 296 KB)。時間は ``--hull`` があるとズーム時に 1% 程度", "細長いパーツが斜めに描かれている絵。フラッシュやキャッシュに収めたいとき", "回したパーツは 1 回再サンプリングされてわずかにぼける。ドット絵や縮尺 1 の絵では目立つ"
    "``--atlas-width 0``", "行の余白がなくなり、フレームあたりのキャッシュラインが 3 分の 1 減る (64 バイト 5133 → 3464 ライン)。ヘッダも小さい (296 KB → 227 KB)", "パーツがフラッシュにあり、詰めた合計がキャッシュに収まるとき。M5Stack Tab5 (L2 256 KB) では 30 → 42 fps、CoreS3 (64 KB、どちらも収まらない) では変化なし", "RP2040 / RP2350 では ``SHAPOGFX2D_RP2_INTERP`` の経路 (ストライドが 2 の冪) から外れる"
-   "``--out-format rgb565_swapped`` + ``--out-key``", "不透明なピクセルがブレンドでなくコピーになり、半透明の縁もなくなる。フレーム −33% (3.90M → 2.63M 命令)", "縁がくっきりした絵、ズームしない用途、速度が最優先のとき", "縁のアンチエイリアスが消える (α が ``--alpha-threshold`` 未満は透明、以上は不透明)。半透明のパーツは表現できない"
+   "``--out-format auto``", "縁以外に半透明のないパーツをキーカラーにする。不透明なピクセルがブレンドでなくコピーになり、フレーム −30% (3.90M → 2.73M 命令、640x360 で −35%)", "ほとんどのキャラクタ。半透明のパーツ (rgb_chan の tie や bracelet) は ARGB4444 のまま残る", "キーカラーになったパーツは縁のアンチエイリアスが消える (α が ``--alpha-threshold`` 未満は透明、以上は不透明)"
+   "``--out-format rgb565_swapped``", "全パーツをキーカラーに。フレーム −33%", "半透明のパーツがない絵、速度が最優先のとき", "半透明のパーツが表現できない"
    "``--scale``", "フラッシュとキャッシュの使用量 (面積に比例)。描画時間は画面上のピクセル数で決まるので、ほぼ変わらない", "キャラクタを画面に等倍で出す縮尺に合わせる。キャッシュに収めるために少し小さくするのも手", "ズームインしたときに粗くなる"
 
 組み合わせの目安:
 
-- ESP32-S3 / ESP32-P4: ``--fit-rotate --atlas-width 0``。さらに速さが要るなら ``--out-format rgb565_swapped``。
+- ESP32-S3 / ESP32-P4: ``--fit-rotate --out-format auto --atlas-width 0``。
 - RP2040 / RP2350: アトラス (既定) のまま ``--fit-rotate``。interpolator の経路を保つ。
 - キャッシュのないマイコンや RAM に置ける小さなキャラクタ: 並べ方は速度に影響しない。
 
@@ -152,9 +164,9 @@ demorig のキャラクタは次のコマンドで作られています (``make 
 
 .. code-block:: sh
 
-   bin/dbones2cpp --scale 0.8 --fit-rotate assets/2d/rgb_chan/rgb_chan_ske.json \
+   bin/dbones2cpp --scale 0.8 --fit-rotate --out-format auto assets/2d/rgb_chan/rgb_chan_ske.json \
        assets/2d/rgb_chan/Armature_animtion0.dbani example/common/demorig/model/rgb_chan.hpp
-   bin/dbones2cpp --scale 0.8 --fit-rotate --atlas-width 0 assets/2d/rgb_chan/rgb_chan_ske.json \
+   bin/dbones2cpp --scale 0.8 --fit-rotate --out-format auto --atlas-width 0 assets/2d/rgb_chan/rgb_chan_ske.json \
        assets/2d/rgb_chan/Armature_animtion0.dbani example/common/demorig/model/rgb_chan_sep.hpp  # M5Stack 版
 
 変換結果は ``--preview`` の PNG で確認できます。プレビューは変換後のデータ (量子化した角度・倍率・カーブ) から
