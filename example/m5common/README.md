@@ -23,7 +23,10 @@ M5Unified and M5GFX are fetched by the IDF component manager on the first build
 
 - `shapogfx`: gfx2d of this repository (GRAY1 and RGB444 compiled out)
 - `demorig`: `example/common/demorig/` (the scene, the view, the buttons and the
-  frame rate display; ShapoGFX only)
+  frame rate display; ShapoGFX only), built with `DEMORIG_MODEL_HEADER` set to
+  `model/rgb_chan_sep.hpp`: one texture per image instead of the atlas, since the
+  parts come from flash through the cache and the atlas rows' padding would cost a
+  third more cache lines per frame
 - `m5demorig`: the front end: `runner.cpp` (M5Unified bring-up, touch, the frame
   loop), `panel_spi.cpp` (ESP32-S3) or `panel_ppa.cpp` (ESP32-P4)
 

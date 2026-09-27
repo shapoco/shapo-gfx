@@ -21,8 +21,14 @@ CXXFLAGS := -O2 -std=c++17 -Wall -Wextra -I $(REPO_ROOT)/include -I $(COMMON)
 EXPORTS := _demorig_init,_demorig_frame,_demorig_get_fb,_demorig_get_width,_demorig_get_height
 EXPORTS := $(EXPORTS),_demorig_set_screen,_demorig_pointer_down,_demorig_pointer_move,_demorig_pointer_up
 
-# The character (checked in; `make model` regenerates it from the assets)
+# The character (checked in; `make model` regenerates it from the assets):
+# one atlas for this build (a power-of-two stride, which the RP2 interpolator
+# path wants), and one texture per image for the M5Stack builds, whose parts
+# come from flash through a cache and are then stored without row padding
+# (a third fewer cache lines per frame)
 ASSETS := $(REPO_ROOT)/assets/2d/rgb_chan
+DBONES := $(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.8 --fit-rotate
+INPUTS := $(ASSETS)/rgb_chan_ske.json $(ASSETS)/Armature_animtion0.dbani
 
 .PHONY: all clean serve native model
 
@@ -34,8 +40,8 @@ $(OUT): $(SRCS) $(HDRS) Makefile
 		-o $@
 
 model:
-	$(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.8 --fit-rotate \
-		$(ASSETS)/rgb_chan_ske.json $(ASSETS)/Armature_animtion0.dbani $(COMMON)/model/rgb_chan.hpp
+	$(DBONES) $(INPUTS) $(COMMON)/model/rgb_chan.hpp
+	$(DBONES) --atlas-width 0 $(INPUTS) $(COMMON)/model/rgb_chan_sep.hpp
 
 # Native build: renders one frame to demorig.ppm
 native: $(SRCS) $(HDRS)

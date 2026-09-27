@@ -1502,7 +1502,9 @@ served as a static site.
   (`example/common/demorig/model/rgb_chan.hpp`, generated with
   `dbones2cpp --scale 0.8 --fit-rotate` from `assets/2d/rgb_chan/` by `make model`:
   29 bones, 41 slots, a 256 x 566 ARGB4444 atlas of the trimmed and turned parts
-  with their hulls, about 296 KB) posed by a `rig::Instance`
+  with their hulls, about 296 KB; `model/rgb_chan_sep.hpp` is the same with
+  `--atlas-width 0`, one texture per image, 227 KB, which `scene.cpp` includes
+  when a build defines `DEMORIG_MODEL_HEADER` to it) posed by a `rig::Instance`
   from its 24 fps animation (`frameAt()` every frame) and bobbing up and down in a
   ring of additive rectangles that turns around it. The ring's back half is drawn
   first, then the character up to its left arm (`draw(g, 0, k)` with
@@ -1535,7 +1537,10 @@ served as a static site.
   into two buffers in internal RAM: one strip is drawn while the previous one goes
   out by SPI DMA (the CoreS3) or the PPA (the Tab5), and the last one is
   left in flight across the frame boundary. The serial console gets the frame rate
-  and the time per frame every 2 seconds.
+  and the time per frame every 2 seconds. They draw from the per-image textures
+  (`rgb_chan_sep.hpp`): the parts come from flash through the cache, and the
+  padding of the atlas rows would cost a third more cache lines per frame
+  (rgb_chan: 5133 lines of 64 bytes against 3464).
 
 ## Tests
 

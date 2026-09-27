@@ -4,8 +4,14 @@
 #include <cmath>
 #include <cstdint>
 
-// Generated from assets/2d/rgb_chan with `make -C example/wasm/demorig model`
+// Generated from assets/2d/rgb_chan with `make -C example/wasm/demorig model`:
+// the atlas, or the header a build names (model/rgb_chan_sep.hpp with one
+// texture per image, which the M5Stack builds use)
+#ifdef DEMORIG_MODEL_HEADER
+#include DEMORIG_MODEL_HEADER
+#else
 #include "model/rgb_chan.hpp"
+#endif
 
 namespace demorig {
 
