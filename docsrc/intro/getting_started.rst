@@ -9,6 +9,34 @@
 - ビルドに CMake 3.13 以降を使う場合は CMake。使わなくても構いません。
 - ツール (``bin/``) とドキュメント生成には Python 3 と ``requirements.txt`` の依存パッケージ。
 
+インストール
+================================================================================
+
+リポジトリを一度 clone し、環境変数 ``SHAPOGFX_PATH`` でその場所を指すのが標準的な使い方です。
+ビルドファイルからはパスを直接書かず、CMake では ``$ENV{SHAPOGFX_PATH}``、PlatformIO では
+``${sysenv.SHAPOGFX_PATH}`` としてこの変数を参照します。
+
+1. ``${HOME}/sgfx/`` を作成し、そこに移動します。
+
+   .. code-block:: sh
+
+      mkdir -p ${HOME}/sgfx
+      cd ${HOME}/sgfx
+
+2. リポジトリを clone します。
+
+   .. code-block:: sh
+
+      git clone https://github.com/shapoco/shapo-gfx.git
+
+3. 環境変数 ``SHAPOGFX_PATH`` に ``${HOME}/sgfx/shapo-gfx`` を設定します。
+   新しいシェルでも有効にするには ``~/.bashrc`` (使っているシェルの設定ファイル) にも同じ行を追加してください。
+
+   .. code-block:: sh
+
+      export SHAPOGFX_PATH=${HOME}/sgfx/shapo-gfx
+      echo 'export SHAPOGFX_PATH=${HOME}/sgfx/shapo-gfx' >> ~/.bashrc
+
 CMake で使う
 ================================================================================
 
@@ -17,7 +45,7 @@ Pico SDK のプロジェクトでも同じです。
 
 .. code-block:: cmake
 
-   add_subdirectory(path/to/shapo-gfx)
+   add_subdirectory($ENV{SHAPOGFX_PATH} shapo-gfx)
    target_link_libraries(your_target PRIVATE shapoco::gfx)
 
 ライブラリ単体でビルドしてサンプルとテストを実行するには次のようにします。
@@ -48,12 +76,13 @@ PlatformIO で使う
    platform = espressif32
    board = seeed_xiao_esp32s3
    framework = arduino
-   lib_deps = https://github.com/shapoco/shapo-gfx.git
+   lib_deps = symlink://${sysenv.SHAPOGFX_PATH}
    ; ヘッダが C++17 を要求する。多くのコアは既定が gnu++11 のため上書きする
    build_unflags = -std=gnu++11
    build_flags = -std=gnu++17
 
-``lib_deps`` にはブランチやタグ (``...git#v0.1.0``)、ローカルパス (``symlink://../shapo-gfx``) も指定できます。
+``lib_deps`` には GitHub の URL (``https://github.com/shapoco/shapo-gfx.git``、ブランチやタグは ``...git#v0.1.0``)
+や相対パス (``symlink://../shapo-gfx``) も指定できます。
 
 ``build_unflags`` / ``build_flags`` は **利用側のコード** のためのものです。
 ライブラリ自身のソースは ``library.json`` が ``-std=gnu++17`` を指定するので、これがなくてもビルドできますが、

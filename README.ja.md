@@ -40,6 +40,32 @@ ShapoGFX は、小型ディスプレイを駆動するマイコン向けの、�
   ESP32-S3 / ESP32-P4 搭載ボードとブラウザで動作する 3D シューティングゲーム。
   ShapoGFX のショーケースとして作成
 
+## インストール
+
+ShapoGFX はリポジトリを一度 clone し、環境変数 `SHAPOGFX_PATH` でその場所を指すのが
+標準的な使い方です。ビルドファイルからはパスを直接書かずにこの変数で参照します。
+
+1. `${HOME}/sgfx/` を作成し、そこに移動します:
+
+   ```sh
+   mkdir -p ${HOME}/sgfx
+   cd ${HOME}/sgfx
+   ```
+
+2. リポジトリを clone します:
+
+   ```sh
+   git clone https://github.com/shapoco/shapo-gfx.git
+   ```
+
+3. 環境変数 `SHAPOGFX_PATH` に `${HOME}/sgfx/shapo-gfx` を設定します。
+   新しいシェルでも有効にするには `~/.bashrc` (使っているシェルの設定ファイル) にも同じ行を追加してください:
+
+   ```sh
+   export SHAPOGFX_PATH=${HOME}/sgfx/shapo-gfx
+   echo 'export SHAPOGFX_PATH=${HOME}/sgfx/shapo-gfx' >> ~/.bashrc
+   ```
+
 ## ビルド
 
 ```sh
@@ -51,7 +77,7 @@ ctest --test-dir build --output-on-failure
 他の CMake プロジェクト (Pico SDK のプロジェクトを含む) から使う場合:
 
 ```cmake
-add_subdirectory(path/to/shapo-gfx)
+add_subdirectory($ENV{SHAPOGFX_PATH} shapo-gfx)
 target_link_libraries(your_target PRIVATE shapoco::gfx)
 ```
 
@@ -64,7 +90,9 @@ target_link_libraries(your_target PRIVATE shapoco::gfx)
 platform = espressif32
 board = seeed_xiao_esp32s3
 framework = arduino
-lib_deps = https://github.com/shapoco/shapo-gfx.git
+lib_deps = symlink://${sysenv.SHAPOGFX_PATH}
+; ローカルに clone せず GitHub から直接取得する場合:
+; lib_deps = https://github.com/shapoco/shapo-gfx.git
 ; the headers are C++17; many cores still default to gnu++11
 build_unflags = -std=gnu++11
 build_flags = -std=gnu++17

@@ -39,6 +39,33 @@ takes its working memory from an arena you hand it.
   running on RP2350 / RP2040 / ESP32-S3 / ESP32-P4 boards and in the browser,
   written as a showcase of ShapoGFX
 
+## Installation
+
+The standard way to use ShapoGFX is to clone the repository once and point the
+environment variable `SHAPOGFX_PATH` at the clone. Build files then refer to
+the library through that variable instead of a hard-coded path.
+
+1. Create `${HOME}/sgfx/` and move into it:
+
+   ```sh
+   mkdir -p ${HOME}/sgfx
+   cd ${HOME}/sgfx
+   ```
+
+2. Clone the repository:
+
+   ```sh
+   git clone https://github.com/shapoco/shapo-gfx.git
+   ```
+
+3. Set `SHAPOGFX_PATH` to `${HOME}/sgfx/shapo-gfx`. Add the same line to
+   `~/.bashrc` (or your shell's equivalent) so it survives a new shell:
+
+   ```sh
+   export SHAPOGFX_PATH=${HOME}/sgfx/shapo-gfx
+   echo 'export SHAPOGFX_PATH=${HOME}/sgfx/shapo-gfx' >> ~/.bashrc
+   ```
+
 ## Building
 
 ```sh
@@ -50,7 +77,7 @@ ctest --test-dir build --output-on-failure
 To use the library from another CMake project (including Pico SDK projects):
 
 ```cmake
-add_subdirectory(path/to/shapo-gfx)
+add_subdirectory($ENV{SHAPOGFX_PATH} shapo-gfx)
 target_link_libraries(your_target PRIVATE shapoco::gfx)
 ```
 
@@ -63,7 +90,9 @@ target_link_libraries(your_target PRIVATE shapoco::gfx)
 platform = espressif32
 board = seeed_xiao_esp32s3
 framework = arduino
-lib_deps = https://github.com/shapoco/shapo-gfx.git
+lib_deps = symlink://${sysenv.SHAPOGFX_PATH}
+; or straight from GitHub, without a local clone:
+; lib_deps = https://github.com/shapoco/shapo-gfx.git
 ; the headers are C++17; many cores still default to gnu++11
 build_unflags = -std=gnu++11
 build_flags = -std=gnu++17
