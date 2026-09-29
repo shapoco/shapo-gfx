@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SHAPOGFX2D_FONT_SHAPOSANSP_S27C22A01W04_H
+#define SHAPOGFX2D_FONT_SHAPOSANSP_S27C22A01W04_H
 
 // Generated from ShapoFont
 //   Pixel Count:
@@ -17,9 +18,7 @@
 #include <avr/pgmspace.h>
 #endif
 
-#ifdef SHAPOFONT_INCLUDE_GFXFONT
-#include <gfxfont.h>
-#endif
+#include "shapoco/gfx2d/gfxfont.h"
 
 #ifndef SHAPOFONT_PROGMEM
 #ifdef PROGMEM
@@ -30,10 +29,10 @@
 #define SHAPOFONT_PROGMEM_SELF_DEFINED
 #endif
 
-#ifndef SHAPOFONT_GFXFONT_NAMESPACE
-#define SHAPOFONT_GFXFONT_NAMESPACE
-#define SHAPOFONT_GFXFONT_NAMESPACE_SELF_DEFINED
-#endif
+// Modified for ShapoGFX: the font lives in shapoco::gfx2d and always uses
+// shapoco::gfx2d::GFXfont, whatever GFXfont the other libraries define.
+namespace shapoco {
+namespace gfx2d {
 
 const uint8_t ShapoSansP_s27c22a01w04Bitmaps[] SHAPOFONT_PROGMEM = {
   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xF7, 0xFB, 0xFD, 0xFE, 0xF3,
@@ -225,7 +224,7 @@ const uint8_t ShapoSansP_s27c22a01w04Bitmaps[] SHAPOFONT_PROGMEM = {
   0x7F, 0xFF, 0xFF, 0xFF, 0x8D, 0xFC, 0x11, 0xC0, 0x00,
 };
 
-const SHAPOFONT_GFXFONT_NAMESPACE GFXglyph ShapoSansP_s27c22a01w04Glyphs[] SHAPOFONT_PROGMEM = {
+const GFXglyph ShapoSansP_s27c22a01w04Glyphs[] SHAPOFONT_PROGMEM = {
   { 0x0000,  0,  0,  6,  4,   4 },
   { 0x0000,  4, 22,  6,  0, -22 },
   { 0x000B,  9,  7, 11,  0, -23 },
@@ -323,7 +322,7 @@ const SHAPOFONT_GFXFONT_NAMESPACE GFXglyph ShapoSansP_s27c22a01w04Glyphs[] SHAPO
   { 0x0B9C, 14,  7, 16,  0, -13 },
 };
 
-const SHAPOFONT_GFXFONT_NAMESPACE GFXfont ShapoSansP_s27c22a01w04 SHAPOFONT_PROGMEM = {
+const GFXfont ShapoSansP_s27c22a01w04 SHAPOFONT_PROGMEM = {
   (uint8_t*)ShapoSansP_s27c22a01w04Bitmaps,
   (GFXglyph*)ShapoSansP_s27c22a01w04Glyphs,
   0x20,
@@ -331,10 +330,12 @@ const SHAPOFONT_GFXFONT_NAMESPACE GFXfont ShapoSansP_s27c22a01w04 SHAPOFONT_PROG
   32
 };
 
+}  // namespace gfx2d
+}  // namespace shapoco
+
 #ifdef SHAPOFONT_PROGMEM_SELF_DEFINED
 #undef SHAPOFONT_PROGMEM
+#undef SHAPOFONT_PROGMEM_SELF_DEFINED
 #endif
 
-#ifdef SHAPOFONT_GFXFONT_NAMESPACE_SELF_DEFINED
-#undef SHAPOFONT_GFXFONT_NAMESPACE
-#endif
+#endif  // SHAPOGFX2D_FONT_SHAPOSANSP_S27C22A01W04_H

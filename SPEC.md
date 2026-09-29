@@ -582,12 +582,20 @@ three 2D features off.
 
 ### Fonts (`fonts.hpp`, `gfxfont.h`, `font/*.h`)
 
-`gfxfont.h` is the Adafruit GFXfont structure (BSD license, see LICENSE). The bundled
-fonts (generated with ShapoFont) are `const GFXfont` objects in the global namespace:
+`gfxfont.h` is the Adafruit GFXfont structure (BSD license, see LICENSE), moved into
+`shapoco::gfx2d` (`gfx2d::GFXglyph`, `gfx2d::GFXfont`) with an include guard of its own,
+so that it never collides with the `GFXfont` of the other libraries (Adafruit GFX,
+LovyanGFX / M5GFX). The layout is that of Adafruit. The bundled fonts (generated with
+ShapoFont) are `const GFXfont` objects in `shapoco::gfx2d`; each `font/*.h` can be
+included alone:
 `ShapoSansMono_s08c07`, `ShapoSansP_s05`, `ShapoSansP_s07c05a01`, `ShapoSansP_s08c07`,
 `ShapoSansP_s12c09a01w02`, `ShapoSansP_s21c16a01w03`, `ShapoSansP_s27c22a01w04` and
 `MameSeg7_s40c38w06` (7-segment; `.`, `0`-`9` and `A`-`F` only). Any GFXfont from the
-Adafruit ecosystem can be used.
+Adafruit ecosystem can be used, by including its header inside the namespace so that it
+is built from `gfx2d::GFXfont` (`namespace shapoco { namespace gfx2d {` /
+`#include "FreeSans9pt7b.h"` / `} }`, after `gfxfont.h` and, on a target without
+`PROGMEM`, `#define PROGMEM`). The `lgfx::GFXfont` of LovyanGFX / M5GFX is another
+structure and cannot be used.
 
 ### Geometry (`math2d.hpp`)
 

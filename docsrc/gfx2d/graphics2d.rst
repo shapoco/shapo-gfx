@@ -330,7 +330,7 @@ GRAY1 の画像を 2 色のマスクとして描きます。1 のビットを ``
 
    // 右寄せ
    const char *s = "12.3 s";
-   g.setFont(&ShapoSansP_s12c09a01w02);
+   g.setFont(&g2::ShapoSansP_s12c09a01w02);
    g.drawString(box.right() - 8 - g.textMetrics(s).width, box.y + 4, s);
 
    // (x, y) から 2 倍で描く

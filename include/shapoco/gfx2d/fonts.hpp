@@ -2,7 +2,7 @@
 #define SHAPOGFX2D_FONTS_HPP
 
 // Bundled bitmap fonts (ShapoSans and MameSeg7, generated with ShapoFont) in
-// the Adafruit GFXfont format. The font objects live in the global namespace:
+// the Adafruit GFXfont format. The font objects live in shapoco::gfx2d:
 //   ShapoSansMono_s08c07       monospace, 8 px tall glyph box, 7 px caps
 //   ShapoSansP_s05             proportional, 5 px
 //   ShapoSansP_s07c05a01       proportional, 7 px

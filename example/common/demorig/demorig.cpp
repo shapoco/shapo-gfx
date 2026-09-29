@@ -158,7 +158,7 @@ void Demo::draw(g2::Graphics2D &g, int bandY) const {
     drawButton(g, zoomInX_, zoomInY_, true, pressed_ == Button::ZOOM_IN);
     drawButton(g, zoomOutX_, zoomOutY_, false, pressed_ == Button::ZOOM_OUT);
   }
-  g.setFont(&ShapoSansP_s12c09a01w02);
+  g.setFont(&g2::ShapoSansP_s12c09a01w02);
   g.setTextColor(g2::makeColor(0, 0, 0));
   g.drawString(5, 5, label_);
   g.setTextColor(g2::makeColor(255, 255, 255));

@@ -202,7 +202,7 @@ CMake も PlatformIO も使わない
      g.clear(g2::makeColor(20, 24, 40));
      g.fillRoundRect(20, 20, 200, 100, 12, g2::makeColor(255, 255, 255, 40));  // 半透明
      g.drawCircle(260, 120, 40, g2::Colors::CYAN);
-     g.setFont(&ShapoSansP_s12c09a01w02);
+     g.setFont(&g2::ShapoSansP_s12c09a01w02);
      g.setTextColor(g2::Colors::WHITE);
      g.drawString(32, 32, "Hello, ShapoGFX");
      // ... fb をディスプレイへ転送 ...

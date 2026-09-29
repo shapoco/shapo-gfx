@@ -240,7 +240,7 @@ static void drawPanel(g2::Graphics2D &g, float t) {
     p.fillRect(i, PANEL_H - 6 - h, 5, h,
                g2::makeColorHsv(i * 3 + (int)(t * 60), 220, 255));
   }
-  p.setFont(&ShapoSansMono_s08c07);
+  p.setFont(&g2::ShapoSansMono_s08c07);
   p.setTextColor(Colors::WHITE);
   p.drawString(3, 3, "RGB444 offscreen");
   p.drawRect(0, 0, PANEL_W, PANEL_H, g2::makeColor(120, 140, 200));
@@ -267,7 +267,7 @@ static void drawTransforms(g2::Graphics2D &g, float t) {
                                          PANEL_W * 0.5f, PANEL_H * 0.5f));
   g.drawImage(panelSurface, 0, 0);
   g.drawRect(-3, -3, PANEL_W + 6, PANEL_H + 6, g2::makeColor(40, 40, 70), 3);
-  g.setFont(&ShapoSansP_s12c09a01w02);
+  g.setFont(&g2::ShapoSansP_s12c09a01w02);
   g.setTextColor(g2::makeColor(40, 40, 70));
   g.drawString(0, PANEL_H + 4, "rotate()");
   g.popState();
@@ -304,7 +304,7 @@ static void drawCharts(g2::Graphics2D &g, float t) {
   }
   char buf[8];
   std::snprintf(buf, sizeof(buf), "%d%%", (int)(progress * 100));
-  g.setFont(&ShapoSansP_s08c07);
+  g.setFont(&g2::ShapoSansP_s08c07);
   g.setTextColor(g2::makeColor(40, 40, 70));
   const g2::TextMetrics m = g.textMetrics(buf);
   g.drawString(cx - m.width / 2, cy - m.height / 2, buf);
@@ -316,13 +316,13 @@ static void drawText(g2::Graphics2D &g, float t) {
   g.drawRoundRect(box, 12, g2::makeColor(255, 255, 255, 160));
 
   int x = box.x + 12, y = box.y + 8;
-  g.setFont(&ShapoSansP_s21c16a01w03);
+  g.setFont(&g2::ShapoSansP_s21c16a01w03);
   g.setTextColor(Colors::WHITE);
   g.drawString(x, y, "ShapoGFX 2D");
   // Right-aligned elapsed time, measured with the same font
   char buf[32];
   std::snprintf(buf, sizeof(buf), "%.1fs", (double)t);
-  g.setFont(&ShapoSansP_s12c09a01w02);
+  g.setFont(&g2::ShapoSansP_s12c09a01w02);
   g.setTextColor(g2::makeColor(255, 220, 120));
   g.drawString(box.right() - 12 - g.textMetrics(buf).width, y + 6, buf);
   y += 30;
@@ -331,14 +331,14 @@ static void drawText(g2::Graphics2D &g, float t) {
   g.drawString(x, y, "Shapes, sprites, transforms, fonts");
   y += g.textMetrics("").lineAdvance + 2;
 
-  g.setFont(&ShapoSansP_s08c07);
+  g.setFont(&g2::ShapoSansP_s08c07);
   g.setTextColor(Colors::WHITE);
   g.drawString(x, y,
                "ShapoSansP_s08c07: proportional 8 px\nGRAY1 / RGB444 / "
                "ARGB4444 / RGB565_SWAPPED");
   y += g.textMetrics("").lineAdvance * 2 + 2;
 
-  g.setFont(&ShapoSansMono_s08c07);
+  g.setFont(&g2::ShapoSansMono_s08c07);
   g.setTextColor(g2::makeColor(140, 255, 160), g2::makeColor(0, 60, 30));
   g.drawString(x, y, "Mono 8px, bg color ");
   // Enlarged by the transform: scaled about the cursor

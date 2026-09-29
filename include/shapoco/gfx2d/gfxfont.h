@@ -1,7 +1,14 @@
+#ifndef SHAPOGFX2D_GFXFONT_H
+#define SHAPOGFX2D_GFXFONT_H
 
 //--------------------------------------------------------------------------------
 // Original source:
 // https://github.com/adafruit/Adafruit-GFX-Library/blob/21648a829918c7deaf1b5ab29f736a80e42fb82f/gfxfont.h
+//
+// Modified for ShapoGFX: the structures are in the shapoco::gfx2d namespace and
+// the include guard is not _GFXFONT_H_, so that this file can be used together
+// with the GFXfont of the other libraries (Adafruit GFX, LovyanGFX, M5GFX, ...).
+// The layout of the structures is the same as the original.
 //--------------------------------------------------------------------------------
 
 #include <stdint.h>
@@ -37,8 +44,8 @@
 // file and pass address of GFXfont struct to setFont().  Pass NULL to
 // revert to 'classic' fixed-space bitmap font.
 
-#ifndef _GFXFONT_H_
-#define _GFXFONT_H_
+namespace shapoco {
+namespace gfx2d {
 
 /// Font data stored PER GLYPH
 typedef struct {
@@ -59,4 +66,7 @@ typedef struct {
   uint8_t yAdvance; ///< Newline distance (y axis)
 } GFXfont;
 
-#endif // _GFXFONT_H_
+}  // namespace gfx2d
+}  // namespace shapoco
+
+#endif  // SHAPOGFX2D_GFXFONT_H

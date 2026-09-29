@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SHAPOGFX2D_FONT_SHAPOSANSP_S05_H
+#define SHAPOGFX2D_FONT_SHAPOSANSP_S05_H
 
 // Generated from ShapoFont
 //   Pixel Count:
@@ -17,9 +18,7 @@
 #include <avr/pgmspace.h>
 #endif
 
-#ifdef SHAPOFONT_INCLUDE_GFXFONT
-#include <gfxfont.h>
-#endif
+#include "shapoco/gfx2d/gfxfont.h"
 
 #ifndef SHAPOFONT_PROGMEM
 #ifdef PROGMEM
@@ -30,10 +29,10 @@
 #define SHAPOFONT_PROGMEM_SELF_DEFINED
 #endif
 
-#ifndef SHAPOFONT_GFXFONT_NAMESPACE
-#define SHAPOFONT_GFXFONT_NAMESPACE
-#define SHAPOFONT_GFXFONT_NAMESPACE_SELF_DEFINED
-#endif
+// Modified for ShapoGFX: the font lives in shapoco::gfx2d and always uses
+// shapoco::gfx2d::GFXfont, whatever GFXfont the other libraries define.
+namespace shapoco {
+namespace gfx2d {
 
 const uint8_t ShapoSansP_s05Bitmaps[] SHAPOFONT_PROGMEM = {
   0xB4, 0x57, 0xD5, 0xF5, 0x00, 0x75, 0x1C, 0x57, 0x00, 0xEF, 0x88, 0xF9, 0x80, 0xE5, 0x5B, 0x26,
@@ -52,7 +51,7 @@ const uint8_t ShapoSansP_s05Bitmaps[] SHAPOFONT_PROGMEM = {
   0x4F, 0x6B, 0x26, 0xC9, 0xAC, 0x45, 0x44,
 };
 
-const SHAPOFONT_GFXFONT_NAMESPACE GFXglyph ShapoSansP_s05Glyphs[] SHAPOFONT_PROGMEM = {
+const GFXglyph ShapoSansP_s05Glyphs[] SHAPOFONT_PROGMEM = {
   { 0x0000,  0,  0,  4,  3,   0 },
   { 0x0070,  1,  5,  2,  0,  -5 },
   { 0x0000,  3,  2,  4,  0,  -5 },
@@ -150,7 +149,7 @@ const SHAPOFONT_GFXFONT_NAMESPACE GFXglyph ShapoSansP_s05Glyphs[] SHAPOFONT_PROG
   { 0x00D5,  5,  3,  6,  0,  -4 },
 };
 
-const SHAPOFONT_GFXFONT_NAMESPACE GFXfont ShapoSansP_s05 SHAPOFONT_PROGMEM = {
+const GFXfont ShapoSansP_s05 SHAPOFONT_PROGMEM = {
   (uint8_t*)ShapoSansP_s05Bitmaps,
   (GFXglyph*)ShapoSansP_s05Glyphs,
   0x20,
@@ -158,10 +157,12 @@ const SHAPOFONT_GFXFONT_NAMESPACE GFXfont ShapoSansP_s05 SHAPOFONT_PROGMEM = {
   6
 };
 
+}  // namespace gfx2d
+}  // namespace shapoco
+
 #ifdef SHAPOFONT_PROGMEM_SELF_DEFINED
 #undef SHAPOFONT_PROGMEM
+#undef SHAPOFONT_PROGMEM_SELF_DEFINED
 #endif
 
-#ifdef SHAPOFONT_GFXFONT_NAMESPACE_SELF_DEFINED
-#undef SHAPOFONT_GFXFONT_NAMESPACE
-#endif
+#endif  // SHAPOGFX2D_FONT_SHAPOSANSP_S05_H

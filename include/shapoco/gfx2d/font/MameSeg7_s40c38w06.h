@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SHAPOGFX2D_FONT_MAMESEG7_S40C38W06_H
+#define SHAPOGFX2D_FONT_MAMESEG7_S40C38W06_H
 
 // Generated from ShapoFont
 //   Pixel Count:
@@ -17,9 +18,7 @@
 #include <avr/pgmspace.h>
 #endif
 
-#ifdef SHAPOFONT_INCLUDE_GFXFONT
-#include <gfxfont.h>
-#endif
+#include "shapoco/gfx2d/gfxfont.h"
 
 #ifndef SHAPOFONT_PROGMEM
 #ifdef PROGMEM
@@ -30,10 +29,10 @@
 #define SHAPOFONT_PROGMEM_SELF_DEFINED
 #endif
 
-#ifndef SHAPOFONT_GFXFONT_NAMESPACE
-#define SHAPOFONT_GFXFONT_NAMESPACE
-#define SHAPOFONT_GFXFONT_NAMESPACE_SELF_DEFINED
-#endif
+// Modified for ShapoGFX: the font lives in shapoco::gfx2d and always uses
+// shapoco::gfx2d::GFXfont, whatever GFXfont the other libraries define.
+namespace shapoco {
+namespace gfx2d {
 
 const uint8_t MameSeg7_s40c38w06Bitmaps[] SHAPOFONT_PROGMEM = {
   0x7B, 0xFF, 0xFF, 0xFD, 0xE0, 0x03, 0xFF, 0xF0, 0x07, 0xFF, 0xF8, 0x07, 0xFF, 0xF8, 0x03, 0xFF,
@@ -134,7 +133,7 @@ const uint8_t MameSeg7_s40c38w06Bitmaps[] SHAPOFONT_PROGMEM = {
   0x03, 0xF0, 0x00, 0x1F, 0x00, 0x00, 0xF0, 0x00, 0x03, 0x00, 0x00, 0x00,
 };
 
-const SHAPOFONT_GFXFONT_NAMESPACE GFXglyph MameSeg7_s40c38w06Glyphs[] SHAPOFONT_PROGMEM = {
+const GFXglyph MameSeg7_s40c38w06Glyphs[] SHAPOFONT_PROGMEM = {
   { 0x0000,  6,  6,  0, -7,  -4 },
   { 0x0000,  0,  0,  0,  0,   0 },
   { 0x0005, 24, 38, 30,  0, -38 },
@@ -162,7 +161,7 @@ const SHAPOFONT_GFXFONT_NAMESPACE GFXglyph MameSeg7_s40c38w06Glyphs[] SHAPOFONT_
   { 0x05A2, 21, 34, 30,  0, -38 },
 };
 
-const SHAPOFONT_GFXFONT_NAMESPACE GFXfont MameSeg7_s40c38w06 SHAPOFONT_PROGMEM = {
+const GFXfont MameSeg7_s40c38w06 SHAPOFONT_PROGMEM = {
   (uint8_t*)MameSeg7_s40c38w06Bitmaps,
   (GFXglyph*)MameSeg7_s40c38w06Glyphs,
   0x2E,
@@ -170,10 +169,12 @@ const SHAPOFONT_GFXFONT_NAMESPACE GFXfont MameSeg7_s40c38w06 SHAPOFONT_PROGMEM =
   48
 };
 
+}  // namespace gfx2d
+}  // namespace shapoco
+
 #ifdef SHAPOFONT_PROGMEM_SELF_DEFINED
 #undef SHAPOFONT_PROGMEM
+#undef SHAPOFONT_PROGMEM_SELF_DEFINED
 #endif
 
-#ifdef SHAPOFONT_GFXFONT_NAMESPACE_SELF_DEFINED
-#undef SHAPOFONT_GFXFONT_NAMESPACE
-#endif
+#endif  // SHAPOGFX2D_FONT_MAMESEG7_S40C38W06_H

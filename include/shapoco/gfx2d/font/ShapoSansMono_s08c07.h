@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SHAPOGFX2D_FONT_SHAPOSANSMONO_S08C07_H
+#define SHAPOGFX2D_FONT_SHAPOSANSMONO_S08C07_H
 
 // Generated from ShapoFont
 //   Pixel Count:
@@ -17,9 +18,7 @@
 #include <avr/pgmspace.h>
 #endif
 
-#ifdef SHAPOFONT_INCLUDE_GFXFONT
-#include <gfxfont.h>
-#endif
+#include "shapoco/gfx2d/gfxfont.h"
 
 #ifndef SHAPOFONT_PROGMEM
 #ifdef PROGMEM
@@ -30,10 +29,10 @@
 #define SHAPOFONT_PROGMEM_SELF_DEFINED
 #endif
 
-#ifndef SHAPOFONT_GFXFONT_NAMESPACE
-#define SHAPOFONT_GFXFONT_NAMESPACE
-#define SHAPOFONT_GFXFONT_NAMESPACE_SELF_DEFINED
-#endif
+// Modified for ShapoGFX: the font lives in shapoco::gfx2d and always uses
+// shapoco::gfx2d::GFXfont, whatever GFXfont the other libraries define.
+namespace shapoco {
+namespace gfx2d {
 
 const uint8_t ShapoSansMono_s08c07Bitmaps[] SHAPOFONT_PROGMEM = {
   0xFF, 0xCC, 0xB4, 0x57, 0xD4, 0xA5, 0x7D, 0x40, 0x23, 0xA8, 0xE2, 0xB8, 0x80, 0xCE, 0x84, 0x44,
@@ -62,7 +61,7 @@ const uint8_t ShapoSansMono_s08c07Bitmaps[] SHAPOFONT_PROGMEM = {
   0x33, 0x1B, 0x80, 0x45, 0x44,
 };
 
-const SHAPOFONT_GFXFONT_NAMESPACE GFXglyph ShapoSansMono_s08c07Glyphs[] SHAPOFONT_PROGMEM = {
+const GFXglyph ShapoSansMono_s08c07Glyphs[] SHAPOFONT_PROGMEM = {
   { 0x0000,  0,  0,  6,  5,   1 },
   { 0x0000,  2,  7,  6,  1,  -7 },
   { 0x0002,  3,  2,  6,  1,  -7 },
@@ -160,7 +159,7 @@ const SHAPOFONT_GFXFONT_NAMESPACE GFXglyph ShapoSansMono_s08c07Glyphs[] SHAPOFON
   { 0x0173,  5,  3,  6,  0,  -5 },
 };
 
-const SHAPOFONT_GFXFONT_NAMESPACE GFXfont ShapoSansMono_s08c07 SHAPOFONT_PROGMEM = {
+const GFXfont ShapoSansMono_s08c07 SHAPOFONT_PROGMEM = {
   (uint8_t*)ShapoSansMono_s08c07Bitmaps,
   (GFXglyph*)ShapoSansMono_s08c07Glyphs,
   0x20,
@@ -168,10 +167,12 @@ const SHAPOFONT_GFXFONT_NAMESPACE GFXfont ShapoSansMono_s08c07 SHAPOFONT_PROGMEM
   10
 };
 
+}  // namespace gfx2d
+}  // namespace shapoco
+
 #ifdef SHAPOFONT_PROGMEM_SELF_DEFINED
 #undef SHAPOFONT_PROGMEM
+#undef SHAPOFONT_PROGMEM_SELF_DEFINED
 #endif
 
-#ifdef SHAPOFONT_GFXFONT_NAMESPACE_SELF_DEFINED
-#undef SHAPOFONT_GFXFONT_NAMESPACE
-#endif
+#endif  // SHAPOGFX2D_FONT_SHAPOSANSMONO_S08C07_H

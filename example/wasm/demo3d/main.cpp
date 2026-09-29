@@ -65,12 +65,12 @@ static void drawBackdrop(float t) {
     int tw = 140 + (int)(100.0f * std::sin(t * 2.0f + i));
     g.setPixel(x, y, g2::makeColor(255, 255, 230, tw));
   }
-  g.setFont(&ShapoSansP_s12c09a01w02);
+  g.setFont(&g2::ShapoSansP_s12c09a01w02);
   g.setTextColor(g2::makeColor(0, 0, 0, 160));
   g.drawString(9, 9, "ShapoGFX demo3d");
   g.setTextColor(g2::makeColor(220, 230, 255));
   g.drawString(8, 8, "ShapoGFX demo3d");
-  g.setFont(&ShapoSansP_s08c07);
+  g.setFont(&g2::ShapoSansP_s08c07);
   g.setTextColor(g2::makeColor(160, 170, 200));
   g.drawString(8, 30, "3D scene rendered over a 2D backdrop (clear disabled)");
 }
