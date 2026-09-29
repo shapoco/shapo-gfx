@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.13)
+
+# Under ESP-IDF this directory is a component (see idf_component.yml), not a
+# project of its own
+if(ESP_PLATFORM)
+    include(${CMAKE_CURRENT_LIST_DIR}/cmake/esp_idf.cmake)
+    return()
+endif()
+
 project(shapogfx LANGUAGES CXX)
 
 # Options of the 3D renderer. Each is read by src/gfx3d/*.cpp only and changes

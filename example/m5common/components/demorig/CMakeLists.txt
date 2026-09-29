@@ -2,12 +2,18 @@
 # the WASM build) as an ESP-IDF component.
 set(DEMORIG_COMMON ${CMAKE_CURRENT_LIST_DIR}/../../../common/demorig)
 
+# ShapoGFX is a component named after its directory: "shapo-gfx", unless the
+# repository was cloned under another name
+get_filename_component(SHAPOGFX_COMPONENT
+    "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSOLUTE)
+get_filename_component(SHAPOGFX_COMPONENT "${SHAPOGFX_COMPONENT}" NAME)
+
 idf_component_register(
     SRCS
         "${DEMORIG_COMMON}/demorig.cpp"
         "${DEMORIG_COMMON}/scene.cpp"
     INCLUDE_DIRS "${DEMORIG_COMMON}"
-    REQUIRES shapogfx
+    REQUIRES ${SHAPOGFX_COMPONENT}
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra)

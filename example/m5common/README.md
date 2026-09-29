@@ -19,9 +19,12 @@ M5Unified and M5GFX are fetched by the IDF component manager on the first build
 (each project's `main/idf_component.yml`; the Tab5 pins M5GFX 0.2.25 because
 `panel_ppa.cpp` reaches into its `Panel_DSI`).
 
+ShapoGFX is the repository itself, which is an ESP-IDF component: the projects
+add its root to `EXTRA_COMPONENT_DIRS` and turn GRAY1 and RGB444 off in
+`sdkconfig.defaults`.
+
 ## Components (`components/`)
 
-- `shapogfx`: gfx2d of this repository (GRAY1 and RGB444 compiled out)
 - `demorig`: `example/common/demorig/` (the scene, the view, the buttons and the
   frame rate display; ShapoGFX only), built with `DEMORIG_MODEL_HEADER` set to
   `model/rgb_chan_sep.hpp`: one texture per image instead of the atlas, since the

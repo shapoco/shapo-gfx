@@ -81,6 +81,37 @@ add_subdirectory($ENV{SHAPOGFX_PATH} shapo-gfx)
 target_link_libraries(your_target PRIVATE shapoco::gfx)
 ```
 
+### ESP-IDF
+
+リポジトリはそのまま `shapo-gfx` という名前の ESP-IDF コンポーネントになっています。
+プロジェクトの `CMakeLists.txt` でコンポーネントのディレクトリに加えます。
+
+```cmake
+set(EXTRA_COMPONENT_DIRS $ENV{SHAPOGFX_PATH})
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(your_project)
+```
+
+ローカルに clone せずに使う場合は `main/idf_component.yml` の依存関係に加えます。
+
+```yaml
+dependencies:
+  shapo-gfx:
+    git: https://github.com/shapoco/shapo-gfx.git
+    version: v1.5.0
+```
+
+(`git:` と `version:` の代わりに `path: ${SHAPOGFX_PATH}` と書くと、ローカルの clone を参照します)。
+キーは必ずディレクトリ名と同じ `shapo-gfx` にしてください。
+どちらの場合も、使う側のコンポーネントで `REQUIRES` に指定します。
+
+```cmake
+idf_component_register(SRCS "app_main.cpp" REQUIRES shapo-gfx)
+```
+
+コンパイル時オプションは `idf.py menuconfig` の「ShapoGFX」で設定します
+(`sdkconfig.defaults` には `CONFIG_SHAPOGFX_FORMAT_GRAY1=n` のように書きます)。
+
 ### PlatformIO
 
 `library.json` があるので、このリポジトリを PlatformIO ライブラリとして使用できます:

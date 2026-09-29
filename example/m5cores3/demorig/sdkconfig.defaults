@@ -26,3 +26,8 @@ CONFIG_ESP_TASK_WDT_INIT=n
 # The character atlas alone is 338 KB: more than the 1 MB default app
 # partition leaves room for next to M5Unified.
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# ShapoGFX draws into RGB565_SWAPPED (the byte order the panel wants) from
+# ARGB4444 textures, so GRAY1 and RGB444 come out (the output is bit-identical)
+CONFIG_SHAPOGFX_FORMAT_GRAY1=n
+CONFIG_SHAPOGFX_FORMAT_RGB444=n

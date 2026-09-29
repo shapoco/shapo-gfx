@@ -65,6 +65,7 @@ M5Stack 版 demorig
 
 demorig は M5Stack CoreS3 と Tab5 でも動きます。ESP-IDF 5.5 のプロジェクトで、画面の初期化とタッチパネルに
 M5Unified / M5GFX を使います (依存コンポーネントは初回ビルド時にダウンロードされます)。
+ShapoGFX はリポジトリ自身をコンポーネントとして取り込みます (:doc:`intro/getting_started` の「ESP-IDF で使う」参照)。
 
 .. csv-table::
    :header: "機種", "プロジェクト", "画面", "操作"

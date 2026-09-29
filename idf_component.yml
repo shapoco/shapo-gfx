@@ -1,0 +1,36 @@
+# ShapoGFX as an ESP-IDF component (see cmake/esp_idf.cmake and Kconfig).
+# Keep "version" in sync with version.hpp and library.json.
+version: "1.5.0"
+description: >-
+  2D/3D graphics library for embedded systems: a scanline software renderer
+  that needs neither a frame buffer nor a Z buffer, and a 2D drawing API with
+  bitmap fonts. Never allocates memory.
+url: https://github.com/shapoco/shapo-gfx
+repository: https://github.com/shapoco/shapo-gfx.git
+documentation: https://shapoco.github.io/shapo-gfx/ref/
+license: MIT
+tags:
+  - graphics
+  - 3d-graphics
+  - renderer
+  - display
+  - lcd
+  - rgb565
+  - font
+dependencies:
+  idf: ">=5.0"
+files:
+  exclude:
+    - ".github/**/*"
+    - "assets/**/*"
+    - "bin/**/*"
+    - "build/**/*"
+    - "docs/**/*"
+    - "docsrc/**/*"
+    - "example/**/*"
+    - "test/**/*"
+    - "tmp.*"
+    - "tmp.*/**/*"
+    - "CLAUDE.md"
+    - "launch_web_server.sh"
+    - "requirements.txt"

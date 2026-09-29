@@ -2,11 +2,12 @@
 #define SHAPOGFX2D_VERSION_HPP
 
 // Version of ShapoGFX. gfx2d and gfx3d are released together and share this
-// one number. Keep it in sync with "version" in library.json.
+// one number. Keep it in sync with "version" in library.json and
+// idf_component.yml.
 #define SHAPOGFX_VERSION_MAJOR 1
-#define SHAPOGFX_VERSION_MINOR 4
+#define SHAPOGFX_VERSION_MINOR 5
 #define SHAPOGFX_VERSION_PATCH 0
-#define SHAPOGFX_VERSION_STRING "1.4.0"
+#define SHAPOGFX_VERSION_STRING "1.5.0"
 
 // Single integer 0x00MMmmpp for #if comparisons, e.g.
 //   #if SHAPOGFX_VERSION >= SHAPOGFX_MAKE_VERSION(1, 2, 0)

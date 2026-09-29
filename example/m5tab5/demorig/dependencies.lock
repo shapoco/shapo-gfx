@@ -21,6 +21,6 @@ direct_dependencies:
 - idf
 - m5stack/m5gfx
 - m5stack/m5unified
-manifest_hash: 06236f15c902c9a649cfaa645ae4d34da45d6129aa8e2cf3909224d17242a41c
+manifest_hash: 5484d15b7a6cf22298b17893bfb04a0a61a89fbda16f6626ddb79b191045081e
 target: esp32p4
 version: 2.0.0

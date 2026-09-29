@@ -11,7 +11,7 @@ endif()
 idf_component_register(
     SRCS "runner.cpp" "${PANEL_SRC}"
     INCLUDE_DIRS "."
-    REQUIRES demorig shapogfx m5unified m5gfx esp_timer ${PANEL_REQUIRES}
+    REQUIRES demorig m5unified m5gfx esp_timer ${PANEL_REQUIRES}
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra)

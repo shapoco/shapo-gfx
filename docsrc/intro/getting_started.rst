@@ -13,7 +13,7 @@
 ================================================================================
 
 リポジトリを一度 clone し、環境変数 ``SHAPOGFX_PATH`` でその場所を指すのが標準的な使い方です。
-ビルドファイルからはパスを直接書かず、CMake では ``$ENV{SHAPOGFX_PATH}``、PlatformIO では
+ビルドファイルからはパスを直接書かず、CMake と ESP-IDF では ``$ENV{SHAPOGFX_PATH}``、PlatformIO では
 ``${sysenv.SHAPOGFX_PATH}`` としてこの変数を参照します。
 
 1. ``${HOME}/sgfx/`` を作成し、そこに移動します。
@@ -64,6 +64,61 @@ Pico SDK のプロジェクトでも同じです。
    "``SHAPOGFX3D_CORRECT_PERSPECTIVE``", "空 (ライブラリ既定の 1)", "透視補正レベル 0 / 1 / 2 (:doc:`../gfx3d/concepts` 参照)"
    "``SHAPOGFX_BUILD_EXAMPLES``", "トップレベル時 ON", "ネイティブ版サンプルをビルドする"
    "``SHAPOGFX_BUILD_TESTS``", "トップレベル時 ON", "テストをビルドする"
+
+ESP-IDF で使う
+================================================================================
+
+リポジトリはそのまま ESP-IDF のコンポーネントになっています。コンポーネント名はディレクトリ名の ``shapo-gfx`` です。
+プロジェクトの ``CMakeLists.txt`` でコンポーネントのディレクトリに加えます。
+
+.. code-block:: cmake
+
+   cmake_minimum_required(VERSION 3.16)
+   set(EXTRA_COMPONENT_DIRS $ENV{SHAPOGFX_PATH})
+   include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+   project(your_project)
+
+ローカルに clone せずに使う場合は、代わりに ``main/idf_component.yml`` の依存関係に加えます。
+初回ビルド時に ``managed_components/shapo-gfx/`` へダウンロードされます。
+
+.. code-block:: yaml
+
+   dependencies:
+     shapo-gfx:
+       git: https://github.com/shapoco/shapo-gfx.git
+       version: v1.5.0    # タグ、ブランチまたはコミット
+
+どちらの場合も、ShapoGFX を使うコンポーネントの ``REQUIRES`` に指定します。
+
+.. code-block:: cmake
+
+   idf_component_register(SRCS "app_main.cpp" REQUIRES shapo-gfx)
+
+コンパイル時オプションは ``idf.py menuconfig`` の「ShapoGFX」で設定します。シンボル名はマクロ名に ``CONFIG_`` を
+付けたもので、``sdkconfig.defaults`` には次のように書きます。ピクセルフォーマットと ``SHAPOGFX_COORD_BITS`` は
+``REQUIRES`` したコンポーネントにも同じ値が渡るので、翻訳単位の間で食い違うことはありません。
+
+.. code-block:: kconfig
+
+   CONFIG_SHAPOGFX_FORMAT_GRAY1=n
+   CONFIG_SHAPOGFX_FORMAT_RGB444=n
+
+``SHAPOGFX3D_DEPTH_BITS`` は ``CONFIG_SHAPOGFX3D_DEPTH_BITS_32`` / ``_16``、``SHAPOGFX2D_FPU_SQRT`` は
+``CONFIG_SHAPOGFX2D_FPU_SQRT_AUTO`` / ``_ON`` / ``_OFF`` から選びます。
+
+clone したリポジトリを ``idf_component.yml`` から参照することもできます。
+
+.. code-block:: yaml
+
+   dependencies:
+     shapo-gfx:
+       path: ${SHAPOGFX_PATH}
+
+.. note::
+
+   ``EXTRA_COMPONENT_DIRS`` や ``idf_component.yml`` の ``path:`` で参照した場合、コンポーネント名は clone した
+   ディレクトリの名前になります。``idf_component.yml`` のキーと ``REQUIRES`` は必ずその名前 (標準の配置では
+   ``shapo-gfx``) にしてください。キーが違うと ``Failed to resolve component`` のエラーになります。
 
 PlatformIO で使う
 ================================================================================

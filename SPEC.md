@@ -47,7 +47,8 @@ the components, `SHAPOGFX_VERSION_STRING` the `"major.minor.patch"` string and
 (`SHAPOGFX_MAKE_VERSION(major, minor, patch)` builds one). The same values are
 available as `constexpr` constants `shapoco::gfx::VERSION_MAJOR`, `VERSION_MINOR`,
 `VERSION_PATCH`, `VERSION` and `VERSION_STRING`. The number must match `"version"`
-in `library.json`; each release is tagged `v<version>` in git.
+in `library.json` and in `idf_component.yml`; each release is tagged `v<version>`
+in git.
 
 ## Compile-time configuration (`config.hpp`)
 
@@ -91,6 +92,19 @@ functions and state members, which are then ignored, so application code compile
 unchanged. `SHAPOGFX_COORD_BITS`
 lives in `config.hpp` like the format macros and must have the same value in every
 translation unit (the CMake option passes it on as a public definition).
+
+Under ESP-IDF the repository is a component: its `CMakeLists.txt` hands over to
+`cmake/esp_idf.cmake` when `ESP_PLATFORM` is set, and `idf_component.yml` is its
+manifest. The component is named after its directory, `shapo-gfx`. The macros of
+the table above other than `SHAPOGFX3D_RP2_INTERP`, `SHAPOGFX2D_RP2_INTERP`,
+`SHAPOGFX3D_HOT_ATTR`, `SHAPOGFX3D_HOT_INSTANTIATE` and
+`SHAPOGFX_ARCH_SPLIT_MUL64` are Kconfig symbols of the same name
+(`CONFIG_SHAPOGFX_FORMAT_GRAY1`, ...) with the same defaults; the format macros
+and `SHAPOGFX_COORD_BITS` are passed on to the components that require
+`shapo-gfx`. `SHAPOGFX3D_DEPTH_BITS` is the choice
+`CONFIG_SHAPOGFX3D_DEPTH_BITS_32` / `_16` and `SHAPOGFX2D_FPU_SQRT` the choice
+`CONFIG_SHAPOGFX2D_FPU_SQRT_AUTO` / `_ON` / `_OFF`, where `AUTO` leaves the
+detection to the library.
 
 `SHAPOGFX_COORD_BITS` bounds what the renderers have to handle: a surface or a 3D
 screen wider or taller than `SHAPOGFX_COORD_MAX` (`2^bits - 1`) pixels is rejected
@@ -1577,7 +1591,8 @@ served as a static site.
 - `example/m5cores3/demorig/`, `example/m5tab5/demorig/`: demorig on M5Stack
   CoreS3 (320 x 240, touch) and Tab5 (a 640 x 360 frame scaled twice by the PPA,
   touch), ESP-IDF 5.5 projects sharing the components of
-  `example/m5common/` (ShapoGFX, the scene, and the M5Unified front end). A frame
+  `example/m5common/` (the scene and the M5Unified front end) and taking the
+  repository itself as the ShapoGFX component. A frame
   is drawn in strips of 60 rows, each split between the two cores,
   into two buffers in internal RAM: one strip is drawn while the previous one goes
   out by SPI DMA (the CoreS3) or the PPA (the Tab5), and the last one is

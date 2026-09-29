@@ -1,0 +1,175 @@
+# Options of ShapoGFX as an ESP-IDF component (idf.py menuconfig). Each symbol
+# is CONFIG_<macro> of a compile-time option of SPEC.md and is turned into
+# that macro by cmake/esp_idf.cmake. The defaults are the ones of the library
+# on an ESP32: keep them in sync with config.hpp, src/gfx2d/internal.hpp and
+# src/gfx3d/gfx3d.cpp.
+menu "ShapoGFX"
+
+    menu "Pixel formats"
+
+        config SHAPOGFX_FORMAT_GRAY1
+            bool "GRAY1"
+            default y
+            help
+                Disabling a pixel format removes its code from both the 2D
+                and the 3D renderer. Surfaces and textures in a disabled
+                format are ignored.
+
+        config SHAPOGFX_FORMAT_RGB444
+            bool "RGB444"
+            default y
+
+        config SHAPOGFX_FORMAT_ARGB4444
+            bool "ARGB4444"
+            default y
+
+        config SHAPOGFX_FORMAT_RGB565_SWAPPED
+            bool "RGB565_SWAPPED (display byte order)"
+            default y
+
+        config SHAPOGFX_FORMAT_RGB565
+            bool "RGB565 (native byte order)"
+            default n
+            help
+                As a 3D output format it costs as much code as
+                RGB565_SWAPPED.
+
+    endmenu
+
+    config SHAPOGFX_COORD_BITS
+        int "Bits of a screen coordinate"
+        range 1 15
+        default 11
+        help
+            Bits of a screen coordinate and of a surface's width and height.
+            Surfaces wider or taller than 2^bits - 1 pixels are rejected.
+
+    menu "2D renderer"
+
+        config SHAPOGFX2D_TRANSFORM
+            bool "Transforms"
+            default y
+            help
+                Disabled, the transform stays the identity and
+                setTransform() and friends do nothing.
+
+        config SHAPOGFX2D_BLEND
+            bool "Blend modes and opacity"
+            default y
+            help
+                Disabled, only the ALPHA blend mode is left and setBlend()
+                does nothing.
+
+        config SHAPOGFX2D_COLOR_KEY
+            bool "Color key of drawImage()"
+            default y
+
+        config SHAPOGFX2D_RIG
+            bool "Skeletal animation (rig.hpp)"
+            default y
+            help
+                Disabled, rig::Instance::init() returns false and the rest
+                does nothing.
+
+        config SHAPOGFX2D_STACK_DEPTH
+            int "Levels of the state stack"
+            range 1 256
+            default 16
+
+        choice SHAPOGFX2D_FPU_SQRT_CHOICE
+            prompt "Square root of the ellipse extents"
+            default SHAPOGFX2D_FPU_SQRT_AUTO
+            help
+                The integer square root can be seeded by the FPU's sqrtf().
+                The result is the same either way.
+
+            config SHAPOGFX2D_FPU_SQRT_AUTO
+                bool "Detected from the target"
+            config SHAPOGFX2D_FPU_SQRT_ON
+                bool "Seeded by the FPU"
+            config SHAPOGFX2D_FPU_SQRT_OFF
+                bool "Integer only"
+        endchoice
+
+    endmenu
+
+    menu "3D renderer"
+
+        config SHAPOGFX3D_TEXTURE
+            bool "Texture and environment mapping"
+            default y
+
+        config SHAPOGFX3D_GOURAUD
+            bool "Gouraud shading"
+            default y
+            help
+                Disabled, triangles are flat shaded.
+
+        config SHAPOGFX3D_BLEND
+            bool "Translucency"
+            default y
+
+        config SHAPOGFX3D_LINES
+            bool "LINES / LINE_STRIP / LINE_LOOP primitives"
+            default y
+
+        config SHAPOGFX3D_POINTS
+            bool "POINTS primitives"
+            default y
+
+        config SHAPOGFX3D_FIXED_POINT
+            bool "Fixed-point vertex stage and setup"
+            default n
+            help
+                For cores without an FPU. Pictures are not pixel-identical
+                to the float path.
+
+        config SHAPOGFX3D_CORRECT_PERSPECTIVE
+            int "Perspective correction level"
+            range 0 2
+            default 1
+
+        config SHAPOGFX3D_PERSPECTIVE_STEP
+            int "Level 2: pixels between exact texture coordinates"
+            range 1 256
+            default 16
+            help
+                A power of two.
+
+        config SHAPOGFX3D_GOURAUD_STEP
+            int "Pixels between updates of the color modulating a texture"
+            range 1 16
+            default 1
+            help
+                A power of two.
+
+        choice SHAPOGFX3D_DEPTH_BITS_CHOICE
+            prompt "Depth resolution of the span records"
+            default SHAPOGFX3D_DEPTH_BITS_32
+
+            config SHAPOGFX3D_DEPTH_BITS_32
+                bool "32 bits"
+            config SHAPOGFX3D_DEPTH_BITS_16
+                bool "16 bits (4 bytes less per record with depth)"
+        endchoice
+
+        config SHAPOGFX3D_STACK_DEPTH
+            int "Levels of the matrix stack"
+            range 1 256
+            default 16
+
+        config SHAPOGFX3D_VCACHE_SIZE
+            int "Entries of the vertex cache"
+            range 1 65536
+            default 64
+            help
+                A power of two.
+
+        config SHAPOGFX3D_LAYER_MAX
+            int "Layers a scene can hold"
+            range 1 128
+            default 8
+
+    endmenu
+
+endmenu
