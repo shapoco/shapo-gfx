@@ -42,6 +42,38 @@ constexpr int MAX_BONES = 255;  // bone and slot indices are uint8_t
 constexpr int MAX_SLOTS = 255;
 constexpr int MAX_ATTACHMENTS = 127;
 
+// --- Room for later features -------------------------------------------------
+//
+// The structures below are meant to grow (mesh deformation, skinning, IK,
+// nested armatures, tints, ...). Generated headers initialize them by
+// position, so members are only ever appended: a header generated before a
+// member existed leaves it zero, and zero (or the enumerator 0) means "not
+// used" for every appended member. Members that would mean something else at
+// zero (the tint of a slot) are only read when a bit of `features` says the
+// data has them.
+//
+// FORMAT_VERSION counts the members added this way; a generated header
+// static_asserts on the version its members need, so that old library code
+// refuses new data at compile time rather than misreading it.
+constexpr uint16_t FORMAT_VERSION = 1;
+
+// Bits of Armature::features and Animation::features. None is defined yet: a
+// feature added later takes a bit here, and generated data sets it when it
+// uses the feature. The bits this build of rig honors; Instance::init() and
+// pose() refuse data with any other bit set, since drawing it without the
+// feature would show something else than what was made.
+constexpr uint16_t SUPPORTED_FEATURES = 0;
+
+// What an attachment is. Only IMAGE is drawn today; the others name what a
+// DragonBones display can be, so that a later version can put its data
+// behind Attachment::ext without moving the images.
+enum class AttachmentKind : uint8_t {
+  IMAGE,         // a part of a texture (Attachment::texture, src)
+  MESH,          // reserved: a textured mesh, deformable / skinned
+  ARMATURE,      // reserved: a nested armature
+  BOUNDING_BOX,  // reserved: a hit area, not drawn
+};
+
 // --- Armature (static data) ---------------------------------------------------
 
 struct Bone {
@@ -50,6 +82,10 @@ struct Bone {
   angle16_t rotX, rotY;   // DragonBones skX / skY
   scale16_t scaleX, scaleY;
   uint8_t parent;         // a smaller index, or NO_PARENT
+  // Reserved for how the bone inherits from its parent (DragonBones'
+  // inheritRotation / inheritScale / inheritReflection); 0 today: everything
+  // is inherited. Fills the padding.
+  uint8_t flags;
 };
 
 // An image a slot can show (a DragonBones "display")
@@ -62,6 +98,11 @@ struct Attachment {
   // / 0: the whole rectangle
   const int16_t *hull;
   uint8_t hullCount;
+  AttachmentKind kind;  // IMAGE today; anything else is not drawn
+  uint8_t pad[2];
+  // Reserved for the data of the other kinds (a Mesh, an Armature, a hit
+  // area, by `kind`); nullptr today
+  const void *ext;
 };
 
 struct Slot {
@@ -72,6 +113,11 @@ struct Slot {
   uint8_t bone;
   uint8_t alpha;             // 0..255
   BlendMode blend;           // ALPHA or ADD
+  // Reserved for the RGB tint of the slot (DragonBones' color transform); a
+  // feature bit will say when they are meaningful, since a header generated
+  // before them leaves 0, 0, 0. dbones2cpp writes 255, 255, 255 (no tint).
+  // Fills the padding.
+  uint8_t tintR, tintG, tintB;
 };
 
 struct Armature {
@@ -84,6 +130,9 @@ struct Armature {
   Color colorKey;
   RectF bounds;          // of the bind pose, for reference
   uint32_t signature;    // of the bone and slot names (see Animation)
+  // The features the data uses (bits to be defined; 0 today). init() refuses
+  // an armature with a bit outside SUPPORTED_FEATURES.
+  uint16_t features;
 };
 
 // --- Animation (static data) ----------------------------------------------------
@@ -110,7 +159,9 @@ struct TranslateKey {
 struct RotateKey {
   uint16_t frame;
   uint8_t curve;
-  uint8_t pad;
+  // Reserved for extra whole turns to the next key (DragonBones' clockwise /
+  // tweenRotate); 0 today: the shortest way. Was padding.
+  int8_t turns;
   angle16_t rotX, rotY;
 };
 struct ScaleKey {
@@ -162,6 +213,9 @@ struct Animation {
   const DrawOrderKey *drawOrderKeys;  // by frame
   const Curve *curves;
   uint32_t signature;  // Armature::signature of the armature it animates
+  // The features the data uses (as Armature::features; 0 today). pose()
+  // refuses an animation with a bit outside SUPPORTED_FEATURES.
+  uint16_t features;
 };
 
 // The frame at `seconds` of playing from frame 0; with `loop`, wrapped to

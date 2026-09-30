@@ -1415,6 +1415,8 @@ class Names:
 
 
 RIG = "shapoco::gfx2d::rig"
+# The rig::FORMAT_VERSION the generated headers need (the members they initialize)
+RIG_FORMAT_VERSION = 1
 
 
 def generate_header(c, namespace, guard, opts, sources):
@@ -1508,21 +1510,23 @@ def generate_header(c, namespace, guard, opts, sources):
             tex = f"&{a.texture}" if a.image_key is not None else "nullptr"
             loc = ", ".join(fmt_float(v) for v in a.local)
             hn, hc = hull_names.get(a.image_key, ("nullptr", 0))
-            body.append(f"  {{{tex}, {{{a.src[0]}, {a.src[1]}, {a.src[2]}, {a.src[3]}}}, {{{loc}}}, {hn}, {hc}}},")
+            # kind IMAGE, pad, ext: reserved for later kinds of attachments
+            body.append(f"  {{{tex}, {{{a.src[0]}, {a.src[1]}, {a.src[2]}, {a.src[3]}}}, {{{loc}}}, {hn}, {hc}, "
+                        f"{RIG}::AttachmentKind::IMAGE, {{0, 0}}, nullptr}},")
         body.append("};")
-        stats["bytes"] += 52 * len(s["attachments"])
+        stats["bytes"] += 56 * len(s["attachments"])
     names.used.update(("bones", "slots", "armature", "animations", "ANIMATION_COUNT"))
     body += ["", f"static const {RIG}::Bone bones[] = {{"]
     for b in c.bones:
         body.append(f"  {{{c_string(b['name'])}, {fmt_float(b['x'])}, {fmt_float(b['y'])}, "
                     f"{b['rotX']}, {b['rotY']}, {b['scaleX']}, {b['scaleY']}, "
-                    f"{'0xFF' if b['parent'] == NO_PARENT else b['parent']}}},")
+                    f"{'0xFF' if b['parent'] == NO_PARENT else b['parent']}, 0}},")  # 0: reserved flags
     body.append("};")
     stats["bytes"] += 24 * len(c.bones)
     body += ["", f"static const {RIG}::Slot slots[] = {{"]
     for s, an in zip(c.slots, att_names):
         body.append(f"  {{{c_string(s['name'])}, {an}, {len(s['attachments'])}, {s['default']}, {s['bone']}, "
-                    f"{s['alpha']}, shapoco::gfx2d::BlendMode::{s['blend']}}},")
+                    f"{s['alpha']}, shapoco::gfx2d::BlendMode::{s['blend']}, 255, 255, 255}},")  # no tint (reserved)
     body.append("};")
     stats["bytes"] += 16 * len(c.slots)
     if c.bounds is not None:
@@ -1536,6 +1540,7 @@ def generate_header(c, namespace, guard, opts, sources):
              f"  {'true' if keyed else 'false'}, {key_hex},",
              "  {" + ", ".join(fmt_float(v) for v in bounds) + "},",
              f"  0x{c.signature:08X}u,",
+             "  0,  // features (reserved)",
              "};"]
 
     anim_names = []
@@ -1560,6 +1565,7 @@ def generate_header(c, namespace, guard, opts, sources):
                 if ch == "TRANSLATE":
                     body.append(f"  {{{f}, 0x{cv:02X}, 0, {fmt_float(v[0])}, {fmt_float(v[1])}}},")
                 elif ch in ("ROTATE", "SCALE"):
+                    # the 0 is RotateKey::turns (reserved) / ScaleKey::pad
                     body.append(f"  {{{f}, 0x{cv:02X}, 0, {v[0]}, {v[1]}}},")
                 elif ch == "ATTACHMENT":
                     body.append(f"  {{{f}, {v[0]}, 0}},")
@@ -1606,8 +1612,9 @@ def generate_header(c, namespace, guard, opts, sources):
                  f"{len(a.bone_timelines)}, {len(a.slot_timelines)}, {len(a.curves)}, {len(a.draw_order_keys)},",
                  f"  {timelines['bone']}, {timelines['slot']}, {dok}, {an + '_curves' if a.curves else 'nullptr'},",
                  f"  0x{a.signature:08X}u,",
+                 "  0,  // features (reserved)",
                  "};"]
-        stats["bytes"] += 32
+        stats["bytes"] += 36
     body += ["", f"static const {RIG}::Animation *const animations[] = {{"
              + (", ".join("&" + n for n in anim_names) if anim_names else "nullptr") + "};",
              f"static constexpr int ANIMATION_COUNT = {len(anim_names)};"]
@@ -1634,6 +1641,10 @@ def generate_header(c, namespace, guard, opts, sources):
             head.append(f"//   {m}")
         if len(ws) > 20:
             head.append(f"//   ... {len(ws) - 20} more")
-    head += ["", '#include "shapoco/gfx2d/rig.hpp"', "", f"namespace {namespace} {{"]
+    # The members this output initializes exist from rig format 1 on
+    head += ["", '#include "shapoco/gfx2d/rig.hpp"', "",
+             f"static_assert({RIG}::FORMAT_VERSION >= {RIG_FORMAT_VERSION},",
+             '              "this header needs a newer ShapoGFX (rig.hpp FORMAT_VERSION)");',
+             "", f"namespace {namespace} {{"]
     tail = ["", f"}}  // namespace {namespace}", "", "#endif", ""]
     return "\n".join(head + body + tail), stats

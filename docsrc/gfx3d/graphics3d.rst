@@ -72,14 +72,20 @@ Material
      colorf ambient;          // 環境反射色
      const Texture *texture;  // 未使用なら nullptr
      BlendMode blendMode;     // NONE, ALPHA, ADD
+     uint8_t alphaCutoff;     // 予約 (MASK のアルファ閾値)。今は 0
+     uint8_t wrap;            // 予約 (テクスチャのラップ / サンプリング)。今は 0
+     uint8_t shininess;       // 予約 (鏡面反射の指数)。今は 0
      uint32_t flags;          // MaterialFlags の組み合わせ
    };
+
+``alphaCutoff`` / ``wrap`` / ``shininess`` は元はパディングだった位置にあり、レンダラは読みません
+(:doc:`scene` の「将来の拡張のための予約」)。
 
 .. code-block:: cpp
 
    static const g3::Material matGlass = {
        {0.4f, 0.7f, 1.0f, 0.45f}, {0.4f, 0.7f, 1.0f, 1.0f},
-       nullptr, g3::BlendMode::ALPHA, g3::MaterialFlags::DOUBLE_SIDED,
+       nullptr, g3::BlendMode::ALPHA,  0, 0, 0, g3::MaterialFlags::DOUBLE_SIDED,
    };
 
 Primitive
@@ -98,11 +104,14 @@ Primitive
 
    struct Primitive {
      PrimitiveType type;
-     const VertexBuffer *vertexBuffer;
+     uint8_t flags;             // 予約 (プリミティブ単位のオプション)。今は 0
      uint16_t indexCount;
+     const VertexBuffer *vertexBuffer;
      const uint16_t *indices;
      const Material *material;  // nullptr なら setMaterial() で設定したマテリアル
    };
+
+``flags`` は元はパディングだった位置で、``indexCount`` をその隣に移したので 32bit ターゲットで 16 バイトです。
 
 Config / LayerFlags
 --------------------------------------------------------------------------------

@@ -51,7 +51,7 @@ template <typename F>
 void putParametric(Graphics3D &g, int rows, int cols, bool flip, F vertexAt) {
   Vertex buf[STRIP_VERTS];
   VertexBuffer vb = {0, buf};
-  Primitive prim = {PrimitiveType::TRIANGLE_STRIP, &vb, 0, SEQ.idx, nullptr};
+  Primitive prim = {PrimitiveType::TRIANGLE_STRIP, 0, 0, &vb, SEQ.idx, nullptr};
   for (int i = 0; i < rows; i++) {
     for (int j0 = 0; j0 < cols; j0 += CHUNK) {
       const int n = std::min(CHUNK, cols - j0);
@@ -75,7 +75,7 @@ void putFan(Graphics3D &g, const Vertex &centerVertex, int segments, bool flip,
             F rimAt) {
   Vertex buf[CHUNK + 2];
   VertexBuffer vb = {0, buf};
-  Primitive prim = {PrimitiveType::TRIANGLE_FAN, &vb, 0, SEQ.idx, nullptr};
+  Primitive prim = {PrimitiveType::TRIANGLE_FAN, 0, 0, &vb, SEQ.idx, nullptr};
   buf[0] = centerVertex;
   for (int j0 = 0; j0 < segments; j0 += CHUNK) {
     const int n = std::min(CHUNK, segments - j0);
@@ -253,7 +253,7 @@ void Graphics3D::putIcosphere(const vec3f &c, float radius, int level) {
 
   Vertex buf[STRIP_VERTS];
   VertexBuffer vb = {0, buf};
-  Primitive prim = {PrimitiveType::TRIANGLE_STRIP, &vb, 0, SEQ.idx, nullptr};
+  Primitive prim = {PrimitiveType::TRIANGLE_STRIP, 0, 0, &vb, SEQ.idx, nullptr};
 
   for (int f = 0; f < 20; f++) {
     const vec3f a = ICO_VERTS[ICO_FACES[f][0]];
@@ -313,7 +313,7 @@ void Graphics3D::putLine(const vec3f &a, const vec3f &b) {
                        {b, {0, 1, 0}, {0, 0}, VERTEX_WHITE}};
   static const uint16_t IDX[2] = {0, 1};
   const VertexBuffer vb = {2, v};
-  const Primitive prim = {PrimitiveType::LINES, &vb, 2, IDX, nullptr};
+  const Primitive prim = {PrimitiveType::LINES, 0, 2, &vb, IDX, nullptr};
   putPrimitive(prim);
 }
 
@@ -332,7 +332,7 @@ void Graphics3D::putWireCube(const vec3f &c, const vec3f &size) {
                                    0, 2, 1, 3, 4, 6, 5, 7,   // y
                                    0, 4, 1, 5, 2, 6, 3, 7};  // z
   const VertexBuffer vb = {8, v};
-  const Primitive prim = {PrimitiveType::LINES, &vb, 24, IDX, nullptr};
+  const Primitive prim = {PrimitiveType::LINES, 0, 24, &vb, IDX, nullptr};
   putPrimitive(prim);
 }
 

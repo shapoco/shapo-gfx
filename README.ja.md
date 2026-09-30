@@ -98,7 +98,7 @@ project(your_project)
 dependencies:
   shapo-gfx:
     git: https://github.com/shapoco/shapo-gfx.git
-    version: v1.5.0
+    version: v1.6.0
 ```
 
 (`git:` と `version:` の代わりに `path: ${SHAPOGFX_PATH}` と書くと、ローカルの clone を参照します)。

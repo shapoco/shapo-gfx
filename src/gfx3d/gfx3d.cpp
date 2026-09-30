@@ -2875,7 +2875,7 @@ void Graphics3D::putCube(const vec3f &center, const vec3f &size, int divs) {
           quad[k].color = VERTEX_WHITE;
         }
         VertexBuffer vb = {4, quad};
-        Primitive prim = {PrimitiveType::TRIANGLES, &vb, 6, QUAD_INDICES,
+        Primitive prim = {PrimitiveType::TRIANGLES, 0, 6, &vb, QUAD_INDICES,
                           nullptr};
         putPrimitiveWith(prim, curMat_, ps);
       }

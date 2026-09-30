@@ -57,7 +57,14 @@ gltf2cpp: glTF モデルを C++ コードに変換する
    "``mesh<i>Prim<j>Vertices`` / ``...Vb`` / ``...Indices``", "プリミティブの頂点配列、``VertexBuffer``、添字配列"
    "``mesh<i>Prims``, ``mesh<i>``", "プリミティブ配列と ``Mesh``"
    "``node_<名前>`` または ``node<i>``", "ノード。glTF の名前が識別子として使えて重複しなければ名前付き。子は親より前に定義される"
+   "``node_<名前>Trs``", "合成前の T / R / S (``NodeTRS``)。TRS で与えられたノードのみ (matrix のノードは ``trs`` が nullptr)"
+   "``nodes[]``", "全ノードの表 (glTF の添字順)。各 ``Scene`` の ``nodes`` / ``nodeCount`` が指す"
    "``scene<i>``, ``scene``", "シーンと既定シーンの参照"
+
+先頭の ``static_assert`` は、このヘッダが初期化するメンバを持つ ``g3::MODEL_FORMAT_VERSION`` を要求します
+(古いライブラリではコンパイル時に止まる)。将来の機能のために予約されたメンバ (``Material`` の
+``alphaCutoff`` / ``wrap`` / ``shininess``、``Primitive::flags``、``Mesh::flags``、``Node::flags``) は 0 で
+書き出します (:doc:`../gfx3d/scene` の「将来の拡張のための予約」)。
 
 .. code-block:: cpp
 

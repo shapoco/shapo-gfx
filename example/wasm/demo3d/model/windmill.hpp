@@ -11,6 +11,9 @@ namespace windmill {
 namespace g2 = shapoco::gfx2d;
 namespace g3 = shapoco::gfx3d;
 
+static_assert(g3::MODEL_FORMAT_VERSION >= 1,
+              "this header needs a newer ShapoGFX (gfx3d.hpp MODEL_FORMAT_VERSION)");
+
 // mesh 0 primitive 0: 56 vertices, 84 indices
 static const g3::Vertex mesh0Prim0Vertices[] = {
   {{0.388909f, 0.0f, 0.388909f}, {0.920638f, 0.0836944f, 0.381341f}, {0.0f, 0.0f}, 0xFF785032u},
@@ -82,13 +85,13 @@ static const uint16_t mesh0Prim0Indices[] = {
 
 static const g3::Material mat0Vc = {
   {1.0f, 1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, nullptr,
-  g3::BlendMode::NONE, g3::MaterialFlags::VERTEX_COLOR,
+  g3::BlendMode::NONE, 0, 0, 0, g3::MaterialFlags::VERTEX_COLOR,
 };
 
 static const g3::Primitive mesh0Prims[] = {
-  {g3::PrimitiveType::TRIANGLES, &mesh0Prim0Vb, 84, mesh0Prim0Indices, &mat0Vc},
+  {g3::PrimitiveType::TRIANGLES, 0, 84, &mesh0Prim0Vb, mesh0Prim0Indices, &mat0Vc},
 };
-static const g3::Mesh mesh0 = {mesh0Prims, 1};
+static const g3::Mesh mesh0 = {mesh0Prims, 1, 0};
 
 // mesh 1 primitive 0: 24 vertices, 24 indices
 static const g3::Vertex mesh1Prim0Vertices[] = {
@@ -124,9 +127,9 @@ static const uint16_t mesh1Prim0Indices[] = {
 };
 
 static const g3::Primitive mesh1Prims[] = {
-  {g3::PrimitiveType::TRIANGLES, &mesh1Prim0Vb, 24, mesh1Prim0Indices, &mat0Vc},
+  {g3::PrimitiveType::TRIANGLES, 0, 24, &mesh1Prim0Vb, mesh1Prim0Indices, &mat0Vc},
 };
-static const g3::Mesh mesh1 = {mesh1Prims, 1};
+static const g3::Mesh mesh1 = {mesh1Prims, 1, 0};
 
 // mesh 2 primitive 0: 216 vertices, 324 indices
 static const g3::Vertex mesh2Prim0Vertices[] = {
@@ -373,10 +376,11 @@ static const uint16_t mesh2Prim0Indices[] = {
 };
 
 static const g3::Primitive mesh2Prims[] = {
-  {g3::PrimitiveType::TRIANGLES, &mesh2Prim0Vb, 324, mesh2Prim0Indices, &mat0Vc},
+  {g3::PrimitiveType::TRIANGLES, 0, 324, &mesh2Prim0Vb, mesh2Prim0Indices, &mat0Vc},
 };
-static const g3::Mesh mesh2 = {mesh2Prims, 1};
+static const g3::Mesh mesh2 = {mesh2Prims, 1, 0};
 
+static const g3::NodeTRS node_TowerTrs = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
 static const g3::Node node_Tower = {
   "Tower",
   {{1.0f, 0.0f, 0.0f, 0.0f,
@@ -385,8 +389,10 @@ static const g3::Node node_Tower = {
     0.0f, 0.0f, 0.0f, 1.0f}},
   &mesh0,
   nullptr, 0,
+  0, &node_TowerTrs,  // flags (reserved), TRS
 };
 
+static const g3::NodeTRS node_RoofTrs = {{0.0f, 2.2f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
 static const g3::Node node_Roof = {
   "Roof",
   {{1.0f, 0.0f, 0.0f, 0.0f,
@@ -395,8 +401,10 @@ static const g3::Node node_Roof = {
     0.0f, 2.2f, 0.0f, 1.0f}},
   &mesh1,
   nullptr, 0,
+  0, &node_RoofTrs,  // flags (reserved), TRS
 };
 
+static const g3::NodeTRS node_BladesTrs = {{0.0f, 2.1f, 0.5f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
 static const g3::Node node_Blades = {
   "Blades",
   {{1.0f, 0.0f, 0.0f, 0.0f,
@@ -405,9 +413,11 @@ static const g3::Node node_Blades = {
     0.0f, 2.1f, 0.5f, 1.0f}},
   &mesh2,
   nullptr, 0,
+  0, &node_BladesTrs,  // flags (reserved), TRS
 };
 
 static const g3::Node *const node_WindmillChildren[] = {&node_Tower, &node_Roof, &node_Blades};
+static const g3::NodeTRS node_WindmillTrs = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
 static const g3::Node node_Windmill = {
   "Windmill",
   {{1.0f, 0.0f, 0.0f, 0.0f,
@@ -416,10 +426,14 @@ static const g3::Node node_Windmill = {
     0.0f, 0.0f, 0.0f, 1.0f}},
   nullptr,
   node_WindmillChildren, 3,
+  0, &node_WindmillTrs,  // flags (reserved), TRS
 };
 
+// All nodes in the order of the file (glTF node indices)
+static const g3::Node *const nodes[] = {&node_Windmill, &node_Tower, &node_Roof, &node_Blades};
+
 static const g3::Node *const scene0Roots[] = {&node_Windmill};
-static const g3::Scene scene0 = {scene0Roots, 1};
+static const g3::Scene scene0 = {scene0Roots, 1, 4, nodes};
 
 static const g3::Scene &scene = scene0;  // default scene
 

@@ -153,6 +153,8 @@ size_t Instance::bytes(const Armature &a) {
 bool Instance::init(const Armature &a, void *memory, size_t size) {
   deinit();
   if (!RIG || !memory) return false;
+  // Data made for a feature this build does not have would draw wrong
+  if (a.features & ~SUPPORTED_FEATURES) return false;
   const uintptr_t p0 = (uintptr_t)memory, p = (p0 + 3u) & ~(uintptr_t)3u;
   const size_t need = sizeof(affine2f) * a.boneCount +
                       sizeof(SlotState) * a.slotCount + a.slotCount;
@@ -177,6 +179,7 @@ void Instance::deinit() {
 
 bool Instance::pose(const Animation &anim, float frame, BoneVisitor *visitor) {
   if (!RIG || !arm_ || anim.signature != arm_->signature) return false;
+  if (anim.features & ~SUPPORTED_FEATURES) return false;
   apply(&anim, frame, visitor);
   return true;
 }
@@ -267,7 +270,8 @@ void Instance::updateSlot(int s) {
       sl.bone >= arm_->boneCount)
     return;
   const Attachment &at = sl.attachments[st.attachment];
-  if (!at.texture) return;
+  // Only images are drawn; the other kinds are reserved
+  if (at.kind != AttachmentKind::IMAGE || !at.texture) return;
   const affine2f m = world_[sl.bone] * at.local;
   const float w = (float)at.src.width, h = (float)at.src.height;
   // The corners: m.apply(0, 0) + {0, a w} + {0, c h}

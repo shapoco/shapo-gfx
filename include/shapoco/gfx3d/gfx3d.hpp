@@ -17,6 +17,19 @@ using gfx2d::Texture;
 
 // ---------------------------------------------------------------------------
 // Data structures
+//
+// Room for later features: the model structures (Material, Primitive, Mesh,
+// Node, Scene) are meant to grow (skinning, keyframe animation, morph targets,
+// more material parameters). Generated headers initialize them by position,
+// so from MODEL_FORMAT_VERSION 1 on members are only appended, a header
+// generated before a member leaves it zero, and zero means "not used" for
+// every appended member. The members marked reserved sit where padding was;
+// they cost nothing, gltf2cpp writes them as 0 and the renderer ignores them.
+//
+// MODEL_FORMAT_VERSION counts the members added this way; a generated header
+// static_asserts on the version it needs, so old library code refuses new
+// data at compile time rather than misreading it.
+constexpr uint16_t MODEL_FORMAT_VERSION = 1;
 
 struct Vertex {
   vec3f position;
@@ -94,7 +107,11 @@ struct Material {
   colorf ambient;          // ambient color
   const Texture *texture;  // texture (may be nullptr when unused)
   BlendMode blendMode;
-  uint32_t flags;  // combination of MaterialFlags
+  // Reserved, in what was padding (0 today, ignored by the renderer):
+  uint8_t alphaCutoff;  // alpha test threshold of a MASK material; 0: none
+  uint8_t wrap;         // texture wrap / sampling modes; 0: repeat
+  uint8_t shininess;    // specular exponent; 0: no specular term
+  uint32_t flags;       // combination of MaterialFlags
 };
 
 // Triangles are lit, textured and back-face culled. Points and lines are
@@ -113,8 +130,10 @@ enum class PrimitiveType : uint8_t {
 
 struct Primitive {
   PrimitiveType type;
-  const VertexBuffer *vertexBuffer;
+  uint8_t flags;  // reserved for per-primitive options (culling, depth, ...);
+                  // 0 today, in what was padding
   uint16_t indexCount;
+  const VertexBuffer *vertexBuffer;
   const uint16_t *indices;
   const Material
       *material;  // nullptr: use the material set by Graphics3D::setMaterial()
@@ -155,6 +174,18 @@ struct Stats {
 struct Mesh {
   const Primitive *primitives;  // each primitive carries its own material
   uint16_t primitiveCount;
+  uint16_t flags;  // reserved (morph targets, bounds, ...); 0 today, fills
+                   // the padding
+};
+
+// A node's transform before composition (glTF's translation / rotation /
+// scale; transform = T * R * S), for a later keyframe animation to change one
+// component of. gltf2cpp emits it for nodes given as TRS, nullptr for nodes
+// given as a matrix. The renderer reads Node::transform only.
+struct NodeTRS {
+  vec3f translation;
+  float rotation[4];  // unit quaternion x, y, z, w
+  vec3f scale;
 };
 
 struct Node {
@@ -163,11 +194,19 @@ struct Node {
   const Mesh *mesh;             // may be nullptr
   const Node *const *children;  // may be nullptr when childCount == 0
   uint16_t childCount;
+  uint16_t flags;         // reserved (hidden, no culling, skin, ...); 0 today,
+                          // fills the padding
+  const NodeTRS *trs;     // reserved for animation; may be nullptr
 };
 
 struct Scene {
   const Node *const *roots;
   uint16_t rootCount;
+  // Every node of the model in the order of the source file (glTF node
+  // indices), the order an animation channel or a skin refers to. Reserved
+  // for them; nullptr / 0 when not available (nodeCount fills the padding).
+  uint16_t nodeCount;
+  const Node *const *nodes;
 };
 
 // Optional per-node hook for putNode()/putScene(): may modify the local

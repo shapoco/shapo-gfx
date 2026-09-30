@@ -19,6 +19,14 @@
    struct Mesh {
      const Primitive *primitives;   // 各プリミティブは自身のマテリアルを持つ
      uint16_t primitiveCount;
+     uint16_t flags;                // 予約。今は 0
+   };
+
+   // 合成前の変換 (glTF の translation / rotation / scale; transform = T * R * S)
+   struct NodeTRS {
+     vec3f translation;
+     float rotation[4];             // 単位四元数 x, y, z, w
+     vec3f scale;
    };
 
    struct Node {
@@ -27,11 +35,15 @@
      const Mesh *mesh;              // nullptr でもよい
      const Node *const *children;   // childCount == 0 なら nullptr でもよい
      uint16_t childCount;
+     uint16_t flags;                // 予約。今は 0
+     const NodeTRS *trs;            // 予約 (アニメーション用)。nullptr でもよい
    };
 
    struct Scene {
      const Node *const *roots;
      uint16_t rootCount;
+     uint16_t nodeCount;            // 予約: 全ノードの表 (glTF の添字順)。nullptr / 0 でもよい
+     const Node *const *nodes;
    };
 
 .. code-block:: cpp
@@ -42,7 +54,27 @@
    static const g3::Node *const carChildren[] = {&wheelL, &wheelR};
    static const g3::Node car = {"Car", g3::mat4f::identity(), &bodyMesh, carChildren, 2};
    static const g3::Node *const roots[] = {&car};
-   static const g3::Scene scene = {roots, 1};
+   static const g3::Scene scene = {roots, 1};   // 末尾の予約メンバは省略でき、0 / nullptr になる
+
+将来の拡張のための予約
+--------------------------------------------------------------------------------
+
+スキニング、キーフレームアニメーション、モーフターゲット、マテリアルの追加パラメータを後から足せるように、
+モデルの構造体には予約メンバがあります。生成ヘッダは位置指定で初期化するので、``MODEL_FORMAT_VERSION`` 1
+以降メンバは **末尾にしか追加しません**。追加前に生成したヘッダではそのメンバは 0 になり、追加されたメンバは
+すべて「0 = 使っていない」の意味です。gltf2cpp の出力は必要な世代を ``static_assert`` するので、古いライブラリ
+で新しい生成ヘッダを使うとコンパイル時に止まります。レンダラは予約メンバを読みません。
+
+- 元はパディングだった位置 (コストなし): ``Material::alphaCutoff`` / ``wrap`` / ``shininess``、
+  ``Primitive::flags``、``Mesh::flags``、``Node::flags``、``Scene::nodeCount``。
+- ``Node::trs``: 変換を合成する前の T / R / S。アニメーションはこの一成分を動かします。gltf2cpp は TRS で
+  与えられたノードに出力し、matrix で与えられたノードでは nullptr です。
+- ``Scene::nodes``: 全ノードの表 (glTF の添字順)。glTF のアニメーションチャネルとスキンはノードを添字で参照
+  するので、その足場です。
+
+スキン、モーフターゲット、アニメーション本体は、必要になった時点で末尾に配列として足し、実行時の状態は
+別のオブジェクトが持つ想定です。``VertexBuffer`` と ``FixedVertex`` のパディングは途中にあり、メンバを入れると
+手書きの ``{count, vertices}`` の書き方が壊れるうえ使い道も見当たらないので、そのままにしています。
 
 ``mat4f`` は集成体なので ``{{16 個の float}}`` (列優先) でも初期化できます。gltf2cpp はこの形式で出力します。
 

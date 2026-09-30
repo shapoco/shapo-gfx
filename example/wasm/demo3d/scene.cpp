@@ -109,36 +109,36 @@ static void generateTextures() {
 
 static const g3::Material matFloor = {
     {0.9f, 0.9f, 0.9f, 1.0f}, {0.9f, 0.9f, 0.9f, 1.0f},   &texChecker,
-    g3::BlendMode::NONE,      g3::MaterialFlags::TEXTURE,
+    g3::BlendMode::NONE,       0, 0, 0, g3::MaterialFlags::TEXTURE,
 };
 static const g3::Material matChrome = {
     {0.9f, 0.95f, 1.0f, 1.0f},
     {0.9f, 0.95f, 1.0f, 1.0f},
     &texEnv,
     g3::BlendMode::NONE,
-    g3::MaterialFlags::TEXTURE | g3::MaterialFlags::ENV_MAP,
+     0, 0, 0, g3::MaterialFlags::TEXTURE | g3::MaterialFlags::ENV_MAP,
 };
 static const g3::Material matRed = {
     {0.9f, 0.15f, 0.1f, 1.0f},
     {0.9f, 0.15f, 0.1f, 1.0f},
     nullptr,
     g3::BlendMode::NONE,
-    0,
+     0, 0, 0, 0,
 };
 static const g3::Material matGlass = {
     {0.4f, 0.7f, 1.0f, 0.45f}, {0.4f, 0.7f, 1.0f, 1.0f},        nullptr,
-    g3::BlendMode::ALPHA,      g3::MaterialFlags::DOUBLE_SIDED,
+    g3::BlendMode::ALPHA,       0, 0, 0, g3::MaterialFlags::DOUBLE_SIDED,
 };
 static const g3::Material matWire = {
     {0.9f, 0.95f, 1.0f, 1.0f},
     {0.9f, 0.95f, 1.0f, 1.0f},
     nullptr,
     g3::BlendMode::NONE,
-    0,
+     0, 0, 0, 0,
 };
 static const g3::Material matGlow = {
     {1.0f, 0.7f, 0.2f, 0.8f}, {1.0f, 0.7f, 0.2f, 1.0f},        nullptr,
-    g3::BlendMode::ADD,       g3::MaterialFlags::DOUBLE_SIDED,
+    g3::BlendMode::ADD,        0, 0, 0, g3::MaterialFlags::DOUBLE_SIDED,
 };
 
 // ---------------------------------------------------------------------------

@@ -98,7 +98,7 @@ or, without a local clone, to the dependencies in `main/idf_component.yml`:
 dependencies:
   shapo-gfx:
     git: https://github.com/shapoco/shapo-gfx.git
-    version: v1.5.0
+    version: v1.6.0
 ```
 
 (`path: ${SHAPOGFX_PATH}` in place of `git:` and `version:` refers to the local

@@ -652,18 +652,23 @@ matrices (`x' = a x + c y + tx`, as `affine2f`).
 ```c++
 using angle16_t = int16_t;  // 1/65536 turn: differences wrap to the shortest way
 using scale16_t = int16_t;  // Q12 (SCALE_ONE = 4096)
+constexpr uint16_t FORMAT_VERSION = 1;      // members added so far (see "Room for later features")
+constexpr uint16_t SUPPORTED_FEATURES = 0;  // feature bits this build honors (none defined yet)
+enum class AttachmentKind : uint8_t { IMAGE, MESH, ARMATURE, BOUNDING_BOX };  // only IMAGE is drawn
 struct Bone { const char *name; float x, y; angle16_t rotX, rotY;
-              scale16_t scaleX, scaleY; uint8_t parent; };          // 24 B (32-bit)
+              scale16_t scaleX, scaleY; uint8_t parent, flags; };   // 24 B (32-bit)
 struct Attachment { const Texture *texture; Rect src; affine2f local;
-                    const int16_t *hull; uint8_t hullCount; };       // 52 B
+                    const int16_t *hull; uint8_t hullCount; AttachmentKind kind;
+                    uint8_t pad[2]; const void *ext; };              // 56 B
 struct Slot { const char *name; const Attachment *attachments; uint8_t attachmentCount;
-              int8_t defaultAttachment; uint8_t bone, alpha; BlendMode blend; };  // 16 B
+              int8_t defaultAttachment; uint8_t bone, alpha; BlendMode blend;
+              uint8_t tintR, tintG, tintB; };                        // 16 B
 struct Armature { const char *name; const Bone *bones; const Slot *slots;
                   uint8_t boneCount, slotCount; bool colorKeyEnabled; Color colorKey;
-                  RectF bounds; uint32_t signature; };
+                  RectF bounds; uint32_t signature; uint16_t features; };
 struct Curve { int16_t y[17]; };  // easing at x = i / 16, Q14
 struct TranslateKey { uint16_t frame; uint8_t curve, pad; float x, y; };
-struct RotateKey { uint16_t frame; uint8_t curve, pad; angle16_t rotX, rotY; };
+struct RotateKey { uint16_t frame; uint8_t curve; int8_t turns; angle16_t rotX, rotY; };
 struct ScaleKey { uint16_t frame; uint8_t curve, pad; scale16_t scaleX, scaleY; };
 struct AttachmentKey { uint16_t frame; int8_t attachment; uint8_t pad; };
 struct AlphaKey { uint16_t frame; uint8_t curve, alpha; };
@@ -674,7 +679,7 @@ struct Animation { const char *name; uint16_t duration; uint8_t frameRate,
                    boneTimelineCount, slotTimelineCount, curveCount;
                    uint16_t drawOrderKeyCount; const BoneTimeline *boneTimelines;
                    const SlotTimeline *slotTimelines; const DrawOrderKey *drawOrderKeys;
-                   const Curve *curves; uint32_t signature; };
+                   const Curve *curves; uint32_t signature; uint16_t features; };
 float frameAt(const Animation &, float seconds, bool loop = true);
 ```
 
@@ -700,6 +705,24 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   `CURVE_LINEAR`, `CURVE_STEP` (hold) or an index into `curves`. Draw order keys
   hold complete orders (draw position -> slot; `nullptr` returns to the base order).
   `signature` (FNV-1a of the bone and slot names) ties an animation to its armature.
+- **Room for later features** (mesh deformation, skinning, IK, nested armatures,
+  tints, ...): the structures are meant to grow. Generated headers initialize them
+  by position, so members are only appended, a header generated before a member
+  leaves it zero, and zero (or the enumerator 0) means "not used" for every
+  appended member. `FORMAT_VERSION` counts the members added this way; a generated
+  header `static_assert`s on the version it needs, so old library code refuses new
+  data at compile time instead of misreading it (a header generated before a member
+  compiles with a `-Wmissing-field-initializers` warning under `-Wextra`). The
+  reserved members, all unused today: `Bone::flags` (inheritance of rotation / scale /
+  reflection; fills the padding), `Attachment::kind` (`IMAGE`; the other kinds name
+  what a DragonBones display can be, and only `IMAGE` with a texture is drawn) and
+  `Attachment::ext` (their data), `Slot::tintR / G / B` (the RGB tint; dbones2cpp
+  writes 255, 255, 255, and since an older header leaves 0, 0, 0 they are only read
+  once a feature bit says the data has them; fill the padding),
+  `RotateKey::turns` (extra whole turns, `clockwise` / `tweenRotate`; was padding) and
+  `Armature::features` / `Animation::features`, bits the data uses, to be defined per
+  feature. `init()` and `pose()` refuse data with a bit outside `SUPPORTED_FEATURES`,
+  since drawing it without the feature would show something else than what was made.
 - `frameAt()` converts seconds to a frame (`seconds * frameRate`), wrapped to
   `[0, duration)` or clamped to `[0, duration]`.
 
@@ -708,9 +731,11 @@ float frameAt(const Animation &, float seconds, bool loop = true);
 - `static size_t bytes(const Armature &)`: 24 bytes per bone (world transforms), 12
   per slot (bounding box, attachment, alpha) and 1 per slot (draw order), rounded up
   to 4, plus 3 bytes of alignment slack. `init(armature, memory, size)` fails if the
-  memory is too small and starts in the bind pose; nothing is allocated.
+  memory is too small or `features` has a bit outside `SUPPORTED_FEATURES`, and starts
+  in the bind pose; nothing is allocated.
 - `pose(anim, frame, visitor = nullptr)` clamps `frame` to `[0, duration]` (NaN to 0)
-  and refuses (false, nothing changes) an animation whose signature differs. Per
+  and refuses (false, nothing changes) an animation whose signature differs or whose
+  `features` has a bit outside `SUPPORTED_FEATURES`. Per
   bone it starts from the bind values, adds each of its timelines (the key at or
   before the frame, `k0`, and the next, `k1`: `t = (frame - k0.frame) / (k1.frame -
   k0.frame)` in float; the Q14 easing `e` is `0` for STEP, `(int)(t * 16384)` for
@@ -723,7 +748,8 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   libm, whose `sinf()` / `cosf()` cost thousands of cycles in software floating point
   and 3.5-4 KB of code. Then each slot takes its
   attachment and alpha, and its bounding box in the armature's space (the four
-  corners of `src` through `world * local`, floor / ceil, int16). The draw order is
+  corners of `src` through `world * local`, floor / ceil, int16; an attachment
+  that is not an `IMAGE` with a texture gets an empty box and is not drawn). The draw order is
   that of the last key at or before the frame, copied only when it changes (an order
   with an index out of range falls back to the base order). `poseBind()` does the
   same without an animation. `bin/shapogfx_dbones.py` evaluates poses with the same
@@ -796,8 +822,11 @@ resampling of the turned images.
 Not supported (the tool warns and drops them): mesh deformation (FFD, weighted
 meshes), IK, nested armatures, events, the RGB tint of slots, extra turns
 (`clockwise` / `tweenRotate`), bones not inheriting rotation or scale, several skins
-at run time, blending of animations. They would be added in `rig` as new kinds
-(e.g. `MeshAttachment`, `IkConstraint`) with more memory behind `Instance::bytes()`.
+at run time, blending of animations. The structures hold room for them (see "Room
+for later features"): each would be data behind `Attachment::ext`, `Bone::flags`,
+the tint of `Slot` or `RotateKey::turns`, constraint and timeline arrays appended to
+`Armature` / `Animation` under a bit of `features`, and more memory behind
+`Instance::bytes()`.
 
 ## `shapoco::gfx3d`
 
@@ -851,6 +880,7 @@ struct Material {
   colorf ambient;          // ambient color
   const Texture *texture;  // may be nullptr when unused
   BlendMode blendMode;     // NONE, ALPHA, ADD
+  uint8_t alphaCutoff, wrap, shininess;  // reserved (were padding); 0
   uint32_t flags;          // MaterialFlags
 };
 
@@ -861,8 +891,9 @@ enum class PrimitiveType : uint8_t {
 
 struct Primitive {
   PrimitiveType type;
-  const VertexBuffer *vertexBuffer;      // either vertex form
+  uint8_t flags;                         // reserved (was padding); 0
   uint16_t indexCount;
+  const VertexBuffer *vertexBuffer;      // either vertex form
   const uint16_t *indices;
   const Material *material;  // nullptr: use the material set by setMaterial()
 };
@@ -890,10 +921,14 @@ struct Stats {
 };
 
 // Static scene description (see "Static scenes")
-struct Mesh  { const Primitive *primitives; uint16_t primitiveCount; };
+constexpr uint16_t MODEL_FORMAT_VERSION = 1;  // members added so far (see "Room for later features")
+struct Mesh  { const Primitive *primitives; uint16_t primitiveCount; uint16_t flags; };
+struct NodeTRS { vec3f translation; float rotation[4]; vec3f scale; };  // T * R * S = transform
 struct Node  { const char *name; mat4f transform; const Mesh *mesh;
-               const Node *const *children; uint16_t childCount; };
-struct Scene { const Node *const *roots; uint16_t rootCount; };
+               const Node *const *children; uint16_t childCount;
+               uint16_t flags; const NodeTRS *trs; };
+struct Scene { const Node *const *roots; uint16_t rootCount;
+               uint16_t nodeCount; const Node *const *nodes; };  // all nodes, glTF order
 class NodeVisitor { public: virtual bool onNode(const Node &, mat4f &local); };
 ```
 
@@ -1113,6 +1148,25 @@ Memory safety of scene data rests on three points: all references are to static
 storage (nothing is owned or freed), every array is paired with its count and the
 traversal never reads past it, and the index check in `putPrimitive()` bounds every
 vertex access.
+
+**Room for later features** (skinning, keyframe animation, morph targets, more
+material parameters): as in `rig`, generated headers initialize the model structures
+by position, so from `MODEL_FORMAT_VERSION` 1 on members are only appended, a header
+generated before a member leaves it zero, and zero means "not used" for every
+appended member; a generated header `static_assert`s on the version it needs. The
+renderer reads none of the reserved members. Where padding was, it holds them for
+free: `Material::alphaCutoff` / `wrap` / `shininess` (alpha test threshold, texture
+wrap modes, specular exponent), `Primitive::flags` (per-primitive options; `type` and
+`indexCount` moved next to it, so a `Primitive` is 16 bytes), `Mesh::flags`,
+`Node::flags` and `Scene::nodeCount`. Appended: `Node::trs`, the translation /
+rotation / scale the transform was composed from (what an animation changes one
+component of; gltf2cpp emits it for nodes given as TRS, nullptr for a matrix), and
+`Scene::nodes`, every node in the order of the source file, which is what glTF
+animation channels and skins refer to. Skins, morph targets and animations
+themselves would be appended arrays and a run-time state object of their own.
+`VertexBuffer` and `FixedVertex` keep their layout: their padding lies after
+`vertexCount` / before `color`, where a member would break the hand-written
+`{count, vertices}` idiom, and neither has a plausible per-buffer or per-vertex use.
 
 ### Lighting
 
@@ -1470,7 +1524,10 @@ module.
   emits, inside a namespace named after the file, `tex<i>` textures, `mat<i>` (and
   `mat<i>Vc` for primitives with vertex colors) materials, `mesh<i>Prim<j>Vertices` /
   `...Indices` / `mesh<i>`, `node_<name>` (or `node<i>`) nodes in child-first order,
-  `scene<i>` and a `scene` alias for the default scene. Vertex attributes are
+  `scene<i>` and a `scene` alias for the default scene, plus `node_<name>Trs`
+  (`NodeTRS`) for nodes given as TRS, the table `nodes` of every node in glTF
+  order that the scenes point to, a `static_assert` on `MODEL_FORMAT_VERSION >= 1` and
+  the reserved members written as 0. Vertex attributes are
   interleaved into `Vertex`, or into the 16-byte `PackedVertex` with
   `--vertex-format packed` (positions quantized over the primitive's bounding box,
   texture coordinates outside -32..32 are clamped with a warning); missing normals
@@ -1484,7 +1541,10 @@ module.
 
 - **dbones2cpp** `[--namespace NS] [--armature A] [--skin S] [--scale S] [--anim-scale auto|S] [--in-key COLOR] [--out-format argb4444|rgb565_swapped|rgb565|auto] [--auto-alpha PERCENT] [--out-key COLOR] [--alpha-threshold N] [--dither D] [--atlas-width auto|N|0] [--texture-dir DIR] [--fit-rotate] [--fit-min-gain PERCENT] [--hull N] [--preview FRAMES] [--dump-pose FRAMES] input_ske.json [extra.dbani ...] output.hpp`
   converts a DragonBones 5.x armature for `rig` (`shapogfx_dbones.py` is its core,
-  shared with the tests). It reads the 5.0 (one `frame` timeline per bone with every
+  shared with the tests). The header `static_assert`s `rig::FORMAT_VERSION >= 1`
+  (the members it initializes) and writes the members reserved for later features
+  as unused (`flags` 0, `AttachmentKind::IMAGE` with `ext` nullptr, tint 255, 255,
+  255, `turns` 0, `features` 0). It reads the 5.0 (one `frame` timeline per bone with every
   channel) and 5.5 (`translateFrame` / `rotateFrame` / `scaleFrame`, `displayFrame`,
   `colorFrame`) animation formats, `zOrder` timelines, and the images from the
   `<name>_texture/` folder or a `<name>_tex.json` atlas (trimmed and rotated

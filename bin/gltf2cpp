@@ -262,7 +262,8 @@ class Generator:
         self.w()
         self.w(f"static const g3::Material {name} = {{")
         self.w(f"  {{{col}}}, {{{col}}}, {('&' + tex[0]) if tex else 'nullptr'},")
-        self.w(f"  g3::BlendMode::{blend}, {' | '.join(flags) if flags else '0'},")
+        # 0, 0, 0: alphaCutoff, wrap, shininess (reserved)
+        self.w(f"  g3::BlendMode::{blend}, 0, 0, 0, {' | '.join(flags) if flags else '0'},")
         self.w("};")
         self.materials[key] = name
         return name
@@ -371,7 +372,7 @@ class Generator:
             self.w("};")
             mat = self.material(prim.material, colors is not None)
             prim_entries.append(
-                f"  {{g3::PrimitiveType::{MODES[mode]}, &{pname}Vb, {len(indices)}, {pname}Indices, &{mat}}},"
+                f"  {{g3::PrimitiveType::{MODES[mode]}, 0, {len(indices)}, &{pname}Vb, {pname}Indices, &{mat}}},"
             )
             self.stats["vertices"] += count
             self.stats["indices"] += len(indices)
@@ -382,9 +383,9 @@ class Generator:
             for e in prim_entries:
                 self.w(e)
             self.w("};")
-            self.w(f"static const g3::Mesh {name} = {{{name}Prims, {len(prim_entries)}}};")
+            self.w(f"static const g3::Mesh {name} = {{{name}Prims, {len(prim_entries)}, 0}};")
         else:
-            self.w(f"static const g3::Mesh {name} = {{nullptr, 0}};")
+            self.w(f"static const g3::Mesh {name} = {{nullptr, 0, 0}};")
         self.mesh_vars[mesh_index] = name
         return name
 
@@ -414,6 +415,18 @@ class Generator:
         if children:
             self.w(f"static const g3::Node *const {name}Children[] = {{" + ", ".join("&" + c for c in children) + "};")
         label = f'"{node.name}"' if node.name else "nullptr"
+        # The TRS before composition (reserved for animation), unless the node
+        # was given as a matrix
+        trs = "nullptr"
+        if node.matrix is None or len(node.matrix) != 16:
+            t = node.translation if node.translation is not None else (0.0, 0.0, 0.0)
+            r = node.rotation if node.rotation is not None else (0.0, 0.0, 0.0, 1.0)
+            sc = node.scale if node.scale is not None else (1.0, 1.0, 1.0)
+            self.w(f"static const g3::NodeTRS {name}Trs = {{"
+                   + "{" + ", ".join(fmt_float(float(v)) for v in t) + "}, "
+                   + "{" + ", ".join(fmt_float(float(v)) for v in r) + "}, "
+                   + "{" + ", ".join(fmt_float(float(v)) for v in sc) + "}};")
+            trs = f"&{name}Trs"
         self.w(f"static const g3::Node {name} = {{")
         self.w(f"  {label},")
         self.w("  {{" + ", ".join(fmt_float(v) for v in m[0:4]) + ",")
@@ -422,6 +435,7 @@ class Generator:
         self.w("    " + ", ".join(fmt_float(v) for v in m[12:16]) + "}},")
         self.w(f"  {('&' + mesh) if mesh else 'nullptr'},")
         self.w(f"  {(name + 'Children') if children else 'nullptr'}, {len(children)},")
+        self.w(f"  0, {trs},  // flags (reserved), TRS")
         self.w("};")
         visiting.discard(index)
         return name
@@ -442,11 +456,22 @@ class Generator:
         self.w()
         self.w("namespace g2 = shapoco::gfx2d;")
         self.w("namespace g3 = shapoco::gfx3d;")
+        self.w()
+        # The members this output initializes exist from model format 1 on
+        self.w("static_assert(g3::MODEL_FORMAT_VERSION >= 1,")
+        self.w('              "this header needs a newer ShapoGFX (gfx3d.hpp MODEL_FORMAT_VERSION)");')
         for mi in range(len(g.meshes or [])):
             self.mesh(mi)
         visiting = set()
         for ni in range(len(g.nodes or [])):
             self.node(ni, visiting)
+        # Every node in glTF order: what animations and skins refer to
+        all_nodes = [self.node_vars[i] for i in range(len(g.nodes or [])) if i in self.node_vars]
+        if all_nodes:
+            self.w()
+            self.w("// All nodes in the order of the file (glTF node indices)")
+            self.w("static const g3::Node *const nodes[] = {" + ", ".join("&" + n for n in all_nodes) + "};")
+        node_table = f"{len(all_nodes)}, nodes" if all_nodes else "0, nullptr"
         scene_vars = []
         for si, scene in enumerate(g.scenes or []):
             roots = [self.node_vars[r] for r in (scene.nodes or []) if r in self.node_vars]
@@ -454,9 +479,9 @@ class Generator:
             self.w()
             if roots:
                 self.w(f"static const g3::Node *const {name}Roots[] = {{" + ", ".join("&" + r for r in roots) + "};")
-                self.w(f"static const g3::Scene {name} = {{{name}Roots, {len(roots)}}};")
+                self.w(f"static const g3::Scene {name} = {{{name}Roots, {len(roots)}, {node_table}}};")
             else:
-                self.w(f"static const g3::Scene {name} = {{nullptr, 0}};")
+                self.w(f"static const g3::Scene {name} = {{nullptr, 0, {node_table}}};")
             scene_vars.append(name)
         default = g.scene if g.scene is not None else (0 if scene_vars else None)
         if default is not None and default < len(scene_vars):

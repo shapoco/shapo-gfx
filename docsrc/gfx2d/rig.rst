@@ -60,6 +60,7 @@ DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶん�
      angle16_t rotX, rotY;      // DragonBones の skX / skY。等しければ回転、違えばスキュー
      scale16_t scaleX, scaleY;
      uint8_t parent;            // 自分より小さい添字、または NO_PARENT
+     uint8_t flags;             // 予約 (親からの回転・倍率の継承フラグ)。今は 0
    };
 
    struct Attachment {
@@ -68,6 +69,9 @@ DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶん�
      affine2f local;            // src の左上 → ボーン座標系
      const int16_t *hull;       // 不透明部分を囲む凸多角形 (src の左上が原点の x, y の組)。nullptr: 矩形全体
      uint8_t hullCount;         // その頂点数 (0: 矩形全体)
+     AttachmentKind kind;       // IMAGE。他 (MESH, ARMATURE, BOUNDING_BOX) は予約で、描きません
+     uint8_t pad[2];
+     const void *ext;           // 予約 (kind に応じたデータ)。今は nullptr
    };
 
    struct Slot {
@@ -78,6 +82,7 @@ DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶん�
      uint8_t bone;
      uint8_t alpha;             // 0..255
      BlendMode blend;           // ALPHA または ADD
+     uint8_t tintR, tintG, tintB;  // 予約 (RGB の色変換)。dbones2cpp は 255, 255, 255 を書きます
    };
 
    struct Armature {
@@ -89,6 +94,7 @@ DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶん�
      Color colorKey;
      RectF bounds;              // バインドポーズの境界 (参考値)
      uint32_t signature;        // ボーン名とスロット名のハッシュ
+     uint16_t features;         // 予約 (使っている機能のビット)。今は 0
    };
 
 ボーンのローカル変換は ``a = cos(rotY)·scaleX, b = sin(rotY)·scaleX, c = -sin(rotX)·scaleY,
@@ -108,6 +114,7 @@ d = cos(rotX)·scaleY, (tx, ty) = (x, y)`` で、ワールド変換は親のワ�
   または ``Animation::curves`` の添字です。``Curve`` は ``x = i/16`` での ``y`` を Q14 で 17 点持つ表です。
 - 描画順のキー (``DrawOrderKey``) は「描画位置 → スロット」の完成した並びを持ちます (``nullptr`` は基本順)。
 - ``Animation::signature`` が ``Armature::signature`` と違うアニメーションは ``pose()`` が受け付けません。
+- ``RotateKey`` の ``turns`` (追加の回転数) と ``Animation::features`` は予約で、今は 0 です。
 
 ``frameAt(anim, seconds, loop = true)`` は経過秒をフレームに換算します (``seconds × frameRate``)。
 ``loop`` なら ``[0, duration)`` に折り返し、そうでなければ ``[0, duration]`` に収めます。
@@ -241,3 +248,26 @@ demorig のキャラクタ rgb_chan を縮尺 0.5 で変換したもの (ボー�
 追加の回転数 (``clockwise`` / ``tweenRotate``)、回転や拡大を継承しないボーン、実行時のスキン切り替え、
 アニメーションのブレンド。親ボーンに非等方の倍率があると子はせん断されます (行列の積をそのまま使うため)。
 変換ツールはこれらを警告して無視します。
+
+将来の拡張のための予約
+--------------------------------------------------------------------------------
+
+上の機能を後から足せるように、各構造体には予約メンバがあります。生成ヘッダは構造体を位置指定で初期化するので、
+メンバは **末尾にしか追加しません**。追加前に生成したヘッダではそのメンバは 0 になり、追加されたメンバはすべて
+「0 (または列挙子 0) = 使っていない」の意味です (``-Wextra`` では ``-Wmissing-field-initializers`` の警告が出ますが、
+意味は変わりません)。
+
+- ``rig::FORMAT_VERSION`` はこうして追加したメンバの世代数です。dbones2cpp の出力は必要な世代を
+  ``static_assert`` するので、古いライブラリで新しい生成ヘッダを使うとコンパイル時に止まります。
+- ``Armature::features`` / ``Animation::features`` はデータが使っている機能のビットです (機能ごとに今後定義)。
+  ``rig::SUPPORTED_FEATURES`` にないビットが立ったデータは ``init()`` / ``pose()`` が拒否します
+  (その機能なしで描くと作ったものと違う絵になるため)。
+- ``Attachment::kind`` と ``ext``: 画像以外の display (メッシュ、入れ子のアーマチュア、当たり判定) のデータの置き場。
+  ``IMAGE`` 以外は描きません。
+- ``Bone::flags``: 回転や倍率を継承しないボーンのためのフラグ。パディングに収まります。
+- ``Slot::tintR / G / B``: RGB の色変換。古いヘッダでは 0, 0, 0 になるので、機能ビットが立ったときだけ読む予定です。
+  パディングに収まります。
+- ``RotateKey::turns``: 追加の回転数 (``clockwise`` / ``tweenRotate``)。元はパディングでした。
+
+メッシュや IK 本体のデータ (頂点・重み・制約・そのタイムライン) は、必要になった時点で ``Armature`` /
+``Animation`` の末尾に配列として足し、``Instance::bytes()`` にそのぶんのメモリを加える想定です。

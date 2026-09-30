@@ -38,37 +38,37 @@ static const g3::Material M_RED = {{0.9f, 0.1f, 0.1f, 1},
                                    {0.9f, 0.1f, 0.1f, 1},
                                    nullptr,
                                    g3::BlendMode::NONE,
-                                   0};
+                                    0, 0, 0, 0};
 static const g3::Material M_GLASS = {{0.2f, 0.4f, 1.0f, 0.5f},
                                      {0.2f, 0.4f, 1.0f, 1},
                                      nullptr,
                                      g3::BlendMode::ALPHA,
-                                     g3::MaterialFlags::DOUBLE_SIDED};
+                                      0, 0, 0, g3::MaterialFlags::DOUBLE_SIDED};
 static const g3::Material M_TEX565 = {{1, 1, 1, 1},
                                       {1, 1, 1, 1},
                                       &T565,
                                       g3::BlendMode::NONE,
-                                      g3::MaterialFlags::TEXTURE};
+                                       0, 0, 0, g3::MaterialFlags::TEXTURE};
 static const g3::Material M_TEX4444 = {{1, 1, 1, 1},
                                        {1, 1, 1, 1},
                                        &T4444,
                                        g3::BlendMode::NONE,
-                                       g3::MaterialFlags::TEXTURE};
+                                        0, 0, 0, g3::MaterialFlags::TEXTURE};
 static const g3::Material M_TEX565N = {{1, 1, 1, 1},
                                        {1, 1, 1, 1},
                                        &T565N,
                                        g3::BlendMode::NONE,
-                                       g3::MaterialFlags::TEXTURE};
+                                        0, 0, 0, g3::MaterialFlags::TEXTURE};
 static const g3::Material M_TEXG1 = {{1, 1, 1, 1},
                                      {1, 1, 1, 1},
                                      &TG1,
                                      g3::BlendMode::NONE,
-                                     g3::MaterialFlags::TEXTURE};
+                                      0, 0, 0, g3::MaterialFlags::TEXTURE};
 static const g3::Material M_TEX444 = {{1, 1, 1, 1},
                                       {1, 1, 1, 1},
                                       &T444,
                                       g3::BlendMode::NONE,
-                                      g3::MaterialFlags::TEXTURE};
+                                       0, 0, 0, g3::MaterialFlags::TEXTURE};
 
 static void genTextures() {
   for (int y = 0; y < 16; y++) {
@@ -284,12 +284,12 @@ static void testShapeWinding() {
                                       {0.8f, 0.8f, 0.8f, 1},
                                       nullptr,
                                       g3::BlendMode::NONE,
-                                      0};
+                                       0, 0, 0, 0};
   static const g3::Material M_BOTH = {{0.8f, 0.8f, 0.8f, 1},
                                       {0.8f, 0.8f, 0.8f, 1},
                                       nullptr,
                                       g3::BlendMode::NONE,
-                                      g3::MaterialFlags::DOUBLE_SIDED};
+                                       0, 0, 0, g3::MaterialFlags::DOUBLE_SIDED};
   struct ShapeCase {
     const char *name;
     void (*put)(g3::Graphics3D &);
@@ -370,9 +370,9 @@ static void testVertexColorAndIndices() {
                                     {1, 1, 1, 1},
                                     nullptr,
                                     g3::BlendMode::NONE,
-                                    g3::MaterialFlags::VERTEX_COLOR};
+                                     0, 0, 0, g3::MaterialFlags::VERTEX_COLOR};
   static const g3::Material M_NOVC = {
-      {1, 1, 1, 1}, {1, 1, 1, 1}, nullptr, g3::BlendMode::NONE, 0};
+      {1, 1, 1, 1}, {1, 1, 1, 1}, nullptr, g3::BlendMode::NONE,  0, 0, 0, 0};
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   r.setClearColor({0, 0, 0, 1});
@@ -382,7 +382,7 @@ static void testVertexColorAndIndices() {
     r.beginScene();
     r.translate(0, 0, -3);
     r.enableEnvironmentLight({1, 1, 1, 1});
-    g3::Primitive prim = {g3::PrimitiveType::TRIANGLES, &vb, 6,
+    g3::Primitive prim = {g3::PrimitiveType::TRIANGLES, 0, 6, &vb,
                           pass == 2 ? badIdx : idx,
                           pass == 0 ? &M_VC : &M_NOVC};
     r.putPrimitive(prim);
@@ -409,12 +409,12 @@ static void testVertexColorAndIndices() {
 // point size, near-plane clipping, depth bias
 static void testPointsAndLines() {
   static const g3::Material M_LINE = {
-      {1, 1, 1, 1}, {1, 1, 1, 1}, nullptr, g3::BlendMode::NONE, 0};
+      {1, 1, 1, 1}, {1, 1, 1, 1}, nullptr, g3::BlendMode::NONE,  0, 0, 0, 0};
   static const g3::Material M_SOLID = {{0.5f, 0.5f, 0.5f, 1},
                                        {0.5f, 0.5f, 0.5f, 1},
                                        nullptr,
                                        g3::BlendMode::NONE,
-                                       0};
+                                        0, 0, 0, 0};
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   r.setClearColor({0, 0, 0, 1});
@@ -492,7 +492,7 @@ static void testPointsAndLines() {
         {{-0.5f, 0.3f, 0}, {0, 1, 0}, {0, 0}, g3::VERTEX_WHITE}};
     static const g3::VertexBuffer vb = {4, v};
     static const uint16_t idx[4] = {0, 1, 2, 3};
-    g3::Primitive loop = {g3::PrimitiveType::LINE_LOOP, &vb, 4, idx, nullptr};
+    g3::Primitive loop = {g3::PrimitiveType::LINE_LOOP, 0, 4, &vb, idx, nullptr};
     r.putPrimitive(loop);
   }
   r.endScene();
@@ -519,7 +519,7 @@ static void testPointsAndLines() {
         {{0.11f, 0.07f, 0}, {0, 1, 0}, {0, 0}, g3::VERTEX_WHITE}};
     static const g3::VertexBuffer vb = {1, v};
     static const uint16_t idx[1] = {0};
-    g3::Primitive pts = {g3::PrimitiveType::POINTS, &vb, 1, idx, nullptr};
+    g3::Primitive pts = {g3::PrimitiveType::POINTS, 0, 1, &vb, idx, nullptr};
     ortho();
     r.setPointSize(1);
     r.putPrimitive(pts);
@@ -576,7 +576,7 @@ static void testLayersAndConfig() {
                                       {0.1f, 0.2f, 0.9f, 1},
                                       nullptr,
                                       g3::BlendMode::NONE,
-                                      0};
+                                       0, 0, 0, 0};
   g3::Graphics3D r;
   g3::Config cfg = g3::defaultConfig(W, H, arena, sizeof(arena));
   cfg.spanCapacity = 48;
@@ -724,7 +724,7 @@ static void testWatertight() {
                                    {1, 1, 1, 1},
                                    nullptr,
                                    g3::BlendMode::NONE,
-                                   g3::MaterialFlags::DOUBLE_SIDED};
+                                    0, 0, 0, g3::MaterialFlags::DOUBLE_SIDED};
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
@@ -777,7 +777,7 @@ static void testFarVertex() {
                                    {1, 1, 1, 1},
                                    nullptr,
                                    g3::BlendMode::NONE,
-                                   g3::MaterialFlags::DOUBLE_SIDED};
+                                    0, 0, 0, g3::MaterialFlags::DOUBLE_SIDED};
   g3::Graphics3D r;
   r.init(W, H, arena, sizeof(arena));
   g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, W, H);
@@ -796,7 +796,7 @@ static void testFarVertex() {
     }
     const g3::VertexBuffer vb = {3, v};
     static const uint16_t idx[3] = {0, 1, 2};
-    r.putPrimitive({g3::PrimitiveType::TRIANGLES, &vb, 3, idx, nullptr});
+    r.putPrimitive({g3::PrimitiveType::TRIANGLES, 0, 3, &vb, idx, nullptr});
   }
   r.endScene();
   r.beginRender();
@@ -887,7 +887,7 @@ static void testSmoothFanRim() {
                             {1, 1, 1, 1},
                             nullptr,
                             (it & 1) ? g3::BlendMode::ADD : g3::BlendMode::NONE,
-                            g3::MaterialFlags::VERTEX_COLOR};
+                             0, 0, 0, g3::MaterialFlags::VERTEX_COLOR};
     const int cr = (int)(rnd() * 255), cg = (int)(rnd() * 60),
               cb = (int)(rnd() * 255);
     const float cx = rnd() * 2 - 1, cy = (rnd() * 2 - 1) * ay;
@@ -908,7 +908,7 @@ static void testSmoothFanRim() {
     r.setOrthographicProjection(-1, 1, -ay, ay, 0.1f, 10);
     r.beginScene();
     r.translate(0, 0, -2);
-    r.putPrimitive({g3::PrimitiveType::TRIANGLE_FAN, &vb, SEG + 2, idx, &m});
+    r.putPrimitive({g3::PrimitiveType::TRIANGLE_FAN, 0, SEG + 2, &vb, idx, &m});
     r.endScene();
     r.beginRender();
     r.render(0, 0, W, H, s);

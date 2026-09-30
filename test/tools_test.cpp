@@ -190,6 +190,54 @@ static void testGltf2cpp() {
   const g3::mat4f &m = test_model::node_Cube.transform;
   CHECK(std::abs(m.m[0] - 0.7071f) < 0.001f &&
         std::abs(m.m[12] + 0.8f) < 0.001f);
+  // Members reserved for later features: the node table in glTF order, the
+  // TRS each transform was composed from, zeros elsewhere
+  CHECK_EQ(test_model::scene.nodeCount, 5);
+  CHECK(test_model::scene.nodes[0] == &test_model::node_Root);
+  CHECK(test_model::scene.nodes[1] == &test_model::node_Cube);
+  CHECK(test_model::scene.nodes[3] == &test_model::node_Tip_Pyramid);
+  CHECK_EQ(cube.flags, 0);
+  CHECK_EQ(cube.material->alphaCutoff, 0);
+  CHECK_EQ(cube.material->wrap, 0);
+  CHECK_EQ(cube.material->shininess, 0);
+  CHECK_EQ(test_model::node_Cube.mesh->flags, 0);
+  CHECK_EQ(test_model::node_Cube.flags, 0);
+  for (int i = 0; i < test_model::scene.nodeCount; i++) {
+    const g3::Node &n = *test_model::scene.nodes[i];
+    CHECK(n.trs != nullptr);
+    if (!n.trs) continue;
+    const g3::NodeTRS &t = *n.trs;
+    g3::mat4f sc = g3::mat4f::identity();
+    sc.m[0] = t.scale.x;
+    sc.m[5] = t.scale.y;
+    sc.m[10] = t.scale.z;
+    const g3::mat4f c =
+        g3::mat4f::translation(t.translation.x, t.translation.y,
+                               t.translation.z) *
+        g3::mat4f::fromQuaternion(t.rotation[0], t.rotation[1], t.rotation[2],
+                                  t.rotation[3]) *
+        sc;
+    bool same = true;
+    for (int k = 0; k < 16; k++)
+      same = same && std::abs(c.m[k] - n.transform.m[k]) < 1e-4f;
+    CHECK(same);
+  }
+  CHECK(std::abs(test_model::node_Pyramid.trs->scale.x - 1.5f) < 1e-6f);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+  // Hand-written data from before the reserved members: compiles, and the
+  // members are zero
+  static const g3::Mesh oldMesh = {nullptr, 0};
+  static const g3::Node oldNode = {"n", g3::mat4f::identity(), &oldMesh,
+                                   nullptr, 0};
+  static const g3::Node *const oldRoots[] = {&oldNode};
+  static const g3::Scene oldScene = {oldRoots, 1};
+#pragma GCC diagnostic pop
+  CHECK_EQ(oldMesh.flags, 0);
+  CHECK_EQ(oldNode.flags, 0);
+  CHECK(oldNode.trs == nullptr);
+  CHECK_EQ(oldScene.nodeCount, 0);
+  CHECK(oldScene.nodes == nullptr);
 
   // Traversal: everything draws, indices are valid, nothing is dropped
   g3::Graphics3D r;
@@ -227,7 +275,7 @@ static void testDeepTree() {
     chain[i] = {nullptr, g3::mat4f::translation(0.1f, 0, 0),
                 test_model::node_Cube.mesh,
                 (i + 1 < 24) ? &childPtr[i] : nullptr,
-                (uint16_t)((i + 1 < 24) ? 1 : 0)};
+                (uint16_t)((i + 1 < 24) ? 1 : 0), 0, nullptr};
   }
   g3::Graphics3D r;
   r.init(32, 32, arena, sizeof(arena));

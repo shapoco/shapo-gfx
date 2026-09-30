@@ -157,6 +157,77 @@ static void testRigSignature() {
   CHECK(!none.pose(test_rig::anim_move, 0.0f));
 }
 
+// Members reserved for later features (mesh, IK, tints, ...): a header
+// generated before them leaves them zero, so the old positional initializers
+// compile and mean what they did; data with a feature bit this build lacks is
+// refused; attachments of the reserved kinds are kept but not drawn
+static void testRigReserved() {
+  static_assert(rig::FORMAT_VERSION >= 1, "generated headers assert on this");
+  static_assert(rig::SUPPORTED_FEATURES == 0, "no feature bit is defined yet");
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+  // Initializers as dbones2cpp wrote them before FORMAT_VERSION 1
+  static const rig::Bone oldBone = {"b", 1.0f, 2.0f, 0, 0, 4096, 4096, 0xFF};
+  static const rig::Attachment oldAtt = {
+      nullptr, {0, 0, 1, 1}, {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f}, nullptr, 0};
+  static const rig::Slot oldSlot = {"s", &oldAtt, 1, 0, 0, 255,
+                                    g2::BlendMode::ALPHA};
+  static const rig::Armature oldArm = {"a", &oldBone, &oldSlot, 1, 1, false, 0,
+                                       {0, 0, 1, 1}, 0x12345678u};
+  static const rig::RotateKey oldKey = {0, rig::CURVE_LINEAR, 0, 100, 100};
+  static const rig::Animation oldAnim = {"m", 10, 24, 0, 0, 0, 0, nullptr,
+                                         nullptr, nullptr, nullptr, 0x12345678u};
+#pragma GCC diagnostic pop
+  CHECK_EQ(oldBone.flags, 0);
+  CHECK(oldAtt.kind == rig::AttachmentKind::IMAGE);
+  CHECK(oldAtt.ext == nullptr);
+  CHECK_EQ(oldSlot.tintR, 0);
+  CHECK_EQ(oldSlot.tintG, 0);
+  CHECK_EQ(oldSlot.tintB, 0);
+  CHECK_EQ(oldArm.features, 0);
+  CHECK_EQ(oldKey.turns, 0);
+  CHECK_EQ(oldAnim.features, 0);
+  rig::Instance inst;
+  CHECK(inst.init(oldArm, rigMemory, sizeof(rigMemory)));
+  CHECK(inst.pose(oldAnim, 5.0f));
+  inst.deinit();
+
+  // A feature bit this build does not know: refused, nothing changes
+  rig::Armature arm = test_rig::armature;
+  arm.features = 1;
+  CHECK(!inst.init(arm, rigMemory, sizeof(rigMemory)));
+  CHECK(!inst.isInitialized());
+  CHECK(inst.init(test_rig::armature, rigMemory, sizeof(rigMemory)));
+  CHECK(inst.pose(test_rig::anim_move, 3.5f));
+  rig::Animation anim = test_rig::anim_move;
+  anim.features = 1;
+  CHECK(!inst.pose(anim, 9.25f));
+  checkPose(inst, ex::move[1]);
+  inst.deinit();
+
+  // Every attachment of a reserved kind: nothing is visible
+  rig::Attachment atts[16];
+  rig::Slot slots[ex::SLOTS];
+  int n = 0;
+  for (int s = 0; s < ex::SLOTS; s++) {
+    slots[s] = test_rig::slots[s];
+    slots[s].attachments = atts + n;
+    for (int a = 0; a < slots[s].attachmentCount; a++) {
+      CHECK(n < 16);
+      atts[n] = test_rig::slots[s].attachments[a];
+      atts[n].kind = rig::AttachmentKind::MESH;
+      n++;
+    }
+  }
+  arm = test_rig::armature;
+  arm.slots = slots;
+  CHECK(inst.init(arm, rigMemory, sizeof(rigMemory)));
+  CHECK(inst.bounds().isEmpty());
+  CHECK(inst.pose(test_rig::anim_move, 3.5f));
+  CHECK(inst.bounds().isEmpty());
+  inst.deinit();
+}
+
 // Spins bone `bone` by `angle`
 class SpinVisitor : public rig::BoneVisitor {
  public:
@@ -778,6 +849,7 @@ void testRig() {
   testRigPose();
   testRigFrames();
   testRigSignature();
+  testRigReserved();
   testRigVisitor();
   testRigSlots();
 #if RIG_DRAW_TESTS

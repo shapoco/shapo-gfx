@@ -86,7 +86,7 @@ ESP-IDF で使う
    dependencies:
      shapo-gfx:
        git: https://github.com/shapoco/shapo-gfx.git
-       version: v1.5.0    # タグ、ブランチまたはコミット
+       version: v1.6.0    # タグ、ブランチまたはコミット
 
 どちらの場合も、ShapoGFX を使うコンポーネントの ``REQUIRES`` に指定します。
 
@@ -279,7 +279,7 @@ CMake も PlatformIO も使わない
    static g3::Graphics3D g3d;
 
    static const g3::Material matRed = {
-       {0.9f, 0.15f, 0.1f, 1.0f}, {0.9f, 0.15f, 0.1f, 1.0f}, nullptr, g3::BlendMode::NONE, 0,
+       {0.9f, 0.15f, 0.1f, 1.0f}, {0.9f, 0.15f, 0.1f, 1.0f}, nullptr, g3::BlendMode::NONE,  0, 0, 0, 0,
    };
 
    void setup() {
