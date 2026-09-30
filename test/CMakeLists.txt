@@ -3,13 +3,16 @@
 #         -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all" \
 #         -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 #   cmake --build build && ctest --test-dir build --output-on-failure
+# and with -fsanitize=thread in place of address,undefined for the tests that
+# draw on two threads.
 add_executable(shapogfx_tests pixel_test.cpp graphics2d_test.cpp gfx3d_test.cpp tools_test.cpp
                               rig_test.cpp test_main.cpp)
 target_include_directories(shapogfx_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # testVersion() reads library.json to check it matches version.hpp
 target_compile_definitions(shapogfx_tests PRIVATE
     SHAPOGFX_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
-find_package(Threads REQUIRED)  # testRenderContexts() renders on two threads
+# testRenderContexts() and testRigThreads() draw on two threads
+find_package(Threads REQUIRED)
 target_link_libraries(shapogfx_tests PRIVATE shapoco::gfx Threads::Threads)
 target_compile_options(shapogfx_tests PRIVATE -Wall -Wextra)
 # The renderer options change no public type, but the tests need to know which

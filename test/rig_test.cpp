@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <thread>
 
 #include "check.hpp"
 #include "data/test_rig.hpp"
@@ -705,6 +706,69 @@ static void testRigBands() {
     CHECK(samePixels(a, b));
   }
 }
+
+// draw() only reads the Instance: two contexts, each with its own arena, draw
+// the halves of one frame from it at the same time on two threads and put
+// the same pixels as one call. The halves are clip rectangles on the whole
+// frame first and targets of their own then (as the M5Stack demorig does).
+static void testRigThreads() {
+  alignas(8) static uint8_t arenas[2][8192];
+  CHECK(g2::Graphics2D::arenaBytes() <= sizeof(arenas[0]));
+  const struct {
+    const rig::Armature *arm;
+    const rig::Animation *anim;
+  } cases[] = {{&test_rig::armature, &test_rig::anim_move},
+               {&test_rig_mixed::armature, &test_rig_mixed::anim_move}};
+  constexpr int UPPER = 25, LOWER = DH - UPPER;
+  for (const auto &c : cases) {
+    g2::OwnedSurface whole =
+        g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+    g2::OwnedSurface split =
+        g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+    const g2::Surface upper = g2::makeSurface(split.format(), DW, UPPER,
+                                              split.surface().linePtr(0));
+    const g2::Surface lower = g2::makeSurface(split.format(), DW, LOWER,
+                                              split.surface().linePtr(UPPER));
+    g2::Graphics2D gw(whole), g[2];
+    CHECK(g[0].init(arenas[0], sizeof(arenas[0])));
+    CHECK(g[1].init(arenas[1], sizeof(arenas[1])));
+    rig::Instance inst;
+    CHECK(inst.init(*c.arm, rigMemory, sizeof(rigMemory)));
+    for (int i = 0; i < 40; i++) {
+      inst.pose(*c.anim, 0.25f * (float)i);
+      clearTarget(gw);
+      gw.setTransform(placement());
+      inst.draw(gw);
+
+      for (int k = 0; k < 2; k++) {
+        g[k].setTarget(split);
+        g[k].setTransform(placement());
+      }
+      clearTarget(g[0]);
+      g[0].setClipRect(0, 0, DW, UPPER);
+      g[1].setClipRect(0, UPPER, DW, LOWER);
+      {
+        std::thread t([&] { inst.draw(g[1]); });
+        inst.draw(g[0]);
+        t.join();
+      }
+      CHECK(samePixels(whole, split));
+
+      clearTarget(g[0]);
+      g[0].setTarget(upper);
+      g[1].setTarget(lower);
+      g[0].setTransform(placement());
+      g[1].setTransform(g2::affine2f::translation(0, -(float)UPPER) *
+                        placement());
+      {
+        std::thread t([&] { inst.draw(g[1]); });
+        inst.draw(g[0]);
+        t.join();
+      }
+      CHECK(samePixels(whole, split));
+    }
+  }
+}
 #endif  // RIG_DRAW_TESTS
 #endif  // SHAPOGFX2D_RIG
 
@@ -726,6 +790,7 @@ void testRig() {
   testRigDrawRange();
   testRigBounds();
   testRigBands();
+  testRigThreads();
 #else
   std::printf("  drawing skipped (transform or pixel formats disabled)\n");
 #endif

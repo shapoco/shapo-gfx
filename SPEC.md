@@ -749,6 +749,24 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   until the next pose), `bounds()` (union of the visible slots' boxes) and
   `bounds(placement)` (the box of its corners after `placement`).
 
+Drawing on several cores: `draw()` reads the `Instance` and the armature and
+changes nothing but the state of the `Graphics2D` it is given, and `gfx2d` has no
+writable global state, so several cores may draw different bands of one frame from
+one `Instance` at the same time. The conditions:
+
+- Every core draws with a `Graphics2D` of its own (with an arena of its own, if it
+  has one). One context must not be used by two cores at once.
+- The `Instance` does not change while anyone draws: `pose()`, `poseBind()`,
+  `setAttachment()`, `setAlpha()`, `init()` and `deinit()` wait until every core is
+  done. A copy of an `Instance` shares its memory and is no way around this.
+- The cores write different pixels: targets that do not overlap (a `Surface` per
+  band, with the placement translated by the band's position), or one target with
+  clip rectangles that do not overlap.
+
+The SIO interpolator that the transformed `drawImage()` uses on RP2040 / RP2350
+belongs to the calling core and is saved and restored. The bands put the same
+pixels as one call; the M5Stack builds of demorig draw every strip this way.
+
 Cost, measured on the rgb_chan character of demorig converted at scale 0.5 (29 bones, 41 slots): `pose()`
 retires about 17,000 instructions on x86-64 (13,700 of them for the bones without
 timelines); `draw()` adds about 3,000 to the `drawImage()` calls it makes, which do
@@ -1669,10 +1687,14 @@ does: centroid within a quarter texel, same angle and about the same area when
 drawn four times enlarged, the other parts pixel-identical), the mixed formats
 (the ARGB4444 part draws what the ARGB4444 conversion draws and the keyed parts
 what the keyed one draws, `draw()` toggling the key and restoring the caller's),
-the separate textures and the key color, drawing in ranges and in bands against drawing at once, the
+the separate textures and the key color, drawing in ranges and in bands against drawing at once, the halves of a frame
+drawn at the same time on two threads by two contexts from one `Instance` (as clip
+rectangles and as targets of their own; checked with ThreadSanitizer), the
 restored `Graphics2D` state, drawn pixels within `bounds(placement)`, and the atlas
 pixels against the source images (the trimmed bar included) with every hull
 holding the opaque pixels and leaving out transparent ones. The tests are meant to be run with AddressSanitizer and
-UndefinedBehaviorSanitizer on the native build. The CMake options of the renderer
+UndefinedBehaviorSanitizer on the native build, and with ThreadSanitizer for the
+ones that draw on two threads (where it stops with "unexpected memory mapping",
+run the tests with `setarch -R`). The CMake options of the renderer
 are passed to the tests as well, so a configuration with a feature compiled out
 skips the tests that need it and the rest must still pass.
