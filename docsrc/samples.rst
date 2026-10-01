@@ -12,6 +12,9 @@
   背景クリアを無効にして 3D を重ねています。マウスドラッグ / 矢印キーで回転、ホイール / PageUp・PageDown でズームします。
 
 - `demorig <../example/demorig/>`__: DragonBones のキャラクタ (``dbones2cpp`` で変換) を ``rig::Instance`` で動かします。
+  キャラクタの背後では、アニメーション付き SVG (``assets/2d/pop_star.svg``、``svg2cpp`` で変換) の
+  2 つのインスタンスが 1 秒ごとに交互に、ランダムな位置・大きさ・角度で弾けます。左下の (AA) ボタンで
+  アンチエイリアス (ピクチャと面の塗りつぶし) を切り替えられます。
   24 fps のアニメーションを毎フレーム補間し、上下に揺れるキャラクタの周りを加算合成の矩形のリングが回ります。
   リングの奥半分、キャラクタの左腕より奥 (``draw(g, 0, k)``)、リングの手前半分、キャラクタの残り (``draw(g, k, n)``)
   の順に描くので、左腕だけがリングの手前に出ます。背景では、demo2d と同じ線と塗りつぶしのカラフルな星が
@@ -31,7 +34,7 @@
    "``example/wasm/demo2d/``", "``scene.cpp`` (描画)、``main.cpp`` (WASM エクスポートとネイティブ ``main()``)、``Makefile``、``CMakeLists.txt``"
    "``example/wasm/demo3d/``", "同上。``model/`` に風車の生成スクリプト、``.glb``、生成ヘッダ"
    "``example/wasm/demorig/``", "``main.cpp`` (WASM エクスポートとネイティブ ``main()``)、``Makefile``、``CMakeLists.txt``"
-   "``example/common/demorig/``", "demorig のシーン (``scene.cpp``) とビュー・ボタン・FPS 表示 (``demorig.cpp``)。ShapoGFX だけに依存し、WASM 版と M5Stack 版で共有。``model/rgb_chan.hpp`` は ``make -C example/wasm/demorig model`` で ``assets/2d/rgb_chan/`` から生成"
+   "``example/common/demorig/``", "demorig のシーン (``scene.cpp``) とビュー・ボタン・FPS 表示 (``demorig.cpp``)。ShapoGFX だけに依存し、WASM 版と M5Stack 版で共有。``model/rgb_chan.hpp`` と ``model/pop_star.hpp`` は ``make -C example/wasm/demorig model`` で ``assets/2d/`` から生成"
    "``example/m5cores3/demorig/`` ほか", "M5Stack 版 demorig の ESP-IDF プロジェクト (下記)"
    "``example/m5common/``", "M5Stack 版の共通コンポーネント (ShapoGFX、demorig の共通コード、M5Unified を使うフロントエンド)"
    "``docs/example/``", "``viewer.js`` (共通ビューア)、``style.css``、各デモの ``index.html`` と ``.wasm``"
@@ -42,8 +45,8 @@
 
    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
    ./build/example/wasm/demo3d/demo3d frame.ppm 1.5    # 第 2 引数は経過秒
-   # demorig: 経過秒、画面サイズ、倍率、画面中央に来るシーン上の点、バンド数
-   ./build/example/wasm/demorig/demorig frame.ppm 1.5 320x240 16 160 120 5
+   # demorig: 経過秒、画面サイズ、倍率、画面中央に来るシーン上の点、バンド数、アンチエイリアス (1)
+   ./build/example/wasm/demorig/demorig frame.ppm 1.5 320x240 16 160 120 5 1
 
 WASM のビルド
 ================================================================================

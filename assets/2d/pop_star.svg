@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <g transform="translate(32 32)">
+
+    <!-- 広がるリング -->
+    <circle cx="0" cy="0" r="6" fill="none" stroke="#FFB3D1" stroke-width="0" opacity="0">
+      <animate attributeName="r" dur="1.5s" fill="freeze"
+        values="6;6;27;27" keyTimes="0;0.1;0.3;1"
+        calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+      <animate attributeName="stroke-width" dur="1.5s" fill="freeze"
+        values="0;15;0.5;0" keyTimes="0;0.1;0.3;1"/>
+      <animate attributeName="opacity" dur="1.5s" fill="freeze"
+        values="0;0.9;0;0" keyTimes="0;0.1;0.3;1"/>
+    </circle>
+
+    <!-- 飛び散る粒（丸） -->
+    <g transform="rotate(0)">
+      <circle cx="8" cy="0" r="0" fill="#A8D8FF">
+        <animate attributeName="cx" dur="1.5s" fill="freeze"
+          values="8;8;26;27" keyTimes="0;0.12;0.6;1"
+          calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+        <animate attributeName="r" dur="1.5s" fill="freeze"
+          values="0;0;3.5;2;0;0" keyTimes="0;0.12;0.18;0.5;0.75;1"/>
+      </circle>
+    </g>
+    <g transform="rotate(90)">
+      <circle cx="8" cy="0" r="0" fill="#A8EED5">
+        <animate attributeName="cx" dur="1.5s" fill="freeze"
+          values="8;8;26;27" keyTimes="0;0.12;0.6;1"
+          calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+        <animate attributeName="r" dur="1.5s" fill="freeze"
+          values="0;0;3.5;2;0;0" keyTimes="0;0.12;0.18;0.5;0.75;1"/>
+      </circle>
+    </g>
+    <g transform="rotate(180)">
+      <circle cx="8" cy="0" r="0" fill="#CDB8FF">
+        <animate attributeName="cx" dur="1.5s" fill="freeze"
+          values="8;8;26;27" keyTimes="0;0.12;0.6;1"
+          calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+        <animate attributeName="r" dur="1.5s" fill="freeze"
+          values="0;0;3.5;2;0;0" keyTimes="0;0.12;0.18;0.5;0.75;1"/>
+      </circle>
+    </g>
+    <g transform="rotate(270)">
+      <circle cx="8" cy="0" r="0" fill="#FFCBA4">
+        <animate attributeName="cx" dur="1.5s" fill="freeze"
+          values="8;8;26;27" keyTimes="0;0.12;0.6;1"
+          calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+        <animate attributeName="r" dur="1.5s" fill="freeze"
+          values="0;0;3.5;2;0;0" keyTimes="0;0.12;0.18;0.5;0.75;1"/>
+      </circle>
+    </g>
+
+    <!-- 飛び散る粒（ミニ星） -->
+    <g transform="rotate(45)">
+      <g opacity="0">
+        <animateTransform attributeName="transform" type="translate" dur="1.5s" fill="freeze"
+          values="8 0;8 0;23 0;24 0" keyTimes="0;0.12;0.6;1"
+          calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+        <animate attributeName="opacity" dur="1.5s" fill="freeze"
+          values="0;0;1;1;0;0" keyTimes="0;0.12;0.15;0.5;0.75;1"/>
+        <polygon fill="#FFB3D1" points="0,-4.5 1.22,-1.68 4.26,-1.39 1.98,0.64 2.63,3.63 0,2.08 -2.63,3.63 -1.98,0.64 -4.26,-1.39 -1.22,-1.68"/>
+      </g>
+    </g>
+    <g transform="rotate(135)">
+      <g opacity="0">
+        <animateTransform attributeName="transform" type="translate" dur="1.5s" fill="freeze"
+          values="8 0;8 0;23 0;24 0" keyTimes="0;0.12;0.6;1"
+          calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+        <animate attributeName="opacity" dur="1.5s" fill="freeze"
+          values="0;0;1;1;0;0" keyTimes="0;0.12;0.15;0.5;0.75;1"/>
+        <polygon fill="#FFE680" points="0,-4.5 1.22,-1.68 4.26,-1.39 1.98,0.64 2.63,3.63 0,2.08 -2.63,3.63 -1.98,0.64 -4.26,-1.39 -1.22,-1.68"/>
+      </g>
+    </g>
+    <g transform="rotate(225)">
+      <g opacity="0">
+        <animateTransform attributeName="transform" type="translate" dur="1.5s" fill="freeze"
+          values="8 0;8 0;23 0;24 0" keyTimes="0;0.12;0.6;1"
+          calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+        <animate attributeName="opacity" dur="1.5s" fill="freeze"
+          values="0;0;1;1;0;0" keyTimes="0;0.12;0.15;0.5;0.75;1"/>
+        <polygon fill="#A8EED5" points="0,-4.5 1.22,-1.68 4.26,-1.39 1.98,0.64 2.63,3.63 0,2.08 -2.63,3.63 -1.98,0.64 -4.26,-1.39 -1.22,-1.68"/>
+      </g>
+    </g>
+    <g transform="rotate(315)">
+      <g opacity="0">
+        <animateTransform attributeName="transform" type="translate" dur="1.5s" fill="freeze"
+          values="8 0;8 0;23 0;24 0" keyTimes="0;0.12;0.6;1"
+          calcMode="spline" keySplines="0 0 1 1;0.2 0.8 0.3 1;0 0 1 1"/>
+        <animate attributeName="opacity" dur="1.5s" fill="freeze"
+          values="0;0;1;1;0;0" keyTimes="0;0.12;0.15;0.5;0.75;1"/>
+        <polygon fill="#A8D8FF" points="0,-4.5 1.22,-1.68 4.26,-1.39 1.98,0.64 2.63,3.63 0,2.08 -2.63,3.63 -1.98,0.64 -4.26,-1.39 -1.22,-1.68"/>
+      </g>
+    </g>
+
+    <!-- メインの星（ぽよんと弾む） -->
+    <g transform="scale(0)">
+      <animateTransform attributeName="transform" type="scale" dur="1.5s" fill="freeze"
+        values="0;1.25;0.88;1.06;1;1;0" keyTimes="0;0.18;0.28;0.38;0.48;0.85;1"/>
+      <g>
+        <animateTransform attributeName="transform" type="rotate" dur="1.5s" fill="freeze"
+          values="-40;8;0;0;20" keyTimes="0;0.22;0.4;0.85;1"/>
+        <polygon fill="#FFE680" stroke="#FFE680" stroke-width="3" stroke-linejoin="round"
+          points="0,-14 3.82,-5.26 13.31,-4.33 6.18,2.01 8.23,11.33 0,6.5 -8.23,11.33 -6.18,2.01 -13.31,-4.33 -3.82,-5.26"/>
+        <ellipse cx="-3.5" cy="-4.5" rx="2.2" ry="1.4" fill="#FFFFFF" opacity="0.75" transform="rotate(-35 -3.5 -4.5)"/>
+      </g>
+    </g>
+
+  </g>
+</svg>

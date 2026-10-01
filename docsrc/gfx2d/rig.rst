@@ -3,10 +3,12 @@
 
 ヘッダ: ``shapoco/gfx2d/rig.hpp`` (``gfx2d.hpp`` からは include されません)
 
-``shapoco::gfx2d::rig`` は、画像を載せたボーンの木 (アーマチュア) をキーフレームアニメーションで動かし、
-``Graphics2D`` で描画する機能です。データ (``Armature``、``Animation``) は ``static const`` でフラッシュに置け、
-DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶんの姿勢は ``rig::Instance`` が
-ユーザの用意したメモリに保持します。ライブラリ内でメモリを確保することはありません。
+``shapoco::gfx2d::rig`` は、画像やベクタピクチャ (:doc:`vg`) を載せたボーンの木 (アーマチュア) を
+キーフレームアニメーションで動かし、``Graphics2D`` で描画する機能です。データ (``Armature``、``Animation``) は
+``static const`` でフラッシュに置け、DragonBones から :doc:`../tools/dbones2cpp` で、アニメーション付きの
+SVG から :doc:`../tools/svg2cpp` で生成します。1 体ぶんの姿勢は ``rig::Instance`` が
+ユーザの用意したメモリに保持します。アニメーションしないアーマチュアは ``drawBind()`` でメモリなしに
+描けます。ライブラリ内でメモリを確保することはありません。
 
 .. code-block:: cpp
 
@@ -41,7 +43,7 @@ DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶん�
    "``Armature``", "ボーン、スロット、アタッチメント、テクスチャの集合 (静的データ)"
    "``Bone``", "親を持つ木の節。ワールド変換の単位"
    "``Slot``", "描画順を持つ取り付け位置。1 本のボーンに属し、アタッチメントを 1 つ表示する"
-   "``Attachment``", "スロットに付く画像 (DragonBones の display)。スロットは複数持てて切り替えられる"
+   "``Attachment``", "スロットに付く画像またはベクタピクチャ (DragonBones の display)。スロットは複数持てて切り替えられる"
    "``Animation``", "チャネルごとのタイムライン、描画順のキー、イージングカーブの集合"
    "``Instance``", "姿勢 (ボーンのワールド変換)、スロットの状態、描画順、境界のキャッシュ"
    "``angle16_t``", "角度。1 回転 = 65536 の ``int16_t`` なので、差をとると自然に最短経路になる"
@@ -64,14 +66,14 @@ DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶん�
    };
 
    struct Attachment {
-     const Texture *texture;    // nullptr: 描かない (非対応の display の位置取り)
+     const Texture *texture;    // IMAGE: nullptr なら描かない (非対応の display の位置取り)
      Rect src;                  // texture 内の部分矩形 (アトラス)
-     affine2f local;            // src の左上 → ボーン座標系
+     affine2f local;            // IMAGE: src の左上 → ボーン座標系。VECTOR: ピクチャの座標系 → ボーン座標系
      const int16_t *hull;       // 不透明部分を囲む凸多角形 (src の左上が原点の x, y の組)。nullptr: 矩形全体
      uint8_t hullCount;         // その頂点数 (0: 矩形全体)
-     AttachmentKind kind;       // IMAGE。他 (MESH, ARMATURE, BOUNDING_BOX) は予約で、描きません
+     AttachmentKind kind;       // IMAGE または VECTOR。他 (MESH, ARMATURE, BOUNDING_BOX) は予約で、描きません
      uint8_t pad[2];
-     const void *ext;           // 予約 (kind に応じたデータ)。今は nullptr
+     const void *ext;           // VECTOR: const vg::Picture *。他の kind では予約
    };
 
    struct Slot {
@@ -82,7 +84,11 @@ DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶん�
      uint8_t bone;
      uint8_t alpha;             // 0..255
      BlendMode blend;           // ALPHA または ADD
-     uint8_t tintR, tintG, tintB;  // 予約 (RGB の色変換)。dbones2cpp は 255, 255, 255 を書きます
+     uint8_t colorR, colorG, colorB;  // スロットの色 (FEATURE_SLOT_COLOR のとき有効)
+     const RectF *clip;         // クリップ矩形 (ボーン clipBone の座標系)。nullptr: なし
+     uint8_t clipBone;
+     uint8_t pad[3];
+     float strokeWidth;         // スロットのストローク幅 (FEATURE_STROKE_WIDTH のとき有効)
    };
 
    struct Armature {
@@ -94,8 +100,19 @@ DragonBones から :doc:`../tools/dbones2cpp` で生成します。1 体ぶん�
      Color colorKey;
      RectF bounds;              // バインドポーズの境界 (参考値)
      uint32_t signature;        // ボーン名とスロット名のハッシュ
-     uint16_t features;         // 予約 (使っている機能のビット)。今は 0
+     uint16_t features;         // 使っている機能のビット (FEATURE_SLOT_COLOR, FEATURE_STROKE_WIDTH)
    };
+
+- ``VECTOR`` のアタッチメントは ``ext`` の ``vg::Picture`` を ``drawPicture()`` で描きます。
+  ピクチャ内で ``SHAPE_FILL_CURRENT_COLOR`` などの印が付いた図形は、スロットの色 (``colorR / G / B``) で
+  描かれます。SVG の ``currentColor`` と、アニメーションで変わる ``fill`` / ``stroke`` がこれになります。
+- スロットの色は ``Armature::features`` に ``FEATURE_SLOT_COLOR`` が立っているときだけ読まれます
+  (立っていなければ白)。画像に対しては色変換 (DragonBones の colorTransform) 用に予約で、今は適用しません。
+- スロットのストローク幅 (``strokeWidth``、``FEATURE_STROKE_WIDTH`` が立っているとき。なければ 1) は、
+  ピクチャ内で ``SHAPE_STROKE_CURRENT_WIDTH`` の印が付いたストロークの太さ (ピクチャ座標系) になります。
+  SVG の ``stroke-width`` のアニメーションがこれになります。
+- ``clip`` はスロットを ``Graphics2D`` のクリップ矩形で切り取ります。矩形はボーン ``clipBone`` の座標系で、
+  そのボーンが画面上で回転していると外接矩形になります。
 
 ボーンのローカル変換は ``a = cos(rotY)·scaleX, b = sin(rotY)·scaleX, c = -sin(rotX)·scaleY,
 d = cos(rotX)·scaleY, (tx, ty) = (x, y)`` で、ワールド変換は親のワールド変換にこれを右から掛けたものです。
@@ -104,12 +121,14 @@ d = cos(rotX)·scaleY, (tx, ty) = (x, y)`` で、ワールド変換は親のワ�
 アニメーション
 --------------------------------------------------------------------------------
 
-タイムラインはボーン (``TRANSLATE``、``ROTATE``、``SCALE``) またはスロット (``ATTACHMENT``、``ALPHA``) の
-1 チャネルぶんのキー列です。キーはフレーム昇順で、先頭はフレーム 0 です。
+タイムラインはボーン (``TRANSLATE``、``ROTATE``、``SCALE``) またはスロット (``ATTACHMENT``、``ALPHA``、
+``COLOR``、``STROKE_WIDTH``) の 1 チャネルぶんのキー列です。キーはフレーム昇順で、先頭はフレーム 0 です。
 
 - ボーンのキーの値はバインドポーズへの **オフセット** です。位置は加算、角度は ``int16_t`` で加算
   (折り返し)、倍率はバインドの倍率に掛けます (DragonBones と同じ意味)。
-- スロットのキーの値はスロットの値を置き換えます。``ATTACHMENT`` は補間しません。
+- スロットのキーの値はスロットの値を置き換えます。``ATTACHMENT`` は補間しません。``COLOR`` (``ColorKey``:
+  フレーム、カーブ、r, g, b) は成分ごとに不透明度と同じ式で補間します。``STROKE_WIDTH`` (``StrokeWidthKey``:
+  フレーム、カーブ、float の太さ) は float で補間します。
 - キーの ``curve`` は次のキーまでのイージングで、``CURVE_LINEAR``、``CURVE_STEP`` (次のキーまで保持)、
   または ``Animation::curves`` の添字です。``Curve`` は ``x = i/16`` での ``y`` を Q14 で 17 点持つ表です。
 - 描画順のキー (``DrawOrderKey``) は「描画位置 → スロット」の完成した並びを持ちます (``nullptr`` は基本順)。
@@ -126,7 +145,7 @@ Instance
 .. csv-table::
    :header: "関数", "説明"
 
-   "``static size_t bytes(const Armature &)``", "``init()`` に必要なメモリ (ボーン 1 本 24 バイト、スロット 1 個 13 バイト、4 の倍数に切り上げ、境界合わせの余裕 3 バイト)"
+   "``static size_t bytes(const Armature &)``", "``init()`` に必要なメモリ (ボーン 1 本 24 バイト、スロット 1 個 21 バイト、4 の倍数に切り上げ、境界合わせの余裕 3 バイト)"
    "``bool init(armature, memory, size)``", "メモリが足りなければ false。成功するとバインドポーズになる"
    "``void deinit()`` / ``bool isInitialized()`` / ``armature()``", "解放 (メモリは使わなくなるだけ) と状態の取得"
    "``bool pose(anim, frame, visitor = nullptr)``", "``frame`` (小数可、``[0, duration]`` に収める) の姿勢にする。別のアーマチュアのアニメーションなら false で何も変えない"
@@ -135,7 +154,7 @@ Instance
    "``int drawIndexOf(slot)`` / ``int slotAt(drawIndex)``", "スロットと現在の描画位置の対応。範囲外は -1"
    "``int boneIndex(name)`` / ``int slotIndex(name)``", "名前から添字 (線形探索)。無ければ -1"
    "``const affine2f &boneTransform(bone)``", "ボーンのワールド変換 (アーマチュア座標系、配置は含まない)"
-   "``attachmentOf`` / ``setAttachment`` / ``alphaOf`` / ``setAlpha``", "スロットの表示中アタッチメント (-1 で非表示) と不透明度。次の ``pose()`` まで有効な上書き"
+   "``attachmentOf`` / ``setAttachment`` / ``alphaOf`` / ``setAlpha`` / ``colorOf`` / ``setColor`` / ``strokeWidthOf`` / ``setStrokeWidth``", "スロットの表示中アタッチメント (-1 で非表示)、不透明度、色 (RGB。α は無視)、ストローク幅。次の ``pose()`` まで有効な上書き"
    "``RectF bounds()`` / ``RectF bounds(placement)``", "表示中のスロットを囲む矩形。アーマチュア座標系と、``placement`` を掛けた後 (保守的)"
 
 ``Instance`` は小さなハンドルで、コピーすると同じメモリを指す 2 つめのハンドルになります。
@@ -145,8 +164,9 @@ Instance
 
 ``pose()`` はボーンを親から順に、バインド値に各タイムラインのオフセットを加えてローカル姿勢
 (``BonePose``) を作り、``BoneVisitor`` があれば ``onBone(bone, local)`` を呼んでから、ローカル行列を
-親のワールド変換に掛けます (``rotX == rotY`` なら sin/cos は 1 組)。続いてスロットの表示アタッチメントと
-不透明度を決め、スロットごとの境界 (アタッチメントの 4 隅をワールド変換で写した矩形) を更新します。
+親のワールド変換に掛けます (``rotX == rotY`` なら sin/cos は 1 組)。続いてスロットの表示アタッチメント、
+不透明度、色、ストローク幅を決め、スロットごとの境界 (アタッチメントの 4 隅、ピクチャならその ``bounds`` をワールド変換で
+写した矩形) を更新します。
 描画順はそのフレーム以前で最後のキーのもので、変わったときだけ書き換えます。
 
 キーの補間は、フレームを挟む 2 つのキーの間の進み ``t`` (float) からイージング ``e`` (Q14 の整数) を求め、
@@ -172,9 +192,12 @@ Instance
 
 ``draw(g)`` は ``g`` の現在の変換をアーマチュアの配置として使い、描画順に表示中のスロットを
 ``setTransform(配置 × ボーンのワールド変換 × アタッチメントの local)`` と
-``drawImage(texture, 0, 0, src, hull, hullCount)`` で描きます。ライブラリに専用の画素処理はなく、
-回転・拡大した ``drawImage()`` そのものです。``hull`` (dbones2cpp が作る、不透明部分を囲む凸多角形) は
+``drawImage(texture, 0, 0, src, hull, hullCount)`` (画像) または ``drawPicture(picture, スロットの色,
+スロットのストローク幅)`` (ベクタ) で描きます。ライブラリに専用の画素処理はなく、回転・拡大した ``drawImage()`` /
+``drawPicture()`` そのものです。``hull`` (dbones2cpp が作る、不透明部分を囲む凸多角形) は
 描かれないはずの透明なピクセルだけを切り落とすので、絵は矩形全体を描いたときと同じで、走査が減るぶん速くなります。
+``clip`` を持つスロットは、描く間だけ ``g`` のクリップ矩形をその矩形 (配置 × ``clipBone`` のワールド変換で
+写したもの) と交差させます。
 
 - スロットの不透明度は ``g`` の不透明度に掛かります。``ADD`` のスロットは加算で描きます (``g`` のブレンドモードが
   ``NONE`` のときを除く)。
@@ -182,8 +205,14 @@ Instance
   スロットは飛ばすので、帯ごとに描画しても無駄がありません。
 - キーカラー出力のアーマチュアは、キーカラーのテクスチャを描く間だけそのキーカラーを設定し、ARGB4444 の
   テクスチャ (``--out-format auto`` で混在する) を描く間は外します。終わると呼び出し前の状態に戻します。
-- 終わると ``g`` の変換、不透明度、ブレンドモード、カラーキーを呼び出し前に戻します (ステートスタックは使いません)。
+- 終わると ``g`` の変換、不透明度、ブレンドモード、カラーキー、クリップ矩形を呼び出し前に戻します
+  (ステートスタックは使いません)。ベクタピクチャは ``g`` のアンチエイリアス設定で描かれます。
 - ``SHAPOGFX2D_TRANSFORM=0`` の構成では何も描きません。
+
+``rig::drawBind(g, armature)`` は ``Instance`` なしでバインドポーズ (既定のアタッチメント、不透明度、色、
+基本の描画順) を同じように描きます。ボーンのワールド変換を親をたどって毎回計算するので、深い木では
+``Instance`` より計算が増えますが、メモリは要りません。アニメーションしない SVG をアーマチュアとして
+変換したときの描き方です (svg2cpp は、アニメーションのない SVG は既定では ``vg::Picture`` だけを出力します)。
 
 ``draw(g, first, end)`` で描画順の途中に自分の描画を挟めます。
 
@@ -238,13 +267,14 @@ demorig のキャラクタ rgb_chan を縮尺 0.5 で変換したもの (ボー�
    "8 帯に分けた描画", "一括描画の 1.03 倍 (クリップ外のスキップなしでは 1.08 倍)"
    "キャラクタに掛からない帯", "約 3,000 (スキップなしでは 27,000)"
 
-``src/gfx2d/rig.cpp`` のコードは Cortex-M33 で 5.1 KB、Cortex-M0+ で 6.4 KB です (``-O2``、sin 表を含む。
-使わなければリンクされません)。
+``src/gfx2d/rig.cpp`` のコードは Cortex-M33 で 8.5 KB、Cortex-M0+ で 11.0 KB です (``-O2``、sin 表を含む。
+ベクタアタッチメント、クリップ、``drawBind()`` の前は 5.1 / 6.4 KB でした。使わなければリンクされません。
+ベクタ描画本体 ``vg.cpp`` はピクチャを描くときだけリンクされます)。
 
 対応していない機能
 ================================================================================
 
-メッシュ変形 (FFD、ウェイト付きメッシュ)、IK、入れ子のアーマチュア、イベント、スロットの RGB の色変換、
+メッシュ変形 (FFD、ウェイト付きメッシュ)、IK、入れ子のアーマチュア、イベント、画像スロットの RGB の色変換、
 追加の回転数 (``clockwise`` / ``tweenRotate``)、回転や拡大を継承しないボーン、実行時のスキン切り替え、
 アニメーションのブレンド。親ボーンに非等方の倍率があると子はせん断されます (行列の積をそのまま使うため)。
 変換ツールはこれらを警告して無視します。
@@ -257,16 +287,20 @@ demorig のキャラクタ rgb_chan を縮尺 0.5 で変換したもの (ボー�
 「0 (または列挙子 0) = 使っていない」の意味です (``-Wextra`` では ``-Wmissing-field-initializers`` の警告が出ますが、
 意味は変わりません)。
 
-- ``rig::FORMAT_VERSION`` はこうして追加したメンバの世代数です。dbones2cpp の出力は必要な世代を
+- ``rig::FORMAT_VERSION`` はこうして追加したメンバの世代数です (1: 最初の配置、2: ``Slot::clip`` /
+  ``clipBone``、``AttachmentKind::VECTOR``、``Channel::COLOR``、3: ``Slot::strokeWidth``、
+  ``Channel::STROKE_WIDTH``)。生成ヘッダは必要な世代を
   ``static_assert`` するので、古いライブラリで新しい生成ヘッダを使うとコンパイル時に止まります。
-- ``Armature::features`` / ``Animation::features`` はデータが使っている機能のビットです (機能ごとに今後定義)。
-  ``rig::SUPPORTED_FEATURES`` にないビットが立ったデータは ``init()`` / ``pose()`` が拒否します
-  (その機能なしで描くと作ったものと違う絵になるため)。
-- ``Attachment::kind`` と ``ext``: 画像以外の display (メッシュ、入れ子のアーマチュア、当たり判定) のデータの置き場。
-  ``IMAGE`` 以外は描きません。
+- ``Armature::features`` / ``Animation::features`` はデータが使っている機能のビットです。今は
+  ``FEATURE_SLOT_COLOR`` (スロットの色と ``COLOR`` タイムラインが有効) と ``FEATURE_STROKE_WIDTH``
+  (ストローク幅と ``STROKE_WIDTH`` タイムラインが有効) が定義されています。
+  ``rig::SUPPORTED_FEATURES`` にないビットが立ったデータは ``init()`` / ``pose()`` / ``drawBind()`` が
+  拒否します (その機能なしで描くと作ったものと違う絵になるため)。
+- ``Attachment::kind`` と ``ext``: 画像以外の display のデータの置き場。``VECTOR`` が ``vg::Picture`` に
+  使っていて、メッシュ、入れ子のアーマチュア、当たり判定は予約のままです。
 - ``Bone::flags``: 回転や倍率を継承しないボーンのためのフラグ。パディングに収まります。
-- ``Slot::tintR / G / B``: RGB の色変換。古いヘッダでは 0, 0, 0 になるので、機能ビットが立ったときだけ読む予定です。
-  パディングに収まります。
+- ``Slot::colorR / G / B``: 元は色変換用の予約 (``tintR / G / B``) でした。古いヘッダでは 0, 0, 0 になるので、
+  ``FEATURE_SLOT_COLOR`` が立ったときだけ読みます。画像への適用 (色変換) は今後の課題です。
 - ``RotateKey::turns``: 追加の回転数 (``clockwise`` / ``tweenRotate``)。元はパディングでした。
 
 メッシュや IK 本体のデータ (頂点・重み・制約・そのタイムライン) は、必要になった時点で ``Armature`` /

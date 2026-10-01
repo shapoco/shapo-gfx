@@ -23,14 +23,19 @@ takes its working memory from an arena you hand it.
   display interfaces); unused formats can be compiled out
 - `Graphics2D`: shapes, lines, polygons, blits with alpha/additive blending,
   two-color bitmaps, GFXfont text with four bundled fonts
+- `vg`: vector graphics: paths of lines and bezier curves, filled (nonzero or
+  even-odd) with colors or linear / radial gradients, stroked with a width, caps
+  and joins, antialiased, grouped into pictures converted from SVG
 - `rig`: 2D skeletal animation of DragonBones characters (bones, slots, keyframes
-  interpolated at any frame rate, draw order), drawn with `Graphics2D`
+  interpolated at any frame rate, draw order) and of animated SVG (the shapes as
+  vector attachments), drawn with `Graphics2D`
 - `Graphics3D`: scanline rasterizer rendering any screen region into a band
   buffer; Gouraud shading, textures in any format, environment mapping,
   alpha/additive blending, perspective-correct texturing, built-in shapes,
   static scene graphs with a visitor hook for animation
-- Tools: `img2cpp` (images), `gltf2cpp` (glTF 2.0 models) and `dbones2cpp`
-  (DragonBones armatures) generate `const` data headers
+- Tools: `img2cpp` (images), `gltf2cpp` (glTF 2.0 models), `dbones2cpp`
+  (DragonBones armatures) and `svg2cpp` (SVG pictures and SMIL animations)
+  generate `const` data headers
 - Self-checking tests meant to run under ASan/UBSan
 
 ## Applications
@@ -143,10 +148,10 @@ python3 -m pip install -r requirements.txt
 ## Repository layout
 
 ```
-include/shapoco/gfx2d/   2D API and shared types (pixel formats, Surface, Graphics2D, fonts, rig)
+include/shapoco/gfx2d/   2D API and shared types (pixel formats, Surface, Graphics2D, fonts, vg, rig)
 include/shapoco/gfx3d/   3D renderer (Graphics3D, shapes, static scenes, math)
 src/                     implementation
-bin/                     img2cpp, gltf2cpp, dbones2cpp and their requirements
+bin/                     img2cpp, gltf2cpp, dbones2cpp, svg2cpp and their requirements
 library.json             PlatformIO manifest
 example/wasm/            demo2d, demo3d, demorig (WASM and native entry points)
 example/common/demorig/  demorig's scene, view and overlay (shared by the WASM and M5Stack builds)

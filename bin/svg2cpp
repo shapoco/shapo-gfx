@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["Pillow>=9.0", "numpy>=1.22", "fonttools>=4.0"]
+# ///
+"""Convert an SVG file to a C++ header for shapoco::gfx2d::vg / rig.
+
+A static SVG becomes one vg::Picture (`picture`): every shape as a path of
+lines and bezier curves with its fill / stroke brushes (colors, gradients),
+stroke style, clip and transform, drawn with Graphics2D::drawPicture(). An SVG
+with SMIL animation (animate, set, animateTransform, animateMotion) becomes a
+rig::Armature (`armature`) with one rig::Animation (`anim_main`): the animated
+elements get bones and slots whose VECTOR attachments point to pictures; the
+static parts collapse into as few slots as possible. Pose and draw it with
+rig::Instance (include "shapoco/gfx2d/rig.hpp").
+
+The picture space is the SVG's pixel size (width / height, or the viewBox)
+times --scale, origin top-left. Text is outlined when a font is given (--font,
+--font-dir) and otherwise emitted as a vg::Text drawn with a bitmap font.
+Images (data: URIs or files next to the SVG) become textures.
+
+Not supported (warned and skipped): masks, patterns, filters, markers,
+foreignObject, clip paths other than one rectangle, event-based animation
+begins, animation of path data / points / stroke width, textPath. Group
+opacity is approximated by multiplying it into the descendants.
+
+Examples:
+  svg2cpp logo.svg logo.hpp                       # picture, namespace logo
+  svg2cpp --scale 0.5 --font-dir /usr/share/fonts logo.svg logo.hpp
+  svg2cpp --rig --keep head,arm --fps 24 chara.svg chara.hpp
+  svg2cpp --dump chara.json chara.svg chara.hpp   # also a JSON summary
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shapogfx_imgconv as conv  # noqa: E402
+import shapogfx_svg as svg  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("input", help="input SVG file")
+    ap.add_argument("output", help="output C++ header (.hpp)")
+    ap.add_argument("--namespace", default=None,
+                    help="namespace of the generated objects (default: the input file name)")
+    ap.add_argument("--scale", type=float, default=1.0, help="scale of the picture (default: 1)")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--picture", action="store_true", help="one vg::Picture, the animations ignored")
+    mode.add_argument("--rig", action="store_true",
+                      help="a rig::Armature with an animation (default when the SVG has SMIL animation)")
+    ap.add_argument("--keep", default="", metavar="IDS",
+                    help="comma-separated ids of elements to keep as bones (found by name with boneIndex())")
+    ap.add_argument("--keep-all", action="store_true", help="keep every element with an id as a bone")
+    ap.add_argument("--fps", type=int, default=30, help="frame rate of the animation (1..255, default: 30)")
+    ap.add_argument("--duration", type=float, default=None, metavar="SECONDS",
+                    help="length of the animation (default: the common period of the repeating animations "
+                         "and the end of the others, at most 60 s)")
+    ap.add_argument("--anim-name", default="main", help="name of the animation (default: main)")
+    ap.add_argument("--font", action="append", default=[], metavar="FAMILY=PATH",
+                    help="font file for a font-family (repeatable; FAMILY * is the fallback for any family)")
+    ap.add_argument("--font-dir", action="append", default=[], metavar="DIR",
+                    help="folder of .ttf / .otf fonts, looked up by the family names in their name tables")
+    ap.add_argument("--text-font", default="nullptr", metavar="EXPR",
+                    help="C++ expression of the GFXfont for texts without an outline font, e.g. "
+                         "'&shapoco::gfx2d::ShapoSansP_s12c09a01w02' (default: nullptr, the Graphics2D's font)")
+    ap.add_argument("--image-format", choices=("argb4444", "rgb565_swapped", "rgb565", "rgb444", "gray1"),
+                    default="argb4444", help="pixel format of the images (default: argb4444)")
+    ap.add_argument("--dither", choices=conv.DITHERS, default="none", help="dithering of the images (default: none)")
+    ap.add_argument("--dump", default=None, metavar="JSON", help="also write a JSON summary of the conversion")
+    ap.add_argument("--verbose", action="store_true", help="print notes about approximations")
+    args = ap.parse_args()
+    if not 1 <= args.fps <= 255:
+        ap.error("--fps must be 1..255")
+    if args.duration is not None and args.duration <= 0:
+        ap.error("--duration must be positive")
+    if args.scale <= 0:
+        ap.error("--scale must be positive")
+
+    svg.reset(args.verbose)
+    try:
+        fonts = svg.FontSet()
+        for spec in args.font:
+            if "=" not in spec:
+                ap.error("--font needs FAMILY=PATH")
+            fam, path = spec.split("=", 1)
+            fonts.add(fam.strip(), path.strip())
+        for d in args.font_dir:
+            fonts.add_dir(d)
+        options = svg.CompileOptions(fonts, args.text_font, args.image_format, args.dither)
+        doc = svg.Document(args.input, args.scale)
+        namespace = args.namespace or conv.sanitize_identifier(os.path.splitext(os.path.basename(args.input))[0])
+        guard = conv.sanitize_identifier(namespace).upper() + "_" + conv.identifiers_from_path(args.output)[0] + "_HPP"
+        rig_mode = args.rig or (doc.has_animation() and not args.picture)
+        if doc.has_animation() and args.picture:
+            svg.warn("the SVG is animated; --picture takes its first frame (the animations are ignored)")
+        source = os.path.basename(args.input)
+        opts = [f"namespace {namespace}", f"scale {args.scale:g}", "rig" if rig_mode else "picture",
+                f"image-format {args.image_format}", f"dither {args.dither}", f"text-font {args.text_font}"]
+        if args.font:
+            opts.append("font " + ", ".join(args.font))
+        if args.font_dir:
+            opts.append("font-dir " + ", ".join(args.font_dir))
+        if rig_mode:
+            keep = [i.strip() for i in args.keep.split(",") if i.strip()]
+            opts += [f"fps {args.fps}", f"duration {args.duration if args.duration is not None else 'auto'}",
+                     f"anim-name {args.anim_name}"]
+            if keep:
+                opts.append("keep " + ",".join(keep))
+            if args.keep_all:
+                opts.append("keep-all")
+            rig = svg.compile_rig(doc, options, keep, args.keep_all, args.fps, args.duration, args.anim_name)
+            code, emitter = svg.generate_rig_header(rig, namespace, guard, source, options, opts)
+            dump = svg.dump_rig(rig, namespace, source, emitter) if args.dump else None
+            summary = (f"{len(rig.bones)} bones, {len(rig.slots)} slots, {emitter.stats['shapes']} shapes, "
+                       f"{rig.duration} frames at {rig.fps} fps")
+        else:
+            pic = svg.compile_picture(doc, options)
+            code, emitter = svg.generate_picture_header(pic, namespace, guard, source, options, opts)
+            dump = svg.dump_picture(pic, namespace, source) if args.dump else None
+            summary = f"{len(pic.shapes)} shapes, {emitter.stats['ops']} path ops"
+    except svg.ConvertError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)) or ".", exist_ok=True)
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write(code)
+    if dump is not None:
+        with open(args.dump, "w", encoding="utf-8") as f:
+            json.dump(dump, f, indent=1)
+            f.write("\n")
+        print(f"wrote {args.dump}")
+    n = len(svg.warnings())
+    print(f"Generated {args.output}: {summary}, ~{emitter.bytes} bytes" + (f", {n} warning(s)" if n else ""))
+
+
+if __name__ == "__main__":
+    main()

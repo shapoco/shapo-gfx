@@ -26,7 +26,7 @@ namespace g2 = shapoco::gfx2d;
 
 namespace {
 
-constexpr int ARENA_BYTES = 4096;
+constexpr int ARENA_BYTES = 16384;  // the antialiased drawing keeps edges and coverage here
 constexpr uint32_t WORKER_STACK_BYTES = 12 * 1024;
 constexpr int64_t LOG_INTERVAL_US = 2000000;
 

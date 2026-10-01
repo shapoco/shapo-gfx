@@ -3,7 +3,8 @@
 
 // demorig scene: a DragonBones character (converted by bin/dbones2cpp) posed
 // by shapoco::gfx2d::rig in a turning ring of additive rectangles, with
-// falling stars over a scrolling checkerboard.
+// falling stars over a scrolling checkerboard, and pop stars (an animated
+// SVG converted by bin/svg2cpp) bursting behind the character.
 //
 // The scene is laid out in world coordinates of width x height pixels (the
 // screen size, so that at zoom 1 a world pixel is a screen pixel) and scaled
@@ -38,6 +39,8 @@ class Scene {
   static constexpr int NUM_STARS = 24;
   static constexpr int STAR_VERTS = 10;
   static constexpr int RING_RECTS = 40;
+  static constexpr int NUM_POPS = 2;      // pop star instances
+  static constexpr float POP_EVERY = 1.0f;  // seconds between bursts
 
   // Bounding box in world coordinates, to skip what a band does not show
   struct Box {
@@ -63,9 +66,25 @@ class Scene {
   float ringAngles_[RING_RECTS];
   Box ringBoxes_[RING_RECTS];
 
+  // The pop stars: every POP_EVERY seconds the next instance (in turn)
+  // restarts its 1.5 s animation at a random place, size and angle
+  struct Pop {
+    bool active = false;
+    float start = 0.0f;
+    shapoco::gfx2d::affine2f placement;  // world <- picture
+    Box box;
+  };
+  // rig::Instance::bytes(pop_star::armature) is 741
+  alignas(4) uint8_t popMemory_[NUM_POPS][1024];
+  shapoco::gfx2d::rig::Instance popRigs_[NUM_POPS];
+  Pop pops_[NUM_POPS];
+  int lastBurst_ = -1;
+
   void updateStars(float t);
   void updateRing();
+  void updatePops(float t);
   void drawStars(shapoco::gfx2d::Graphics2D &g, const Box &view) const;
+  void drawPops(shapoco::gfx2d::Graphics2D &g, const Box &view) const;
   void drawBackground(shapoco::gfx2d::Graphics2D &g, const Box &view) const;
   void drawCircle(shapoco::gfx2d::Graphics2D &g, const Box &view,
                   bool front) const;

@@ -24,14 +24,19 @@ ShapoGFX は、小型ディスプレイを駆動するマイコン向けの、�
   使わないフォーマットはコンパイル対象から外せます
 - `Graphics2D`: 図形、直線、ポリゴン、アルファ/加算ブレンド付きの転送、
   2 色ビットマップ、GFXfont によるテキスト描画 (フォント 4 種同梱)
-- `rig`: DragonBones キャラクタの 2D スケルタルアニメーション (ボーン、スロット、
+- `vg`: ベクタグラフィックス。直線とベジェ曲線のパスを単色または線形/放射
+  グラデーションで塗り (nonzero / even-odd)、太さ・端点・角の形を指定して
+  ストロークし、アンチエイリアスをかけて描画。SVG から変換したピクチャ単位で扱えます
+- `rig`: DragonBones キャラクタおよびアニメーション付き SVG (図形はベクタ
+  アタッチメント) の 2D スケルタルアニメーション (ボーン、スロット、
   任意のフレームレートで補間されるキーフレーム、描画順)。描画には `Graphics2D` を使用
 - `Graphics3D`: 画面の任意の領域をバンドバッファへ描画するスキャンラインラスタライザ。
   グーローシェーディング、任意フォーマットのテクスチャ、環境マッピング、
   アルファ/加算ブレンド、パースペクティブコレクトなテクスチャマッピング、組込み形状、
   アニメーション用のビジターフックを持つ静的シーングラフ
 - ツール: `img2cpp` (画像)、`gltf2cpp` (glTF 2.0 モデル)、`dbones2cpp`
-  (DragonBones アーマチュア) で `const` データのヘッダを生成
+  (DragonBones アーマチュア)、`svg2cpp` (SVG のピクチャと SMIL アニメーション) で
+  `const` データのヘッダを生成
 - ASan/UBSan 下で実行することを想定した自己検査型のテスト
 
 ## アプリケーション例
@@ -143,10 +148,10 @@ python3 -m pip install -r requirements.txt
 ## リポジトリ構成
 
 ```
-include/shapoco/gfx2d/   2D API と共通の型 (ピクセルフォーマット, Surface, Graphics2D, フォント, rig)
+include/shapoco/gfx2d/   2D API と共通の型 (ピクセルフォーマット, Surface, Graphics2D, フォント, vg, rig)
 include/shapoco/gfx3d/   3D レンダラ (Graphics3D, 形状, 静的シーン, 数学)
 src/                     実装
-bin/                     img2cpp, gltf2cpp, dbones2cpp とその依存パッケージ定義
+bin/                     img2cpp, gltf2cpp, dbones2cpp, svg2cpp とその依存パッケージ定義
 library.json             PlatformIO マニフェスト
 example/wasm/            demo2d, demo3d, demorig (WASM 版とネイティブ版のエントリポイント)
 example/common/demorig/  demorig のシーン、ビュー、オーバーレイ (WASM 版と M5Stack 版で共用)

@@ -1,0 +1,1200 @@
+{
+ "tool": "svg2cpp",
+ "mode": "rig",
+ "namespace": "test_vg_anim",
+ "source": "test_vg_anim.svg",
+ "rig": {
+  "name": "root",
+  "fps": 30,
+  "duration": 60,
+  "bounds": [
+   0.0,
+   0.0,
+   200.0,
+   120.0
+  ],
+  "signature": "0xF8B3326A",
+  "bones": [
+   {
+    "name": "root",
+    "parent": null,
+    "x": 0.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "wheel_base",
+    "parent": 0,
+    "x": 40.0,
+    "y": 60.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "wheel",
+    "parent": 1,
+    "x": 0.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "slider_base",
+    "parent": 0,
+    "x": 80.0,
+    "y": 10.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "slider",
+    "parent": 3,
+    "x": 0.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "kept",
+    "parent": 4,
+    "x": 0.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "fader",
+    "parent": 0,
+    "x": 0.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "blob",
+    "parent": 0,
+    "x": 100.0,
+    "y": 80.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "arrow",
+    "parent": 0,
+    "x": 0.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "blinker",
+    "parent": 0,
+    "x": 0.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "spin_base",
+    "parent": 0,
+    "x": 150.0,
+    "y": 60.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "spin_pivot",
+    "parent": 10,
+    "x": 5.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   },
+   {
+    "name": "spin",
+    "parent": 11,
+    "x": 0.0,
+    "y": 0.0,
+    "rotX": -0.0,
+    "rotY": 0.0,
+    "scaleX": 1.0,
+    "scaleY": 1.0
+   }
+  ],
+  "slots": [
+   {
+    "name": "root",
+    "bone": 0,
+    "alpha": 255,
+    "color": [
+     0,
+     0,
+     0
+    ],
+    "default": 0,
+    "strokeWidth": 0.0,
+    "kind": "vector",
+    "clip": null,
+    "clipBone": null,
+    "picture": {
+     "bounds": [
+      0.0,
+      0.0,
+      200.0,
+      120.0
+     ],
+     "shapeCount": 3,
+     "shapes": [
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFFEEEEEEu"
+       },
+       "stroke": null,
+       "source": "rect",
+       "path": {
+        "opCount": 5,
+        "coordCount": 8,
+        "rule": "nonzero",
+        "bounds": [
+         0.0,
+         0.0,
+         200.0,
+         120.0
+        ],
+        "ops": [
+         [
+          "M",
+          0.0,
+          0.0
+         ],
+         [
+          "L",
+          200.0,
+          0.0
+         ],
+         [
+          "L",
+          200.0,
+          120.0
+         ],
+         [
+          "L",
+          0.0,
+          120.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      },
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        4.0,
+        4.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFFBBBBBBu"
+       },
+       "stroke": null,
+       "source": "rect",
+       "path": {
+        "opCount": 5,
+        "coordCount": 8,
+        "rule": "nonzero",
+        "bounds": [
+         0.0,
+         0.0,
+         30.0,
+         10.0
+        ],
+        "ops": [
+         [
+          "M",
+          0.0,
+          0.0
+         ],
+         [
+          "L",
+          30.0,
+          0.0
+         ],
+         [
+          "L",
+          30.0,
+          10.0
+         ],
+         [
+          "L",
+          0.0,
+          10.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      },
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        4.0,
+        4.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFF999999u"
+       },
+       "stroke": null,
+       "source": "circle",
+       "path": {
+        "opCount": 6,
+        "coordCount": 26,
+        "rule": "nonzero",
+        "bounds": [
+         31.0,
+         0.0,
+         10.0,
+         10.0
+        ],
+        "ops": [
+         [
+          "M",
+          41.0,
+          5.0
+         ],
+         [
+          "C",
+          41.0,
+          7.7614,
+          38.7614,
+          10.0,
+          36.0,
+          10.0
+         ],
+         [
+          "C",
+          33.2386,
+          10.0,
+          31.0,
+          7.7614,
+          31.0,
+          5.0
+         ],
+         [
+          "C",
+          31.0,
+          2.2386,
+          33.2386,
+          0.0,
+          36.0,
+          0.0
+         ],
+         [
+          "C",
+          38.7614,
+          0.0,
+          41.0,
+          2.2386,
+          41.0,
+          5.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "wheel",
+    "bone": 2,
+    "alpha": 255,
+    "color": [
+     0,
+     0,
+     0
+    ],
+    "default": 0,
+    "strokeWidth": 0.0,
+    "kind": "vector",
+    "clip": null,
+    "clipBone": null,
+    "picture": {
+     "bounds": [
+      -25.0,
+      -25.0,
+      50.0,
+      50.0
+     ],
+     "shapeCount": 2,
+     "shapes": [
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFF000000u",
+        "gradient": {
+         "kind": "linear",
+         "spread": "pad",
+         "stops": [
+          [
+           0.0,
+           "0xFFFFD700u"
+          ],
+          [
+           1.0,
+           "0xFFDC143Cu"
+          ]
+         ],
+         "toGradient": [
+          0.020833,
+          0.0,
+          0.0,
+          0.0,
+          0.5,
+          0.0
+         ]
+        }
+       },
+       "stroke": {
+        "color": "0xFF333333u"
+       },
+       "source": "circle",
+       "path": {
+        "opCount": 6,
+        "coordCount": 26,
+        "rule": "nonzero",
+        "bounds": [
+         -24.0,
+         -24.0,
+         48.0,
+         48.0
+        ],
+        "ops": [
+         [
+          "M",
+          24.0,
+          0.0
+         ],
+         [
+          "C",
+          24.0,
+          13.2548,
+          13.2548,
+          24.0,
+          0.0,
+          24.0
+         ],
+         [
+          "C",
+          -13.2548,
+          24.0,
+          -24.0,
+          13.2548,
+          -24.0,
+          0.0
+         ],
+         [
+          "C",
+          -24.0,
+          -13.2548,
+          -13.2548,
+          -24.0,
+          0.0,
+          -24.0
+         ],
+         [
+          "C",
+          13.2548,
+          -24.0,
+          24.0,
+          -13.2548,
+          24.0,
+          0.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 2.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      },
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFF333333u"
+       },
+       "stroke": null,
+       "source": "rect",
+       "path": {
+        "opCount": 5,
+        "coordCount": 8,
+        "rule": "nonzero",
+        "bounds": [
+         -2.0,
+         -24.0,
+         4.0,
+         48.0
+        ],
+        "ops": [
+         [
+          "M",
+          -2.0,
+          -24.0
+         ],
+         [
+          "L",
+          2.0,
+          -24.0
+         ],
+         [
+          "L",
+          2.0,
+          24.0
+         ],
+         [
+          "L",
+          -2.0,
+          24.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "kept",
+    "bone": 5,
+    "alpha": 255,
+    "color": [
+     0,
+     0,
+     0
+    ],
+    "default": 0,
+    "strokeWidth": 0.0,
+    "kind": "vector",
+    "clip": null,
+    "clipBone": null,
+    "picture": {
+     "bounds": [
+      0.0,
+      0.0,
+      20.0,
+      12.0
+     ],
+     "shapeCount": 1,
+     "shapes": [
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFF3366CCu"
+       },
+       "stroke": null,
+       "source": "kept",
+       "path": {
+        "opCount": 5,
+        "coordCount": 8,
+        "rule": "nonzero",
+        "bounds": [
+         0.0,
+         0.0,
+         20.0,
+         12.0
+        ],
+        "ops": [
+         [
+          "M",
+          0.0,
+          0.0
+         ],
+         [
+          "L",
+          20.0,
+          0.0
+         ],
+         [
+          "L",
+          20.0,
+          12.0
+         ],
+         [
+          "L",
+          0.0,
+          12.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "fader",
+    "bone": 6,
+    "alpha": 255,
+    "color": [
+     204,
+     51,
+     102
+    ],
+    "default": 0,
+    "strokeWidth": 0.0,
+    "kind": "vector",
+    "clip": null,
+    "clipBone": null,
+    "picture": {
+     "bounds": [
+      80.0,
+      30.0,
+      30.0,
+      12.0
+     ],
+     "shapeCount": 1,
+     "shapes": [
+      {
+       "kind": "path",
+       "flags": 1,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFFCC3366u"
+       },
+       "stroke": null,
+       "source": "fader",
+       "path": {
+        "opCount": 5,
+        "coordCount": 8,
+        "rule": "nonzero",
+        "bounds": [
+         80.0,
+         30.0,
+         30.0,
+         12.0
+        ],
+        "ops": [
+         [
+          "M",
+          80.0,
+          30.0
+         ],
+         [
+          "L",
+          110.0,
+          30.0
+         ],
+         [
+          "L",
+          110.0,
+          42.0
+         ],
+         [
+          "L",
+          80.0,
+          42.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "blob",
+    "bone": 7,
+    "alpha": 255,
+    "color": [
+     0,
+     0,
+     0
+    ],
+    "default": 0,
+    "strokeWidth": 1.0,
+    "kind": "vector",
+    "clip": null,
+    "clipBone": null,
+    "picture": {
+     "bounds": [
+      -8.5,
+      -8.5,
+      17.0,
+      17.0
+     ],
+     "shapeCount": 1,
+     "shapes": [
+      {
+       "kind": "path",
+       "flags": 4,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFF008000u"
+       },
+       "stroke": {
+        "color": "0xFF000000u"
+       },
+       "source": "blob",
+       "path": {
+        "opCount": 6,
+        "coordCount": 26,
+        "rule": "nonzero",
+        "bounds": [
+         -8.0,
+         -8.0,
+         16.0,
+         16.0
+        ],
+        "ops": [
+         [
+          "M",
+          8.0,
+          0.0
+         ],
+         [
+          "C",
+          8.0,
+          4.4183,
+          4.4183,
+          8.0,
+          0.0,
+          8.0
+         ],
+         [
+          "C",
+          -4.4183,
+          8.0,
+          -8.0,
+          4.4183,
+          -8.0,
+          0.0
+         ],
+         [
+          "C",
+          -8.0,
+          -4.4183,
+          -4.4183,
+          -8.0,
+          0.0,
+          -8.0
+         ],
+         [
+          "C",
+          4.4183,
+          -8.0,
+          8.0,
+          -4.4183,
+          8.0,
+          0.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "arrow",
+    "bone": 8,
+    "alpha": 255,
+    "color": [
+     0,
+     0,
+     0
+    ],
+    "default": 0,
+    "strokeWidth": 0.0,
+    "kind": "vector",
+    "clip": null,
+    "clipBone": null,
+    "picture": {
+     "bounds": [
+      0.0,
+      -4.0,
+      8.0,
+      8.0
+     ],
+     "shapeCount": 1,
+     "shapes": [
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFFFF6600u"
+       },
+       "stroke": null,
+       "source": "polygon",
+       "path": {
+        "opCount": 4,
+        "coordCount": 6,
+        "rule": "nonzero",
+        "bounds": [
+         0.0,
+         -4.0,
+         8.0,
+         8.0
+        ],
+        "ops": [
+         [
+          "M",
+          0.0,
+          -4.0
+         ],
+         [
+          "L",
+          8.0,
+          0.0
+         ],
+         [
+          "L",
+          0.0,
+          4.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "blinker",
+    "bone": 9,
+    "alpha": 255,
+    "color": [
+     0,
+     0,
+     0
+    ],
+    "default": 0,
+    "strokeWidth": 0.0,
+    "kind": "vector",
+    "clip": null,
+    "clipBone": null,
+    "picture": {
+     "bounds": [
+      170.0,
+      100.0,
+      20.0,
+      12.0
+     ],
+     "shapeCount": 1,
+     "shapes": [
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFF660066u"
+       },
+       "stroke": null,
+       "source": "blinker",
+       "path": {
+        "opCount": 5,
+        "coordCount": 8,
+        "rule": "nonzero",
+        "bounds": [
+         170.0,
+         100.0,
+         20.0,
+         12.0
+        ],
+        "ops": [
+         [
+          "M",
+          170.0,
+          100.0
+         ],
+         [
+          "L",
+          190.0,
+          100.0
+         ],
+         [
+          "L",
+          190.0,
+          112.0
+         ],
+         [
+          "L",
+          170.0,
+          112.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "spin",
+    "bone": 12,
+    "alpha": 255,
+    "color": [
+     0,
+     0,
+     0
+    ],
+    "default": 0,
+    "strokeWidth": 0.0,
+    "kind": "vector",
+    "clip": null,
+    "clipBone": null,
+    "picture": {
+     "bounds": [
+      -15.0,
+      -5.0,
+      25.0,
+      10.0
+     ],
+     "shapeCount": 2,
+     "shapes": [
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        -5.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFF006699u"
+       },
+       "stroke": null,
+       "source": "rect",
+       "path": {
+        "opCount": 5,
+        "coordCount": 8,
+        "rule": "nonzero",
+        "bounds": [
+         -10.0,
+         -5.0,
+         20.0,
+         10.0
+        ],
+        "ops": [
+         [
+          "M",
+          -10.0,
+          -5.0
+         ],
+         [
+          "L",
+          10.0,
+          -5.0
+         ],
+         [
+          "L",
+          10.0,
+          5.0
+         ],
+         [
+          "L",
+          -10.0,
+          5.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      },
+      {
+       "kind": "path",
+       "flags": 0,
+       "transform": [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        -5.0,
+        0.0
+       ],
+       "clip": null,
+       "fill": {
+        "color": "0xFF0099CCu"
+       },
+       "stroke": null,
+       "source": "circle",
+       "path": {
+        "opCount": 6,
+        "coordCount": 26,
+        "rule": "nonzero",
+        "bounds": [
+         9.0,
+         -3.0,
+         6.0,
+         6.0
+        ],
+        "ops": [
+         [
+          "M",
+          15.0,
+          0.0
+         ],
+         [
+          "C",
+          15.0,
+          1.6569,
+          13.6569,
+          3.0,
+          12.0,
+          3.0
+         ],
+         [
+          "C",
+          10.3431,
+          3.0,
+          9.0,
+          1.6569,
+          9.0,
+          0.0
+         ],
+         [
+          "C",
+          9.0,
+          -1.6569,
+          10.3431,
+          -3.0,
+          12.0,
+          -3.0
+         ],
+         [
+          "C",
+          13.6569,
+          -3.0,
+          15.0,
+          -1.6569,
+          15.0,
+          0.0
+         ],
+         [
+          "Z"
+         ]
+        ]
+       },
+       "strokeStyle": {
+        "width": 1.0,
+        "cap": "butt",
+        "join": "miter",
+        "miterLimit": 4.0
+       }
+      }
+     ]
+    }
+   }
+  ],
+  "timelines": {
+   "bone:wheel:ROTATE": 5,
+   "bone:slider:TRANSLATE": 5,
+   "bone:blob:TRANSLATE": 4,
+   "bone:blob:SCALE": 3,
+   "bone:arrow:TRANSLATE": 26,
+   "bone:arrow:ROTATE": 25,
+   "bone:spin:ROTATE": 3,
+   "slot:fader:ALPHA": 3,
+   "slot:fader:COLOR": 2,
+   "slot:blob:STROKE_WIDTH": 20,
+   "slot:blinker:ATTACHMENT": 3
+  },
+  "curves": 2
+ },
+ "warnings": []
+}

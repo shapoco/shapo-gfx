@@ -142,7 +142,186 @@ int16_t clampCoord(float v) {
   return (int16_t)(v < -32768.0f ? -32768.0f : (v > 32767.0f ? 32767.0f : v));
 }
 
+// The rectangle an attachment covers in its own space; false if it is not
+// drawn
+bool attachmentRect(const Attachment &at, RectF &r) {
+  if (at.kind == AttachmentKind::IMAGE) {
+    if (!at.texture) return false;
+    r = RectF{0, 0, (float)at.src.width, (float)at.src.height};
+    return true;
+  }
+  if (at.kind == AttachmentKind::VECTOR) {
+    if (!at.ext) return false;
+    r = ((const vg::Picture *)at.ext)->bounds;
+    return true;
+  }
+  return false;
+}
+
+// Bounding box of a rectangle under m
+void rectBounds(const RectF &r, const affine2f &m, float &x0, float &y0,
+                float &x1, float &y1) {
+  const vec2f o = m.apply(r.x, r.y);
+  const float ax = m.a * r.width, bx = m.b * r.width;
+  const float cy = m.c * r.height, dy = m.d * r.height;
+  x0 = o.x + std::min(ax, 0.0f) + std::min(cy, 0.0f);
+  x1 = o.x + std::max(ax, 0.0f) + std::max(cy, 0.0f);
+  y0 = o.y + std::min(bx, 0.0f) + std::min(dy, 0.0f);
+  y1 = o.y + std::max(bx, 0.0f) + std::max(dy, 0.0f);
+}
+
+// Draws the slots of an armature one by one, keeping the blend, color key
+// and clip of the Graphics2D in step and restoring them at the end
+struct Drawer {
+  Graphics2D &g;
+  const Armature &arm;
+  const affine2f base;
+  const int opacity;
+  const BlendMode blend;
+  const bool hadKey;
+  const Color oldKey;
+  const Rect clip;
+  // The clip rectangle a pixel wider (the image paths round positions)
+  float cx0, cy0, cx1, cy1;
+  bool keyOn;
+  int curOpacity;
+  BlendMode curBlend;
+  bool clipped = false;
+
+  Drawer(Graphics2D &g, const Armature &arm)
+      : g(g), arm(arm), base(g.transform()), opacity(g.opacity()),
+        blend(g.blendMode()), hadKey(g.hasColorKey()), oldKey(g.colorKey()),
+        clip(g.clipRect()) {
+    cx0 = (float)(clip.x - 1);
+    cy0 = (float)(clip.y - 1);
+    cx1 = (float)(clip.right() + 1);
+    cy1 = (float)(clip.bottom() + 1);
+    // A keyed armature sets its key for its keyed textures only: an
+    // ARGB4444 texture has alpha, and comparing its pixels with a key
+    // would cost
+    keyOn = hadKey;
+    curOpacity = opacity;
+    curBlend = blend;
+  }
+  ~Drawer() {
+    g.setTransform(base);
+    if (curOpacity != opacity || curBlend != blend) g.setBlend(blend, opacity);
+    if (arm.colorKeyEnabled) {
+      if (hadKey) {
+        g.setColorKey(oldKey);
+      } else {
+        g.clearColorKey();
+      }
+    }
+    if (clipped) g.setClipRect(clip);
+  }
+
+  // Whether a box in the armature's space meets the clip
+  bool visible(float x0, float y0, float x1, float y1) const {
+    const float w = x1 - x0, h = y1 - y0;
+    const vec2f o = base.apply(x0, y0);
+    const float ax = base.a * w, bx = base.b * w, cy = base.c * h,
+                dy = base.d * h;
+    return !(o.x + std::max(ax, 0.0f) + std::max(cy, 0.0f) < cx0 ||
+             o.x + std::min(ax, 0.0f) + std::min(cy, 0.0f) > cx1 ||
+             o.y + std::max(bx, 0.0f) + std::max(dy, 0.0f) < cy0 ||
+             o.y + std::min(bx, 0.0f) + std::min(dy, 0.0f) > cy1);
+  }
+
+  // `world`: of the slot's bone; `clipWorld`: of the clip's bone
+  void slot(const Slot &sl, const Attachment &at, int alpha, Color color,
+            float strokeWidth, const affine2f &world,
+            const affine2f &clipWorld) {
+    const int op = alpha == 255 ? opacity : (opacity * alpha + 127) / 255;
+    if (op == 0) return;
+    const BlendMode bm =
+        (sl.blend == BlendMode::ADD && blend != BlendMode::NONE) ? BlendMode::ADD
+                                                                 : blend;
+    if (op != curOpacity || bm != curBlend) {
+      g.setBlend(bm, op);
+      curOpacity = op;
+      curBlend = bm;
+    }
+    if (sl.clip) {
+      // In target pixels: exact without a rotation, else the bounding box
+      const affine2f m = base * clipWorld;
+      float x0, y0, x1, y1;
+      rectBounds(*sl.clip, m, x0, y0, x1, y1);
+      Rect r = {0, 0, 0, 0};
+      if (x0 <= x1 && y0 <= y1) {
+        const int ix0 = snap(x0), iy0 = snap(y0);
+        r = {ix0, iy0, snap(x1) - ix0, snap(y1) - iy0};
+      }
+      g.setClipRect(r.intersect(clip));
+      clipped = true;
+      if (g.clipRect().isEmpty()) {
+        g.setClipRect(clip);
+        return;
+      }
+    } else if (clipped) {
+      g.setClipRect(clip);
+    }
+    if (at.kind == AttachmentKind::VECTOR) {
+      g.setTransform(base * world * at.local);
+      g.drawPicture(*(const vg::Picture *)at.ext, color, strokeWidth);
+    } else {
+      if (arm.colorKeyEnabled) {
+        const bool wantKey = at.texture->format != PixelFormat::ARGB4444;
+        if (wantKey != keyOn) {
+          if (wantKey) {
+            g.setColorKey(arm.colorKey);
+          } else {
+            g.clearColorKey();
+          }
+          keyOn = wantKey;
+        }
+      }
+      g.setTransform(base * world * at.local);
+      g.drawImage(*at.texture, 0, 0, at.src, at.hull, at.hullCount);
+    }
+    if (sl.clip) g.setClipRect(clip);
+  }
+};
+
 }  // namespace
+
+void drawBind(Graphics2D &g, const Armature &arm) {
+  if (!RIG || !TRANSFORM) return;
+  if (arm.features & ~SUPPORTED_FEATURES) return;
+  const bool hasColor = (arm.features & FEATURE_SLOT_COLOR) != 0;
+  const bool hasWidth = (arm.features & FEATURE_STROKE_WIDTH) != 0;
+  // The world transform of a bone, up its chain (parents come first, so
+  // the chain is at most the bone's index long)
+  auto world = [&](int bone) {
+    affine2f m = affine2f::identity();
+    for (int b = bone; b < arm.boneCount && b != NO_PARENT;) {
+      const Bone &bn = arm.bones[b];
+      const BonePose p = {bn.x, bn.y, bn.rotX, bn.rotY, bn.scaleX, bn.scaleY};
+      m = localMatrix(p) * m;
+      if (bn.parent >= b) break;  // parents before children
+      b = bn.parent;
+    }
+    return m;
+  };
+  Drawer d(g, arm);
+  for (int s = 0; s < arm.slotCount; s++) {
+    const Slot &sl = arm.slots[s];
+    if (sl.defaultAttachment < 0 || sl.defaultAttachment >= sl.attachmentCount ||
+        sl.bone >= arm.boneCount || sl.alpha == 0)
+      continue;
+    const Attachment &at = sl.attachments[sl.defaultAttachment];
+    RectF r;
+    if (!attachmentRect(at, r)) continue;
+    const affine2f w = world(sl.bone);
+    float x0, y0, x1, y1;
+    rectBounds(r, w * at.local, x0, y0, x1, y1);
+    if (!(x0 <= x1 && y0 <= y1) || !d.visible(x0, y0, x1, y1)) continue;
+    const Color c = hasColor ? makeColor(sl.colorR, sl.colorG, sl.colorB)
+                             : Colors::WHITE;
+    d.slot(sl, at, sl.alpha, c, hasWidth ? sl.strokeWidth : 1.0f, w,
+           sl.clip && sl.clipBone < arm.boneCount ? world(sl.clipBone) : w);
+  }
+}
 
 size_t Instance::bytes(const Armature &a) {
   const size_t n = sizeof(affine2f) * a.boneCount +
@@ -214,9 +393,18 @@ void Instance::apply(const Animation *anim, float frame, BoneVisitor *visitor) {
 
   // Slots
   t = 0;
+  const bool hasColor = (arm.features & FEATURE_SLOT_COLOR) != 0;
+  const bool hasWidth = (arm.features & FEATURE_STROKE_WIDTH) != 0;
   for (int s = 0; s < arm.slotCount; s++) {
     const Slot &sl = arm.slots[s];
     int att = sl.defaultAttachment, alpha = sl.alpha;
+    int r = 255, gr = 255, b = 255;
+    float width = hasWidth ? sl.strokeWidth : 1.0f;
+    if (hasColor) {
+      r = sl.colorR;
+      gr = sl.colorG;
+      b = sl.colorB;
+    }
     for (; t < a.slotTimelineCount && a.slotTimelines[t].slot <= s; t++) {
       const SlotTimeline &tl = a.slotTimelines[t];
       if (tl.slot != s || tl.keyCount == 0 || !tl.keys) continue;
@@ -229,10 +417,24 @@ void Instance::apply(const Animation *anim, float frame, BoneVisitor *visitor) {
         const AlphaKey *k0, *k1;
         const int32_t e = sample(a, tl.keys, tl.keyCount, frame, k0, k1);
         alpha = clampInt(0, 255, lerpI(k0->alpha, k1->alpha, e));
+      } else if (tl.channel == Channel::COLOR) {
+        const ColorKey *k0, *k1;
+        const int32_t e = sample(a, tl.keys, tl.keyCount, frame, k0, k1);
+        r = clampInt(0, 255, lerpI(k0->r, k1->r, e));
+        gr = clampInt(0, 255, lerpI(k0->g, k1->g, e));
+        b = clampInt(0, 255, lerpI(k0->b, k1->b, e));
+      } else if (tl.channel == Channel::STROKE_WIDTH) {
+        const StrokeWidthKey *k0, *k1;
+        const int32_t e = sample(a, tl.keys, tl.keyCount, frame, k0, k1);
+        width = lerpF(k0->width, k1->width, e);
       }
     }
     slots_[s].attachment = (int8_t)att;
     slots_[s].alpha = (uint8_t)alpha;
+    slots_[s].r = (uint8_t)r;
+    slots_[s].g = (uint8_t)gr;
+    slots_[s].b = (uint8_t)b;
+    slots_[s].strokeWidth = width;
     updateSlot(s);
   }
   updateBounds();
@@ -270,16 +472,11 @@ void Instance::updateSlot(int s) {
       sl.bone >= arm_->boneCount)
     return;
   const Attachment &at = sl.attachments[st.attachment];
-  // Only images are drawn; the other kinds are reserved
-  if (at.kind != AttachmentKind::IMAGE || !at.texture) return;
+  RectF r;
+  if (!attachmentRect(at, r)) return;  // the other kinds are reserved
   const affine2f m = world_[sl.bone] * at.local;
-  const float w = (float)at.src.width, h = (float)at.src.height;
-  // The corners: m.apply(0, 0) + {0, a w} + {0, c h}
-  const float ax = m.a * w, bx = m.b * w, cy = m.c * h, dy = m.d * h;
-  const float x0 = m.tx + std::min(ax, 0.0f) + std::min(cy, 0.0f);
-  const float x1 = m.tx + std::max(ax, 0.0f) + std::max(cy, 0.0f);
-  const float y0 = m.ty + std::min(bx, 0.0f) + std::min(dy, 0.0f);
-  const float y1 = m.ty + std::max(bx, 0.0f) + std::max(dy, 0.0f);
+  float x0, y0, x1, y1;
+  rectBounds(r, m, x0, y0, x1, y1);
   if (!(x0 <= x1 && y0 <= y1)) return;  // NaN
   st.x0 = clampCoord(std::floor(x0));
   st.y0 = clampCoord(std::floor(y0));
@@ -310,69 +507,20 @@ void Instance::draw(Graphics2D &g, int first, int end) const {
   first = std::max(first, 0);
   end = std::min(end, (int)arm.slotCount);
   if (first >= end) return;
-
-  const affine2f base = g.transform();
-  const int opacity = g.opacity();
-  const BlendMode blend = g.blendMode();
-  const bool hadKey = g.hasColorKey();
-  const Color oldKey = g.colorKey();
-  // A keyed armature sets its key for its keyed textures only: an ARGB4444
-  // texture has alpha, and comparing its pixels with a key would cost
-  bool keyOn = hadKey;
-  // The clip rectangle a pixel wider (the image paths round positions)
-  const Rect clip = g.clipRect();
-  const float cx0 = (float)(clip.x - 1), cy0 = (float)(clip.y - 1);
-  const float cx1 = (float)(clip.right() + 1), cy1 = (float)(clip.bottom() + 1);
-  int curOpacity = opacity;
-  BlendMode curBlend = blend;
+  Drawer d(g, arm);
   for (int i = first; i < end; i++) {
     const int s = order_[i];
     const SlotState &st = slots_[s];
     if (st.x1 < st.x0 || st.alpha == 0) continue;
     // Skip what lies outside the clip (drawing in bands)
-    const float w = (float)(st.x1 - st.x0), h = (float)(st.y1 - st.y0);
-    const vec2f o = base.apply((float)st.x0, (float)st.y0);
-    const float ax = base.a * w, bx = base.b * w, cy = base.c * h,
-                dy = base.d * h;
-    if (o.x + std::max(ax, 0.0f) + std::max(cy, 0.0f) < cx0 ||
-        o.x + std::min(ax, 0.0f) + std::min(cy, 0.0f) > cx1 ||
-        o.y + std::max(bx, 0.0f) + std::max(dy, 0.0f) < cy0 ||
-        o.y + std::min(bx, 0.0f) + std::min(dy, 0.0f) > cy1)
+    if (!d.visible((float)st.x0, (float)st.y0, (float)st.x1, (float)st.y1))
       continue;
     const Slot &sl = arm.slots[s];
     const Attachment &at = sl.attachments[st.attachment];
-    const int op = st.alpha == 255 ? opacity : (opacity * st.alpha + 127) / 255;
-    if (op == 0) continue;
-    const BlendMode bm = (sl.blend == BlendMode::ADD && blend != BlendMode::NONE)
-                             ? BlendMode::ADD
-                             : blend;
-    if (op != curOpacity || bm != curBlend) {
-      g.setBlend(bm, op);
-      curOpacity = op;
-      curBlend = bm;
-    }
-    if (arm.colorKeyEnabled) {
-      const bool wantKey = at.texture->format != PixelFormat::ARGB4444;
-      if (wantKey != keyOn) {
-        if (wantKey) {
-          g.setColorKey(arm.colorKey);
-        } else {
-          g.clearColorKey();
-        }
-        keyOn = wantKey;
-      }
-    }
-    g.setTransform(base * world_[sl.bone] * at.local);
-    g.drawImage(*at.texture, 0, 0, at.src, at.hull, at.hullCount);
-  }
-  g.setTransform(base);
-  if (curOpacity != opacity || curBlend != blend) g.setBlend(blend, opacity);
-  if (arm.colorKeyEnabled) {
-    if (hadKey) {
-      g.setColorKey(oldKey);
-    } else {
-      g.clearColorKey();
-    }
+    d.slot(sl, at, st.alpha, makeColor(st.r, st.g, st.b), st.strokeWidth,
+           world_[sl.bone],
+           sl.clip && sl.clipBone < arm.boneCount ? world_[sl.clipBone]
+                                                  : world_[sl.bone]);
   }
 }
 
@@ -433,6 +581,30 @@ int Instance::alphaOf(int slot) const {
 void Instance::setAlpha(int slot, int alpha) {
   if (!arm_ || slot < 0 || slot >= arm_->slotCount) return;
   slots_[slot].alpha = (uint8_t)clampInt(0, 255, alpha);
+}
+
+Color Instance::colorOf(int slot) const {
+  if (!arm_ || slot < 0 || slot >= arm_->slotCount) return Colors::WHITE;
+  const SlotState &st = slots_[slot];
+  return makeColor(st.r, st.g, st.b);
+}
+
+void Instance::setColor(int slot, Color c) {
+  if (!arm_ || slot < 0 || slot >= arm_->slotCount) return;
+  SlotState &st = slots_[slot];
+  st.r = (uint8_t)colorR(c);
+  st.g = (uint8_t)colorG(c);
+  st.b = (uint8_t)colorB(c);
+}
+
+float Instance::strokeWidthOf(int slot) const {
+  if (!arm_ || slot < 0 || slot >= arm_->slotCount) return 1.0f;
+  return slots_[slot].strokeWidth;
+}
+
+void Instance::setStrokeWidth(int slot, float width) {
+  if (!arm_ || slot < 0 || slot >= arm_->slotCount) return;
+  slots_[slot].strokeWidth = width;
 }
 
 RectF Instance::bounds(const affine2f &placement) const {

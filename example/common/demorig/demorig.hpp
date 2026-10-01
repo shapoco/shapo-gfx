@@ -15,8 +15,10 @@
 //     demo.draw(gBand, bandY);        // one band of it per call
 //
 // Controls: the (+) / (-) buttons at the right edge double / halve the zoom
-// (1/4 to 16 times, animated), and a drag elsewhere scrolls. The view
-// center stays within the scene; the space around it may be seen.
+// (1/4 to 16 times, animated), the (AA) button at the left edge toggles
+// antialiasing (of everything Graphics2D antialiases: the vector pictures
+// and the area fills), and a drag elsewhere scrolls. The view center stays
+// within the scene; the space around it may be seen.
 
 #include "scene.hpp"
 #include "shapoco/gfx2d/graphics2d.hpp"
@@ -55,9 +57,11 @@ class Demo {
   int height() const { return height_; }
   float fps() const { return fps_; }
   float zoom() const;
+  bool antialias() const { return antialias_; }
+  void setAntialias(bool on) { antialias_ = on; }
 
  private:
-  enum class Button { NONE, ZOOM_IN, ZOOM_OUT };
+  enum class Button { NONE, ZOOM_IN, ZOOM_OUT, ANTIALIAS };
 
   Scene scene_;
   int width_ = 0, height_ = 0;
@@ -77,6 +81,8 @@ class Demo {
   // Buttons: centers and radius in screen pixels
   int buttonR_ = 0;
   int zoomInX_ = 0, zoomInY_ = 0, zoomOutX_ = 0, zoomOutY_ = 0;
+  int aaX_ = 0, aaY_ = 0;
+  bool antialias_ = false;
 
   // Time and frame rate
   bool started_ = false;
@@ -90,6 +96,7 @@ class Demo {
   void clampCenter();
   void drawButton(shapoco::gfx2d::Graphics2D &g, int cx, int cy, bool plus,
                   bool down) const;
+  void drawAAButton(shapoco::gfx2d::Graphics2D &g, bool down) const;
 };
 
 }  // namespace demorig

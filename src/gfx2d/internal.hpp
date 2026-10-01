@@ -32,6 +32,11 @@
 #ifndef SHAPOGFX2D_RIG
 #define SHAPOGFX2D_RIG 1
 #endif
+// Antialiasing of the vector calls (fillPath() and friends); 0 draws their
+// edges like polygons, whatever the state says
+#ifndef SHAPOGFX2D_ANTIALIAS
+#define SHAPOGFX2D_ANTIALIAS 1
+#endif
 
 namespace shapoco::gfx2d::detail {
 
@@ -42,6 +47,7 @@ constexpr bool TRANSFORM = SHAPOGFX2D_TRANSFORM != 0;
 constexpr bool BLEND = SHAPOGFX2D_BLEND != 0;
 constexpr bool COLOR_KEY = SHAPOGFX2D_COLOR_KEY != 0;
 constexpr bool RIG = SHAPOGFX2D_RIG != 0;
+constexpr bool ANTIALIAS = SHAPOGFX2D_ANTIALIAS != 0;
 
 // ---------------------------------------------------------------------------
 // Integer helpers
@@ -243,6 +249,10 @@ struct G2Impl {
   static Rect mapRectSigned(const Graphics2D &g, const RectF &r);
 
   // Scratch memory of the arena, released in reverse order
+  static size_t scratchAvail(const Graphics2D &g) {
+    const uint32_t top = (g.scratchTop_ + 7u) & ~7u;
+    return g.scratch_ && top < g.scratchSize_ ? g.scratchSize_ - top : 0;
+  }
   static void *scratchAlloc(Graphics2D &g, size_t bytes) {
     const uint32_t top = (g.scratchTop_ + 7u) & ~7u;
     if (!g.scratch_ || bytes > g.scratchSize_ - std::min(top, g.scratchSize_))
@@ -270,6 +280,39 @@ struct G2Impl {
   // Mask at (dx, dy) (drawing coordinates) showing `src` of the mask
   static void drawMask(Graphics2D &g, const MaskSource &m, const Rect &src,
                        int dx, int dy, const Paint *fg, const Paint *bg);
+
+  // The area fills through the vector rasterizer when the state asks for
+  // antialiasing (vg.cpp): true when it does
+  static bool wantsAntialias(const Graphics2D &g);
+  static void fillPathColor(Graphics2D &g, const vg::Path &path, Color c);
+  static void fillRectAA(Graphics2D &g, const RectF &r, Color c);
+  static void fillEllipseAA(Graphics2D &g, const RectF &r, Color c);
+  static void fillRoundRectAA(Graphics2D &g, const RectF &r, float radius,
+                              Color c);
+  static void fillPolygonAA(Graphics2D &g, const vec2i *pi, const vec2f *pf,
+                            int n, Color c);
+  // The one-pixel lines and outlines as strokes a pixel wide on the target,
+  // and the sectors and frames as paths (vg.cpp)
+  static void strokePointsAA(Graphics2D &g, const vec2i *pi, const vec2f *pf,
+                             int n, bool closed, Color c);
+  static void drawEllipseAA(Graphics2D &g, const RectF &r, Color c);
+  static void drawArcAA(Graphics2D &g, const RectF &r, float a0, float a1,
+                        Color c);
+  static void fillSectorAA(Graphics2D &g, const RectF &r, float a0, float a1,
+                           Color c);
+  static void drawRoundRectAA(Graphics2D &g, const RectF &r, float radius,
+                              Color c);
+  static void drawRectAA(Graphics2D &g, const RectF &r, float thickness,
+                         Color c);
+  // A mask under a transform, sampled 2 x 2 per pixel (images.cpp)
+  static void drawMaskAA(Graphics2D &g, const MaskSource &m, const Rect &src,
+                         int dx, int dy, Color fg, Color bg);
+  // An image under the transform `m` (points relative to the top-left
+  // corner of src to target pixels), its outline (the rectangle, or the
+  // polygon in image pixels relative to src) antialiased (images.cpp)
+  static void drawImageAA(Graphics2D &g, const Texture &img, const Rect &src,
+                          const affine2f &m, const int16_t *polygon,
+                          int count);
 };
 
 }  // namespace shapoco::gfx2d::detail

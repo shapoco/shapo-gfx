@@ -1416,7 +1416,7 @@ class Names:
 
 RIG = "shapoco::gfx2d::rig"
 # The rig::FORMAT_VERSION the generated headers need (the members they initialize)
-RIG_FORMAT_VERSION = 1
+RIG_FORMAT_VERSION = 3
 
 
 def generate_header(c, namespace, guard, opts, sources):
@@ -1526,9 +1526,10 @@ def generate_header(c, namespace, guard, opts, sources):
     body += ["", f"static const {RIG}::Slot slots[] = {{"]
     for s, an in zip(c.slots, att_names):
         body.append(f"  {{{c_string(s['name'])}, {an}, {len(s['attachments'])}, {s['default']}, {s['bone']}, "
-                    f"{s['alpha']}, shapoco::gfx2d::BlendMode::{s['blend']}, 255, 255, 255}},")  # no tint (reserved)
+                    f"{s['alpha']}, shapoco::gfx2d::BlendMode::{s['blend']}, 255, 255, 255, "
+                    "nullptr, 0, {0, 0, 0}, 0.0f},")  # white (no tint), no clip, no stroke width
     body.append("};")
-    stats["bytes"] += 16 * len(c.slots)
+    stats["bytes"] += 28 * len(c.slots)
     if c.bounds is not None:
         bounds = c.bounds
     else:

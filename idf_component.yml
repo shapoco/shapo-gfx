@@ -1,6 +1,6 @@
 # ShapoGFX as an ESP-IDF component (see cmake/esp_idf.cmake and Kconfig).
 # Keep "version" in sync with version.hpp and library.json.
-version: "1.6.0"
+version: "1.7.0"
 description: >-
   2D/3D graphics library for embedded systems: a scanline software renderer
   that needs neither a frame buffer nor a Z buffer, and a 2D drawing API with

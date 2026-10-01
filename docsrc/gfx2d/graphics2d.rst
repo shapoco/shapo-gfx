@@ -46,8 +46,10 @@ Graphics2D
    "``int stateDepth() const``", "積まれている段数"
    "``const GraphicsState2D &state() const`` / ``void setState(const GraphicsState2D &)``", "ステートをまとめて取得・設定する (アリーナ不要)"
 
-スクラッチメモリは、12 辺を超える多角形 (1 辺 24 バイト) と、回転した丸角矩形の角を細かく分割するのに使います。
-足りないときは、多角形は行ごとに全辺を頂点から計算し直す (遅いが同じ結果)、丸角矩形は角を 4 分割で近似します。
+スクラッチメモリは、12 辺を超える多角形 (1 辺 24 バイト)、回転した丸角矩形の角を細かく分割するのと、
+ベクタ描画 (:doc:`vg`) の辺と被覆率のバッファに使います。
+足りないときは、多角形は行ごとに全辺を頂点から計算し直す (遅いが同じ結果)、丸角矩形は角を 4 分割で近似し、
+パスは曲線を粗くするか部分に分けて描きます。
 
 描画先とクリップ
 ================================================================================
@@ -340,6 +342,18 @@ GRAY1 の画像を 2 色のマスクとして描きます。1 のビットを ``
    g.drawString(0, 0, "x2");
    g.popState();
 
+ベクタグラフィックス
+================================================================================
+
+パス (直線とベジェ曲線) をブラシ (単色・グラデーション) で塗り、太さを指定してなぞる ``fillPath()`` /
+``strokePath()`` / ``drawPath()`` / ``strokePolyline()`` と、SVG から変換したピクチャを描く ``drawPicture()``、
+そのブラシ・ストローク・アンチエイリアスのステート (``setFillBrush()``、``setStrokeStyle()``、
+``setAntialias()`` など) は :doc:`vg` を参照してください。``setAntialias(true)`` にすると、面の塗りつぶし
+(``fillRect()``、``fillEllipse()``、``fillRoundRect()``、``fillPolygon()`` とそれらに基づく円・三角形)、
+線と輪郭 (``drawLine()`` 系、``drawEllipse()`` / ``drawArc()`` / ``drawRoundRect()``、``drawRect()`` の枠、
+``fillSector()``) も同じラスタライザでアンチエイリアスされ、変換行列のかかった文字とビットマップは
+2×2 のサンプリングで縁が滑らかになり、変換行列のかかった画像はバイリニア補間と輪郭の被覆率で描かれます。
+
 GraphicsState2D / TextState
 ================================================================================
 
@@ -356,13 +370,16 @@ GraphicsState2D / TextState
      affine2f transform;
      TextState text;
      Color colorKey;
+     vg::Brush fillBrush, strokeBrush;              // ベクタ描画のブラシ
+     vg::StrokeStyle strokeStyle;                   // ベクタ描画のストローク
      ucoord_t clipX, clipY, clipWidth, clipHeight;   // SHAPOGFX_COORD_BITS に応じて 8 / 16 ビット
      BlendMode blendMode;
      uint8_t opacity;
      bool colorKeyEnabled;
+     bool antialias;                                // ベクタ描画と面の塗りつぶしのアンチエイリアス (既定 false)
    };
 
-``pushState()`` はこの構造体を丸ごとアリーナに積みます (32 ビット環境で 1 段 68 バイト、既定の 16 段で約 1.1 KB)。
+``pushState()`` はこの構造体を丸ごとアリーナに積みます (32 ビット環境で 1 段 100 バイト、既定の 16 段で約 1.6 KB)。
 ``setState()`` で渡したクリップ矩形は描画先と交差され、行列の種類は判定し直されます。
 
 実装上の注意

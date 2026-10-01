@@ -5,3 +5,4 @@
 Pillow>=9.0
 numpy>=1.22
 pygltflib>=1.16
+fonttools>=4.0

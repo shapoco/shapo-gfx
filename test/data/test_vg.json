@@ -1,0 +1,1240 @@
+{
+ "tool": "svg2cpp",
+ "mode": "picture",
+ "namespace": "test_vg",
+ "source": "test_vg.svg",
+ "picture": {
+  "bounds": [
+   0.0,
+   0.0,
+   160.0,
+   120.0
+  ],
+  "shapeCount": 19,
+  "shapes": [
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFFFFCC00u"
+    },
+    "stroke": {
+     "color": "0xFF333333u"
+    },
+    "source": "rounded",
+    "path": {
+     "opCount": 10,
+     "coordCount": 34,
+     "rule": "nonzero",
+     "bounds": [
+      8.0,
+      8.0,
+      40.0,
+      24.0
+     ],
+     "ops": [
+      [
+       "M",
+       14.0,
+       8.0
+      ],
+      [
+       "L",
+       42.0,
+       8.0
+      ],
+      [
+       "C",
+       45.3137,
+       8.0,
+       48.0,
+       9.7909,
+       48.0,
+       12.0
+      ],
+      [
+       "L",
+       48.0,
+       28.0
+      ],
+      [
+       "C",
+       48.0,
+       30.2091,
+       45.3137,
+       32.0,
+       42.0,
+       32.0
+      ],
+      [
+       "L",
+       14.0,
+       32.0
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 2.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFF000000u",
+     "gradient": {
+      "kind": "linear",
+      "spread": "pad",
+      "stops": [
+       [
+        0.0,
+        "0xFFFF0000u"
+       ],
+       [
+        0.5,
+        "0x8000FF00u"
+       ],
+       [
+        1.0,
+        "0xFF0000FFu"
+       ]
+      ],
+      "toGradient": [
+       0.020833,
+       0.0,
+       0.020833,
+       0.0,
+       -1.583333,
+       0.0
+      ]
+     }
+    },
+    "stroke": {
+     "color": "0xFF000080u"
+    },
+    "source": "ring",
+    "path": {
+     "opCount": 6,
+     "coordCount": 26,
+     "rule": "nonzero",
+     "bounds": [
+      68.0,
+      8.0,
+      24.0,
+      24.0
+     ],
+     "ops": [
+      [
+       "M",
+       92.0,
+       20.0
+      ],
+      [
+       "C",
+       92.0,
+       26.6274,
+       86.6274,
+       32.0,
+       80.0,
+       32.0
+      ],
+      [
+       "C",
+       73.3726,
+       32.0,
+       68.0,
+       26.6274,
+       68.0,
+       20.0
+      ],
+      [
+       "C",
+       68.0,
+       13.3726,
+       73.3726,
+       8.0,
+       80.0,
+       8.0
+      ],
+      [
+       "C",
+       86.6274,
+       8.0,
+       92.0,
+       13.3726,
+       92.0,
+       20.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 3.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFF000000u",
+     "gradient": {
+      "kind": "radial",
+      "spread": "reflect",
+      "stops": [
+       [
+        0.0,
+        "0xFFFFFFFFu"
+       ],
+       [
+        1.0,
+        "0xFF000000u"
+       ]
+      ],
+      "toGradient": [
+       0.05,
+       0.0,
+       0.0,
+       0.1,
+       -6.0,
+       -3.0
+      ]
+     }
+    },
+    "stroke": null,
+    "source": "egg",
+    "path": {
+     "opCount": 6,
+     "coordCount": 26,
+     "rule": "nonzero",
+     "bounds": [
+      96.0,
+      16.0,
+      48.0,
+      28.0
+     ],
+     "ops": [
+      [
+       "M",
+       144.0,
+       30.0
+      ],
+      [
+       "C",
+       144.0,
+       37.732,
+       133.2548,
+       44.0,
+       120.0,
+       44.0
+      ],
+      [
+       "C",
+       106.7452,
+       44.0,
+       96.0,
+       37.732,
+       96.0,
+       30.0
+      ],
+      [
+       "C",
+       96.0,
+       22.268,
+       106.7452,
+       16.0,
+       120.0,
+       16.0
+      ],
+      [
+       "C",
+       133.2548,
+       16.0,
+       144.0,
+       22.268,
+       144.0,
+       30.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": null,
+    "stroke": {
+     "color": "0xFF000000u"
+    },
+    "source": "dashed",
+    "path": {
+     "opCount": 16,
+     "coordCount": 32,
+     "rule": "nonzero",
+     "bounds": [
+      8.0,
+      40.0,
+      51.0,
+      0.0
+     ],
+     "ops": [
+      [
+       "M",
+       8.0,
+       40.0
+      ],
+      [
+       "L",
+       12.0,
+       40.0
+      ],
+      [
+       "M",
+       15.0,
+       40.0
+      ],
+      [
+       "L",
+       17.0,
+       40.0
+      ],
+      [
+       "M",
+       20.0,
+       40.0
+      ],
+      [
+       "L",
+       26.0,
+       40.0
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 2.0,
+     "cap": "round",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": null,
+    "stroke": {
+     "color": "0xFF006400u"
+    },
+    "source": "zig",
+    "path": {
+     "opCount": 5,
+     "coordCount": 10,
+     "rule": "nonzero",
+     "bounds": [
+      64.0,
+      40.0,
+      32.0,
+      8.0
+     ],
+     "ops": [
+      [
+       "M",
+       64.0,
+       40.0
+      ],
+      [
+       "L",
+       72.0,
+       48.0
+      ],
+      [
+       "L",
+       80.0,
+       40.0
+      ],
+      [
+       "L",
+       88.0,
+       48.0
+      ],
+      [
+       "L",
+       96.0,
+       40.0
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 3.0,
+     "cap": "square",
+     "join": "bevel",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFFFF8000u"
+    },
+    "stroke": {
+     "color": "0xFFA52A2Au"
+    },
+    "source": "tri",
+    "path": {
+     "opCount": 4,
+     "coordCount": 6,
+     "rule": "nonzero",
+     "bounds": [
+      104.0,
+      40.0,
+      32.0,
+      16.0
+     ],
+     "ops": [
+      [
+       "M",
+       104.0,
+       40.0
+      ],
+      [
+       "L",
+       120.0,
+       56.0
+      ],
+      [
+       "L",
+       136.0,
+       40.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 2.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFFC0C0FFu"
+    },
+    "stroke": {
+     "color": "0xBF000080u"
+    },
+    "source": "allcmds",
+    "path": {
+     "opCount": 24,
+     "coordCount": 84,
+     "rule": "nonzero",
+     "bounds": [
+      8.0,
+      70.0,
+      136.0,
+      40.0
+     ],
+     "ops": [
+      [
+       "M",
+       8.0,
+       100.0
+      ],
+      [
+       "L",
+       28.0,
+       100.0
+      ],
+      [
+       "L",
+       28.0,
+       90.0
+      ],
+      [
+       "L",
+       40.0,
+       90.0
+      ],
+      [
+       "L",
+       40.0,
+       100.0
+      ],
+      [
+       "L",
+       44.0,
+       92.0
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.5,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.082532,
+     0.625,
+     -0.109936,
+     0.860289,
+     108.175,
+     60.170612
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0x80FFCC00u"
+    },
+    "stroke": {
+     "color": "0x80333333u"
+    },
+    "source": "rect",
+    "path": {
+     "opCount": 5,
+     "coordCount": 8,
+     "rule": "nonzero",
+     "bounds": [
+      0.0,
+      0.0,
+      20.0,
+      12.0
+     ],
+     "ops": [
+      [
+       "M",
+       0.0,
+       0.0
+      ],
+      [
+       "L",
+       20.0,
+       0.0
+      ],
+      [
+       "L",
+       20.0,
+       12.0
+      ],
+      [
+       "L",
+       0.0,
+       12.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 2.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 3,
+    "transform": [
+     1.082532,
+     0.625,
+     -0.109936,
+     0.860289,
+     108.175,
+     60.170612
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0x80800080u"
+    },
+    "stroke": {
+     "color": "0x80800080u"
+    },
+    "source": "circle",
+    "path": {
+     "opCount": 6,
+     "coordCount": 26,
+     "rule": "nonzero",
+     "bounds": [
+      21.0,
+      1.0,
+      10.0,
+      10.0
+     ],
+     "ops": [
+      [
+       "M",
+       31.0,
+       6.0
+      ],
+      [
+       "C",
+       31.0,
+       8.7614,
+       28.7614,
+       11.0,
+       26.0,
+       11.0
+      ],
+      [
+       "C",
+       23.2386,
+       11.0,
+       21.0,
+       8.7614,
+       21.0,
+       6.0
+      ],
+      [
+       "C",
+       21.0,
+       3.2386,
+       23.2386,
+       1.0,
+       26.0,
+       1.0
+      ],
+      [
+       "C",
+       28.7614,
+       1.0,
+       31.0,
+       3.2386,
+       31.0,
+       6.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": [
+     8.0,
+     64.0,
+     40.0,
+     30.0
+    ],
+    "fill": {
+     "color": "0xFF008080u"
+    },
+    "stroke": null,
+    "source": "rect",
+    "path": {
+     "opCount": 5,
+     "coordCount": 8,
+     "rule": "nonzero",
+     "bounds": [
+      0.0,
+      60.0,
+      60.0,
+      40.0
+     ],
+     "ops": [
+      [
+       "M",
+       0.0,
+       60.0
+      ],
+      [
+       "L",
+       60.0,
+       60.0
+      ],
+      [
+       "L",
+       60.0,
+       100.0
+      ],
+      [
+       "L",
+       0.0,
+       100.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": [
+     8.0,
+     64.0,
+     40.0,
+     30.0
+    ],
+    "fill": {
+     "color": "0x80FFA500u"
+    },
+    "stroke": null,
+    "source": "circle",
+    "path": {
+     "opCount": 6,
+     "coordCount": 26,
+     "rule": "nonzero",
+     "bounds": [
+      16.0,
+      66.0,
+      28.0,
+      28.0
+     ],
+     "ops": [
+      [
+       "M",
+       44.0,
+       80.0
+      ],
+      [
+       "C",
+       44.0,
+       87.732,
+       37.732,
+       94.0,
+       30.0,
+       94.0
+      ],
+      [
+       "C",
+       22.268,
+       94.0,
+       16.0,
+       87.732,
+       16.0,
+       80.0
+      ],
+      [
+       "C",
+       16.0,
+       72.268,
+       22.268,
+       66.0,
+       30.0,
+       66.0
+      ],
+      [
+       "C",
+       37.732,
+       66.0,
+       44.0,
+       72.268,
+       44.0,
+       80.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     70.0,
+     80.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFFFF00FFu"
+    },
+    "stroke": null,
+    "source": "circle",
+    "path": {
+     "opCount": 6,
+     "coordCount": 26,
+     "rule": "nonzero",
+     "bounds": [
+      -3.0,
+      -3.0,
+      6.0,
+      6.0
+     ],
+     "ops": [
+      [
+       "M",
+       3.0,
+       0.0
+      ],
+      [
+       "C",
+       3.0,
+       1.6569,
+       1.6569,
+       3.0,
+       0.0,
+       3.0
+      ],
+      [
+       "C",
+       -1.6569,
+       3.0,
+       -3.0,
+       1.6569,
+       -3.0,
+       0.0
+      ],
+      [
+       "C",
+       -3.0,
+       -1.6569,
+       -1.6569,
+       -3.0,
+       0.0,
+       -3.0
+      ],
+      [
+       "C",
+       1.6569,
+       -3.0,
+       3.0,
+       -1.6569,
+       3.0,
+       0.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     78.0,
+     80.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFFFF00FFu"
+    },
+    "stroke": null,
+    "source": "circle",
+    "path": {
+     "opCount": 6,
+     "coordCount": 26,
+     "rule": "nonzero",
+     "bounds": [
+      -3.0,
+      -3.0,
+      6.0,
+      6.0
+     ],
+     "ops": [
+      [
+       "M",
+       3.0,
+       0.0
+      ],
+      [
+       "C",
+       3.0,
+       1.6569,
+       1.6569,
+       3.0,
+       0.0,
+       3.0
+      ],
+      [
+       "C",
+       -1.6569,
+       3.0,
+       -3.0,
+       1.6569,
+       -3.0,
+       0.0
+      ],
+      [
+       "C",
+       -3.0,
+       -1.6569,
+       -1.6569,
+       -3.0,
+       0.0,
+       -3.0
+      ],
+      [
+       "C",
+       1.6569,
+       -3.0,
+       3.0,
+       -1.6569,
+       3.0,
+       0.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "image",
+    "flags": 0,
+    "transform": [
+     6.0,
+     0.0,
+     0.0,
+     6.0,
+     60.0,
+     90.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFF000000u"
+    },
+    "stroke": null,
+    "source": "pic",
+    "image": {
+     "width": 4,
+     "height": 3,
+     "name": "img0"
+    }
+   },
+   {
+    "kind": "image",
+    "flags": 0,
+    "transform": [
+     6.0,
+     0.0,
+     0.0,
+     6.0,
+     88.0,
+     90.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0x80000000u"
+    },
+    "stroke": null,
+    "source": "pic2",
+    "image": {
+     "width": 4,
+     "height": 3,
+     "name": "img0"
+    }
+   },
+   {
+    "kind": "text",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFF202020u"
+    },
+    "stroke": null,
+    "source": "label",
+    "text": {
+     "text": "Hi, vg!",
+     "x": 120.0,
+     "y": 110.0
+    }
+   },
+   {
+    "kind": "text",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFF000000u"
+    },
+    "stroke": null,
+    "source": "anchored",
+    "text": {
+     "text": "end",
+     "x": 150.0,
+     "y": 80.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFF008080u"
+    },
+    "stroke": null,
+    "source": "evenodd",
+    "path": {
+     "opCount": 10,
+     "coordCount": 16,
+     "rule": "evenodd",
+     "bounds": [
+      120.0,
+      60.0,
+      30.0,
+      20.0
+     ],
+     "ops": [
+      [
+       "M",
+       120.0,
+       60.0
+      ],
+      [
+       "L",
+       150.0,
+       60.0
+      ],
+      [
+       "L",
+       150.0,
+       80.0
+      ],
+      [
+       "L",
+       120.0,
+       80.0
+      ],
+      [
+       "Z"
+      ],
+      [
+       "M",
+       128.0,
+       66.0
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   },
+   {
+    "kind": "path",
+    "flags": 0,
+    "transform": [
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "clip": null,
+    "fill": {
+     "color": "0xFF123456u"
+    },
+    "stroke": null,
+    "source": "rect",
+    "path": {
+     "opCount": 5,
+     "coordCount": 8,
+     "rule": "nonzero",
+     "bounds": [
+      0.0,
+      0.0,
+      4.0,
+      4.0
+     ],
+     "ops": [
+      [
+       "M",
+       0.0,
+       0.0
+      ],
+      [
+       "L",
+       4.0,
+       0.0
+      ],
+      [
+       "L",
+       4.0,
+       4.0
+      ],
+      [
+       "L",
+       0.0,
+       4.0
+      ],
+      [
+       "Z"
+      ]
+     ]
+    },
+    "strokeStyle": {
+     "width": 1.0,
+     "cap": "butt",
+     "join": "miter",
+     "miterLimit": 4.0
+    }
+   }
+  ]
+ },
+ "warnings": [
+  "<text id=label>: no font for 'sans-serif', emitted as a vg::Text drawn with the bitmap font",
+  "<text id=anchored>: no font for 'sans-serif', emitted as a vg::Text drawn with the bitmap font (text-anchor end cannot be applied)"
+ ]
+}

@@ -3411,8 +3411,9 @@ struct OutTraits<PixelFormat::RGB565_SWAPPED> {
   static inline uint32_t pack(uint32_t r5, uint32_t g6, uint32_t b5) {
     return gfx2d::makeRgb565(r5, g6, b5);
   }
-  static inline uint32_t blend(uint32_t d, uint32_t s, uint32_t a64) {
-    return gfx2d::blendAlphaRgb565((uint16_t)d, (uint16_t)s, a64);
+  template <int SHIFT = 6>
+  static inline uint32_t blend(uint32_t d, uint32_t s, uint32_t a) {
+    return gfx2d::blendAlphaRgb565<SHIFT>((uint16_t)d, (uint16_t)s, a);
   }
   static inline uint32_t add(uint32_t d, uint32_t r5, uint32_t g6,
                              uint32_t b5) {
@@ -3427,8 +3428,9 @@ struct OutTraits<PixelFormat::RGB565> {
   static inline uint32_t pack(uint32_t r5, uint32_t g6, uint32_t b5) {
     return gfx2d::makeRgb565(r5, g6, b5);
   }
-  static inline uint32_t blend(uint32_t d, uint32_t s, uint32_t a64) {
-    return gfx2d::blendAlphaRgb565((uint16_t)d, (uint16_t)s, a64);
+  template <int SHIFT = 6>
+  static inline uint32_t blend(uint32_t d, uint32_t s, uint32_t a) {
+    return gfx2d::blendAlphaRgb565<SHIFT>((uint16_t)d, (uint16_t)s, a);
   }
   static inline uint32_t add(uint32_t d, uint32_t r5, uint32_t g6,
                              uint32_t b5) {
@@ -3443,8 +3445,9 @@ struct OutTraits<PixelFormat::RGB444> {
   static inline uint32_t pack(uint32_t r5, uint32_t g6, uint32_t b5) {
     return gfx2d::makeRgb444(r5 >> 1, g6 >> 2, b5 >> 1);
   }
-  static inline uint32_t blend(uint32_t d, uint32_t s, uint32_t a64) {
-    return gfx2d::blendAlphaRgb444((uint16_t)d, (uint16_t)s, a64);
+  template <int SHIFT = 6>
+  static inline uint32_t blend(uint32_t d, uint32_t s, uint32_t a) {
+    return gfx2d::blendAlphaRgb444<SHIFT>((uint16_t)d, (uint16_t)s, a);
   }
   static inline uint32_t add(uint32_t d, uint32_t r5, uint32_t g6,
                              uint32_t b5) {
@@ -3625,6 +3628,9 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
   constexpr bool TEX = (T != TexFmt::NONE);
   constexpr bool TEXA = texFmtHasAlpha(T);
   (void)st;
+  // The factor that takes a texel's 4-bit alpha to its opacity under a64 in
+  // 0..1024 after a shift of 4: 1093 = ceil(1024 * 16 / (15 * 64))
+  [[maybe_unused]] const uint32_t aMul = (a64 * 1093u + 32u) >> 6;
 
 #if SHAPOGFX3D_GOURAUD
   // An opaque, untextured, smoothly shaded RGB565 span: red and green come
@@ -3718,15 +3724,22 @@ static inline void rasterLoop(typename OutTraits<OUT>::Cursor &cur, int n,
       sb = col.b5();
     }
 
-    // a4 * 17 + (a4 >> 3) maps 0..15 to 0..256
-    const uint32_t a256 = TEXA ? (a4 * 17u + (a4 >> 3)) : 256u;
-    if (!TEXA || a256 != 0) {
+    if (!TEXA || a4 != 0) {
       if constexpr (B == BlendMode::NONE) {
         cur.write(O::pack(sr, sg, sb));
       } else if constexpr (B == BlendMode::ALPHA) {
-        uint32_t a = TEXA ? ((a64 * a256) >> 8) : a64;
-        cur.write(O::blend(cur.read(), O::pack(sr, sg, sb), a));
+        if constexpr (TEXA) {
+          // The texel's alpha under the opacity in 0..1024 by one multiply
+          // (aMul from a64, see rasterSpanT), blended with its 10 bits
+          const uint32_t a = (a4 * aMul) >> 4;
+          cur.write(a >= 1024u ? O::pack(sr, sg, sb)
+                               : O::template blend<10>(cur.read(), O::pack(sr, sg, sb), a));
+        } else {
+          cur.write(O::blend(cur.read(), O::pack(sr, sg, sb), a64));
+        }
       } else {
+        // a4 * 17 + (a4 >> 3) maps 0..15 to 0..256
+        const uint32_t a256 = TEXA ? (a4 * 17u + (a4 >> 3)) : 256u;
         // Additive (color is pre-multiplied by opacity): saturating add per
         // channel
         if (TEXA) {

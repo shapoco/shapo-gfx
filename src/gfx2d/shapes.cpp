@@ -437,27 +437,59 @@ void ellipseShape(Graphics2D &g, const EllipseCall &e, Color c) {
 }  // namespace
 
 void Graphics2D::fillEllipse(const Rect &r, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillEllipseAA(*this, RectF(r), c);
+    return;
+  }
   ellipseShape(*this, {&r, nullptr, false, false, 0, 0}, c);
 }
 void Graphics2D::fillEllipse(const RectF &r, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillEllipseAA(*this, r, c);
+    return;
+  }
   ellipseShape(*this, {nullptr, &r, false, false, 0, 0}, c);
 }
 void Graphics2D::drawEllipse(const Rect &r, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawEllipseAA(*this, RectF(r), c);
+    return;
+  }
   ellipseShape(*this, {&r, nullptr, true, false, 0, 0}, c);
 }
 void Graphics2D::drawEllipse(const RectF &r, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawEllipseAA(*this, r, c);
+    return;
+  }
   ellipseShape(*this, {nullptr, &r, true, false, 0, 0}, c);
 }
 void Graphics2D::drawArc(const Rect &r, float a0, float a1, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawArcAA(*this, RectF(r), a0, a1, c);
+    return;
+  }
   ellipseShape(*this, {&r, nullptr, true, true, a0, a1}, c);
 }
 void Graphics2D::drawArc(const RectF &r, float a0, float a1, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawArcAA(*this, r, a0, a1, c);
+    return;
+  }
   ellipseShape(*this, {nullptr, &r, true, true, a0, a1}, c);
 }
 void Graphics2D::fillSector(const Rect &r, float a0, float a1, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillSectorAA(*this, RectF(r), a0, a1, c);
+    return;
+  }
   ellipseShape(*this, {&r, nullptr, false, true, a0, a1}, c);
 }
 void Graphics2D::fillSector(const RectF &r, float a0, float a1, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillSectorAA(*this, r, a0, a1, c);
+    return;
+  }
   ellipseShape(*this, {nullptr, &r, false, true, a0, a1}, c);
 }
 
@@ -572,15 +604,31 @@ void roundRectShape(Graphics2D &g, const Rect *ri, int radius, const RectF *rf,
 }  // namespace
 
 void Graphics2D::fillRoundRect(const Rect &r, int radius, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillRoundRectAA(*this, RectF(r), (float)radius, c);
+    return;
+  }
   roundRectShape(*this, &r, radius, nullptr, 0.0f, false, c);
 }
 void Graphics2D::fillRoundRect(const RectF &r, float radius, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillRoundRectAA(*this, r, radius, c);
+    return;
+  }
   roundRectShape(*this, nullptr, 0, &r, radius, false, c);
 }
 void Graphics2D::drawRoundRect(const Rect &r, int radius, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawRoundRectAA(*this, RectF(r), (float)radius, c);
+    return;
+  }
   roundRectShape(*this, &r, radius, nullptr, 0.0f, true, c);
 }
 void Graphics2D::drawRoundRect(const RectF &r, float radius, Color c) {
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawRoundRectAA(*this, r, radius, c);
+    return;
+  }
   roundRectShape(*this, nullptr, 0, &r, radius, true, c);
 }
 

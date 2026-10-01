@@ -14,6 +14,7 @@ int main() {
       {"gfx3d", testGfx3D},
       {"tools", testTools},
       {"rig", testRig},
+      {"vg", testVg},
   };
   for (auto &t : tests) {
     int before = g_checkFailures;

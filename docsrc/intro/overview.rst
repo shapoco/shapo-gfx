@@ -27,7 +27,7 @@ RP2350 や ESP32 のような MCU から、SPI やパラレルバスで接続さ
    "``shapoco::gfx2d``  (``include/shapoco/gfx2d/``)", "ピクセルフォーマット、色、Surface / Texture、Graphics2D 描画 API、フォント"
    "``shapoco::gfx3d``  (``include/shapoco/gfx3d/``)", "Graphics3D レンダラ、基本形状、静的シーン (Mesh / Node / Scene)、ベクトル・行列"
    "``src/gfx2d/``, ``src/gfx3d/``", "実装 (C++17 でコンパイルするソース)"
-   "``bin/``", "画像と glTF を C++ コードに変換する Python ツール (img2cpp, gltf2cpp)"
+   "``bin/``", "画像、glTF、DragonBones、SVG を C++ コードに変換する Python ツール (img2cpp, gltf2cpp, dbones2cpp, svg2cpp)"
    "``example/wasm/``, ``docs/example/``", "サンプル (demo2d, demo3d) とブラウザ用ページ"
    "``test/``", "自己検査テスト (CTest)"
 
@@ -82,7 +82,9 @@ RP2350 や ESP32 のような MCU から、SPI やパラレルバスで接続さ
 --------------------------------------------------------------------------------
 
 - ``fillPolygon()`` は 1 スキャンラインあたり最大 32 個の交点までを扱います。
-- 変換行列はアフィン変換のみです。拡大・回転した図形や画像は最近傍で描かれ、アンチエイリアスはありません。
+- 変換行列はアフィン変換のみです。アンチエイリアスは既定で OFF で、``setAntialias(true)`` にすると
+  ベクタ描画、面の塗りつぶし、線と輪郭、変換行列のかかった画像 (バイリニア) と文字が対象になります
+  (:doc:`../gfx2d/vg`)。OFF では拡大・回転した図形や画像は最近傍で描かれます。
 - ``Graphics2D`` は ``Surface`` 構造体のコピーを保持します。ピクセルバッファの寿命は利用者が管理します。
 - 色は ARGB8888 で受け取り、描画呼び出しごとに描画先フォーマットへ変換します。
   ブレンドモードと不透明度はステートで指定します (既定は α < 255 でブレンド)。

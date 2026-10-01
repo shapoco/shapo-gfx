@@ -8,6 +8,7 @@
 #include "shapoco/gfx2d/gfxfont.h"
 #include "shapoco/gfx2d/math2d.hpp"
 #include "shapoco/gfx2d/surface.hpp"
+#include "shapoco/gfx2d/vg.hpp"
 
 namespace shapoco::gfx2d {
 
@@ -67,10 +68,16 @@ struct GraphicsState2D {
   affine2f transform = {1, 0, 0, 1, 0, 0};
   TextState text;
   Color colorKey = Colors::TRANSPARENT;
+  // Of the vector calls (fillPath(), strokePath())
+  vg::Brush fillBrush = {Colors::WHITE, nullptr};
+  vg::Brush strokeBrush = {Colors::WHITE, nullptr};
+  vg::StrokeStyle strokeStyle = {1.0f, vg::LineCap::BUTT, vg::LineJoin::MITER,
+                                 {0, 0}, 4.0f};
   ucoord_t clipX = 0, clipY = 0, clipWidth = 0, clipHeight = 0;
   BlendMode blendMode = BlendMode::ALPHA;
   uint8_t opacity = 255;
   bool colorKeyEnabled = false;
+  bool antialias = false;  // of the vector calls and the area fills
 };
 
 namespace detail {
@@ -319,7 +326,8 @@ class Graphics2D {
   // --- Images ----------------------------------------------------------------
   // Draw an image (any format), converting between formats, with the blend
   // mode, opacity and color key of the state. Nearest neighbor sampling
-  // wherever the transform scales or turns it.
+  // wherever the transform scales or turns it (bilinear, with the edges
+  // antialiased, when antialiasing is on).
   void drawImage(const Texture &img, int dx, int dy) {
     drawImage(img, dx, dy, Rect{0, 0, img.width, img.height});
   }
@@ -391,6 +399,52 @@ class Graphics2D {
   TextMetrics textMetrics(const char *str) const;
   TextMetricsF deviceCharMetrics(int code) const;
   TextMetricsF deviceTextMetrics(const char *str) const;
+
+  // --- Vector graphics (vg.hpp) ---------------------------------------------
+  // Paths are filled with the fill brush and stroked with the stroke brush
+  // and style of the state, under the transform, blend mode and opacity,
+  // antialiased when the state says so (off by default; edges blend by
+  // their coverage; not with the NONE blend mode, and does nothing with
+  // SHAPOGFX2D_ANTIALIAS=0). With antialiasing on, the area fills
+  // (fillRect(), fillEllipse(), fillRoundRect(), fillPolygon() and the
+  // circles and triangles built on them), the sectors and frames go through
+  // the same rasterizer, the lines and outlines (drawLine() and friends,
+  // drawEllipse(), drawArc(), drawRoundRect()) become strokes a pixel wide on
+  // the target, text and bitmaps under a scale or rotation are sampled
+  // 2 x 2 per pixel, and images under a scale or rotation are sampled
+  // bilinearly with the coverage of their outline. Curves are flattened
+  // when drawn; the edges
+  // go to the scratch memory of the arena, 16 bytes each (a stroke makes
+  // about 7 per segment), the coverage of a row 2 bytes per pixel of the
+  // path's width; a path that does not fit is drawn in parts, which may show
+  // where translucent parts meet, and without an arena from small buffers
+  // on the stack.
+  void setAntialias(bool on) { state_.antialias = on; }
+  bool antialias() const { return state_.antialias; }
+  void setFillBrush(const vg::Brush &b) { state_.fillBrush = b; }
+  void setFillColor(Color c) { state_.fillBrush = {c, nullptr}; }
+  const vg::Brush &fillBrush() const { return state_.fillBrush; }
+  void setStrokeBrush(const vg::Brush &b) { state_.strokeBrush = b; }
+  void setStrokeColor(Color c) { state_.strokeBrush = {c, nullptr}; }
+  const vg::Brush &strokeBrush() const { return state_.strokeBrush; }
+  void setStrokeStyle(const vg::StrokeStyle &s) { state_.strokeStyle = s; }
+  void setStrokeWidth(float width) { state_.strokeStyle.width = width; }
+  const vg::StrokeStyle &strokeStyle() const { return state_.strokeStyle; }
+
+  void fillPath(const vg::Path &path);
+  void strokePath(const vg::Path &path);
+  void drawPath(const vg::Path &path) {
+    fillPath(path);
+    strokePath(path);
+  }
+  // A polyline (closed: a polygon) stroked like a path of lines
+  void strokePolyline(const vec2f *points, int count, bool closed = false);
+  // The shapes of a picture with their own brushes, under the transform;
+  // `currentColor` goes to the brushes flagged SHAPE_*_CURRENT_COLOR and
+  // `currentStrokeWidth` to the strokes flagged SHAPE_STROKE_CURRENT_WIDTH.
+  // The state is unchanged afterwards (no state stack is used).
+  void drawPicture(const vg::Picture &pic, Color currentColor = Colors::BLACK,
+                   float currentStrokeWidth = 1.0f);
 
  private:
   friend struct detail::G2Impl;

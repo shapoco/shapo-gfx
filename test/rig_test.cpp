@@ -62,12 +62,12 @@ static void testRigInit() {
   const rig::Armature &arm = test_rig::armature;
   CHECK_EQ(arm.boneCount, ex::BONES);
   CHECK_EQ(arm.slotCount, ex::SLOTS);
-  // 4 world transforms, 6 slot states, 6 order bytes rounded up to a
-  // multiple of 4; 3 bytes of slack
-  CHECK_EQ(rig::Instance::bytes(arm), 3u + 4 * 24 + 6 * 12 + 8);
+  // 4 world transforms, 6 slot states of 20 bytes, 6 order bytes rounded up
+  // to a multiple of 4; 3 bytes of slack
+  CHECK_EQ(rig::Instance::bytes(arm), 3u + 4 * 24 + 6 * 20 + 8);
   rig::Instance inst;
   CHECK(!inst.isInitialized());
-  CHECK(!inst.init(arm, rigMemory, 4 * 24 + 6 * 12 + 6 - 1));
+  CHECK(!inst.init(arm, rigMemory, 4 * 24 + 6 * 20 + 6 - 1));
   CHECK(!inst.isInitialized());
   CHECK(!inst.init(arm, nullptr, sizeof(rigMemory)));
   // Unaligned memory of bytes(): the slack covers the alignment
@@ -162,8 +162,10 @@ static void testRigSignature() {
 // compile and mean what they did; data with a feature bit this build lacks is
 // refused; attachments of the reserved kinds are kept but not drawn
 static void testRigReserved() {
-  static_assert(rig::FORMAT_VERSION >= 1, "generated headers assert on this");
-  static_assert(rig::SUPPORTED_FEATURES == 0, "no feature bit is defined yet");
+  static_assert(rig::FORMAT_VERSION >= 3, "generated headers assert on this");
+  static_assert(rig::SUPPORTED_FEATURES ==
+                    (rig::FEATURE_SLOT_COLOR | rig::FEATURE_STROKE_WIDTH),
+                "the feature bits this test knows");
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
   // Initializers as dbones2cpp wrote them before FORMAT_VERSION 1
@@ -181,9 +183,12 @@ static void testRigReserved() {
   CHECK_EQ(oldBone.flags, 0);
   CHECK(oldAtt.kind == rig::AttachmentKind::IMAGE);
   CHECK(oldAtt.ext == nullptr);
-  CHECK_EQ(oldSlot.tintR, 0);
-  CHECK_EQ(oldSlot.tintG, 0);
-  CHECK_EQ(oldSlot.tintB, 0);
+  CHECK_EQ(oldSlot.colorR, 0);
+  CHECK_EQ(oldSlot.colorG, 0);
+  CHECK_EQ(oldSlot.colorB, 0);
+  CHECK(oldSlot.clip == nullptr);
+  CHECK_EQ(oldSlot.clipBone, 0);
+  CHECK(oldSlot.strokeWidth == 0.0f);
   CHECK_EQ(oldArm.features, 0);
   CHECK_EQ(oldKey.turns, 0);
   CHECK_EQ(oldAnim.features, 0);
@@ -194,13 +199,13 @@ static void testRigReserved() {
 
   // A feature bit this build does not know: refused, nothing changes
   rig::Armature arm = test_rig::armature;
-  arm.features = 1;
+  arm.features = 0x8000;
   CHECK(!inst.init(arm, rigMemory, sizeof(rigMemory)));
   CHECK(!inst.isInitialized());
   CHECK(inst.init(test_rig::armature, rigMemory, sizeof(rigMemory)));
   CHECK(inst.pose(test_rig::anim_move, 3.5f));
   rig::Animation anim = test_rig::anim_move;
-  anim.features = 1;
+  anim.features = 0x8000;
   CHECK(!inst.pose(anim, 9.25f));
   checkPose(inst, ex::move[1]);
   inst.deinit();

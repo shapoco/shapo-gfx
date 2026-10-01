@@ -31,6 +31,9 @@ void Demo::init(int width, int height, bool controls) {
   zoomOutX_ = zoomInX_ = width - margin - buttonR_;
   zoomOutY_ = height - margin - buttonR_;
   zoomInY_ = zoomOutY_ - buttonR_ * 2 - margin;
+  // The antialiasing button at the bottom of the left edge
+  aaX_ = margin + buttonR_;
+  aaY_ = zoomOutY_;
 }
 
 float Demo::zoom() const { return std::exp2(zoomLog2_); }
@@ -45,6 +48,7 @@ Demo::Button Demo::buttonAt(int x, int y) const {
   };
   if (inside(zoomInX_, zoomInY_)) return Button::ZOOM_IN;
   if (inside(zoomOutX_, zoomOutY_)) return Button::ZOOM_OUT;
+  if (inside(aaX_, aaY_)) return Button::ANTIALIAS;
   return Button::NONE;
 }
 
@@ -55,6 +59,8 @@ void Demo::pointerDown(int x, int y) {
     zoomTarget_ = std::min(zoomTarget_ + 1, ZOOM_MAX_LOG2);
   } else if (pressed_ == Button::ZOOM_OUT) {
     zoomTarget_ = std::max(zoomTarget_ - 1, ZOOM_MIN_LOG2);
+  } else if (pressed_ == Button::ANTIALIAS) {
+    antialias_ = !antialias_;
   } else {
     dragging_ = true;
     lastX_ = x;
@@ -142,8 +148,26 @@ void Demo::drawButton(g2::Graphics2D &g, int cx, int cy, bool plus,
   }
 }
 
+// (AA): lit when antialiasing is on
+void Demo::drawAAButton(g2::Graphics2D &g, bool down) const {
+  const int r = buttonR_;
+  const bool on = antialias_;
+  g.fillCircle(aaX_, aaY_, r,
+               down ? g2::makeColor(255, 255, 255, 110)
+                    : (on ? g2::makeColor(255, 255, 255, 60)
+                          : g2::makeColor(0, 0, 0, 110)));
+  const g2::Color line = g2::makeColor(255, 255, 255, 220);
+  g.drawCircle(aaX_, aaY_, r, line);
+  g.setFont(&g2::ShapoSansP_s12c09a01w02);
+  const g2::TextMetrics m = g.textMetrics("AA");
+  g.setTextColor(on ? line : g2::makeColor(255, 255, 255, 140));
+  g.drawString(aaX_ - m.width / 2, aaY_ - m.height / 2, "AA");
+}
+
 void Demo::draw(g2::Graphics2D &g, int bandY) const {
   g.resetClipRect();
+  // Everything drawn with or without antialiasing, the overlay included
+  g.setAntialias(antialias_);
   // View: the center point of the scene to the center of the screen
   const float z = zoom();
   g.setTransform(g2::affine2f::translation(width_ / 2.0f, height_ / 2.0f - bandY));
@@ -157,6 +181,7 @@ void Demo::draw(g2::Graphics2D &g, int bandY) const {
   if (controls_) {
     drawButton(g, zoomInX_, zoomInY_, true, pressed_ == Button::ZOOM_IN);
     drawButton(g, zoomOutX_, zoomOutY_, false, pressed_ == Button::ZOOM_OUT);
+    drawAAButton(g, pressed_ == Button::ANTIALIAS);
   }
   g.setFont(&g2::ShapoSansP_s12c09a01w02);
   g.setTextColor(g2::makeColor(0, 0, 0));

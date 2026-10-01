@@ -6,7 +6,7 @@
 # and with -fsanitize=thread in place of address,undefined for the tests that
 # draw on two threads.
 add_executable(shapogfx_tests pixel_test.cpp graphics2d_test.cpp gfx3d_test.cpp tools_test.cpp
-                              rig_test.cpp test_main.cpp)
+                              rig_test.cpp vg_test.cpp test_main.cpp)
 target_include_directories(shapogfx_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # testVersion() reads library.json to check it matches version.hpp
 target_compile_definitions(shapogfx_tests PRIVATE

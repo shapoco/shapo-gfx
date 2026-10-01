@@ -24,6 +24,7 @@ ShapoGFX は、小さなディスプレイを駆動するマイクロコント�
    gfx2d/surface.rst
    gfx2d/graphics2d.rst
    gfx2d/fonts.rst
+   gfx2d/vg.rst
    gfx2d/rig.rst
 
 .. toctree::
@@ -43,6 +44,7 @@ ShapoGFX は、小さなディスプレイを駆動するマイクロコント�
    tools/img2cpp.rst
    tools/gltf2cpp.rst
    tools/dbones2cpp.rst
+   tools/svg2cpp.rst
 
 .. toctree::
    :maxdepth: 1

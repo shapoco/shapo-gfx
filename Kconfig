@@ -71,6 +71,14 @@ menu "ShapoGFX"
                 Disabled, rig::Instance::init() returns false and the rest
                 does nothing.
 
+        config SHAPOGFX2D_ANTIALIAS
+            bool "Antialiasing of the vector calls (fillPath() and friends)"
+            default y
+            help
+                Disabled, the edges of paths are drawn like those of
+                polygons whatever setAntialias() says, and the coverage
+                code is left out.
+
         config SHAPOGFX2D_STACK_DEPTH
             int "Levels of the state stack"
             range 1 256

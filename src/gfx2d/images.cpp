@@ -2,6 +2,8 @@
 // color key of the state) and 1-bit masks (bitmaps and glyphs).
 
 #include "arch.hpp"
+#include <climits>
+
 #include "internal.hpp"
 
 namespace shapoco::gfx2d {
@@ -59,12 +61,20 @@ __attribute__((noinline)) static void copyRowT(uint8_t *dl, int dx, const uint8_
   }
 }
 
+// The opacity of an ARGB4444 texel under the opacity of the state, in
+// 0..1024 (10 bits: the blend keeps the texel's precision): the alpha field
+// of the native pixel times ImageBlit::alphaMul, shifted
+static inline uint32_t argbAlpha1024(uint32_t native, uint32_t alphaMul) {
+  return ((native & 0xF000u) * alphaMul) >> 16;
+}
+
 // Blend n pixels of S over D with (source alpha x opacity64). For an
-// ARGB4444 source `alpha` is the weight (0..64) of each 4-bit alpha under
-// the opacity (ImageBlit::alpha, computed once per drawImage()).
+// ARGB4444 source `alphaMul` is the factor of its alpha (ImageBlit::alphaMul,
+// computed once per drawImage()) and pixels equal to `key` (as stored;
+// ImageBlit::NO_KEY for none) are skipped.
 template <PixelFormat S, PixelFormat D>
 static void blendRowT(uint8_t *dl, int dx, const uint8_t *sl, int sx, int n,
-                      uint32_t opacity64, const uint32_t *alpha) {
+                      uint32_t opacity64, uint32_t alphaMul, uint32_t key) {
   typename FormatTraits<S>::Cursor src;
   typename FormatTraits<D>::Cursor dst;
   src.init((void *)sl, sx);
@@ -73,17 +83,17 @@ static void blendRowT(uint8_t *dl, int dx, const uint8_t *sl, int sx, int n,
     (void)opacity64;
     for (int i = 0; i < n; i++) {
       const uint32_t p = src.read();
-      const uint32_t a = alpha[p >> 12];
+      const uint32_t a = p == key ? 0u : argbAlpha1024(p, alphaMul);
       if (a != 0) {
         const uint32_t s = convertPixel<S, D>(p);
         // Opaque pixels are written directly (like OpBlendArgb::put)
-        dst.write(a >= 64 ? s : blendNative<D>(dst.read(), s, a));
+        dst.write(a >= 1024 ? s : blendNative<D, 10>(dst.read(), s, a));
       }
       src.next();
       dst.next();
     }
   } else {
-    (void)alpha;
+    (void)alphaMul, (void)key;
     for (int i = 0; i < n; i++) {
       dst.write(blendNative<D>(dst.read(), convertPixel<S, D>(src.read()),
                                opacity64));
@@ -108,20 +118,20 @@ static void copyRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
 // Color.
 static bool blendRowFmt(PixelFormat dstFmt, PixelFormat srcFmt, uint8_t *dl,
                         int dx, const uint8_t *sl, int sx, int n,
-                        uint32_t opacity64, const uint32_t *alpha) {
+                        uint32_t opacity64, uint32_t alphaMul, uint32_t key) {
   bool done = false;
   withFormat(dstFmt, [&](auto tag) {
     constexpr PixelFormat D = decltype(tag)::value;
 #if SHAPOGFX_FORMAT_ARGB4444
     if (srcFmt == PixelFormat::ARGB4444) {
       blendRowT<PixelFormat::ARGB4444, D>(dl, dx, sl, sx, n, opacity64,
-                                          alpha);
+                                          alphaMul, key);
       done = true;
       return;
     }
 #endif
     if (srcFmt == D) {
-      blendRowT<D, D>(dl, dx, sl, sx, n, opacity64, alpha);
+      blendRowT<D, D>(dl, dx, sl, sx, n, opacity64, alphaMul, key);
       done = true;
     }
   });
@@ -230,28 +240,29 @@ template <PixelFormat D>
 struct OpBlendArgb {
   static constexpr PixelFormat SRC = PixelFormat::ARGB4444;
   typename FormatTraits<D>::Cursor cur;
-  const uint32_t *alpha;  // weight (0..64) of each 4-bit alpha
+  uint32_t alphaMul;  // ImageBlit::alphaMul
+  uint32_t key;       // as stored; ImageBlit::NO_KEY for none
   void put(uint32_t raw) {
-    const uint32_t a = alpha[raw >> 12];
+    const uint32_t a = raw == key ? 0u : argbAlpha1024(raw, alphaMul);
     if (a != 0) {
       const uint32_t s = convertPixel<SRC, D>(raw);
-      cur.write(a >= 64 ? s : blendNative<D>(cur.read(), s, a));
+      cur.write(a >= 1024 ? s : blendNative<D, 10>(cur.read(), s, a));
     }
     cur.next();
   }
   void run(uint32_t raw, int n) {
-    const uint32_t a = alpha[raw >> 12];
+    const uint32_t a = raw == key ? 0u : argbAlpha1024(raw, alphaMul);
     if (a == 0) {
       cur.skip(n);
       return;
     }
     const uint32_t s = convertPixel<SRC, D>(raw);
-    if (a >= 64) {
+    if (a >= 1024) {
       cur.fill(n, s);
       return;
     }
     for (; n > 0; n--) {
-      cur.write(blendNative<D>(cur.read(), s, a));
+      cur.write(blendNative<D, 10>(cur.read(), s, a));
       cur.next();
     }
   }
@@ -316,7 +327,13 @@ struct ImageBlit {
   bool keyed;
   uint32_t key;  // as stored, or NO_KEY
   uint32_t op64;
-  uint32_t alpha[16];  // ARGB4444 blends
+  // ARGB4444 blends: the factor that takes the alpha field of a native
+  // pixel (a4 << 12) to its opacity under op64 in 0..1024, over 16 bits:
+  // ((p & 0xF000) * alphaMul) >> 16 = a4 * op64 / 15 * 16 (a 10-bit alpha,
+  // which the blend takes as it is; one multiply and shift per pixel in
+  // place of a table). 1093 = ceil(65536 * 16 / (15 * 64)): 15 * 1093 * 4096
+  // >> 16 is exactly 1024.
+  uint32_t alphaMul;
 
   static constexpr uint32_t NO_KEY = 0xFFFFFFFFu;
 
@@ -334,12 +351,7 @@ struct ImageBlit {
                                              : native;
     }
     const bool srcAlpha = (s == PixelFormat::ARGB4444);
-    // Opacity of each 4-bit alpha, as the Color path computes it (for the
-    // ARGB4444 blend paths; computed here once rather than per row)
-    if (srcAlpha && mode == BlendMode::ALPHA) {
-      for (uint32_t a4 = 0; a4 < 16; a4++)
-        alpha[a4] = (alpha255To64(a4 * 17u) * op64) >> 6;
-    }
+    alphaMul = (op64 * 1093u + 32u) >> 6;
     // A format without alpha drawn with ALPHA at full opacity is a copy
     if (mode == BlendMode::ALPHA && !srcAlpha && op64 >= 64)
       mode = BlendMode::NONE;
@@ -350,8 +362,8 @@ struct ImageBlit {
     if (mode == BlendMode::NONE && s == dst) {
       path = keyed ? (is16 ? BlitPath::COPY_KEY16 : BlitPath::COPY_KEY)
                    : (is16 ? BlitPath::COPY16 : BlitPath::COPY);
-    } else if (!keyed && mode == BlendMode::ALPHA && srcAlpha) {
-      path = BlitPath::BLEND_ARGB;
+    } else if (mode == BlendMode::ALPHA && srcAlpha) {
+      path = BlitPath::BLEND_ARGB;  // (keyed too: the op skips the key)
     } else if (!keyed && mode == BlendMode::ALPHA && s == dst) {
       path = BlitPath::BLEND_SAME;
     } else {
@@ -414,7 +426,8 @@ __attribute__((noinline)) void blitRow(const ImageBlit &b, uint8_t *dl, int x,
       withFormat(b.dst, [&](auto tag) {
         OpBlendArgb<decltype(tag)::value> op;
         op.cur.init(dl, x);
-        op.alpha = b.alpha;
+        op.alphaMul = b.alphaMul;
+        op.key = b.key;
         walk(op, n);
       });
 #endif
@@ -728,40 +741,43 @@ struct AffineRows {
     iB = B != 0.0f ? 1.0f / B : 0.0f;
     uLo = in.x << 16, uHi = (in.right() << 16) - 1;
     vLo = in.y << 16, vHi = (in.bottom() << 16) - 1;
-    return initPolygon(polygon, count, s);
+    if (!polygon || count < 3) return true;
+    if (count > Graphics2D::IMAGE_POLYGON_MAX) return false;
+    vec2f pf[Graphics2D::IMAGE_POLYGON_MAX];
+    for (int i = 0; i < count; i++)
+      pf[i] = {(float)polygon[2 * i], (float)polygon[2 * i + 1]};
+    return initPolygonF(pf, count, s);
   }
 
-  // `polygon`: `count` vertices as x, y pairs relative to the top-left corner
-  // of `s`. False for a degenerate polygon or too many vertices (nothing is
-  // drawn); fewer than 3 vertices mean no polygon.
-  bool initPolygon(const int16_t *poly, int count, const Rect &s) {
+  // `poly`: `count` vertices relative to the top-left corner of `s`. False
+  // for a degenerate polygon or too many vertices (nothing is drawn); fewer
+  // than 3 vertices mean no polygon.
+  bool initPolygonF(const vec2f *poly, int count, const Rect &s) {
     loCount = hiCount = 0;
     hasPolygon = false;
     if (!poly || count < 3) return true;
     if (count > Graphics2D::IMAGE_POLYGON_MAX) return false;
-    // The winding, from the doubled signed area (int16 coordinates: the
-    // products fit 64 bits with room)
-    int64_t area2 = 0;
+    // The winding, from the doubled signed area
+    float area2 = 0.0f;
     for (int i = 0; i < count; i++) {
       const int j = (i + 1) % count;
-      area2 += (int64_t)poly[2 * i] * poly[2 * j + 1] -
-               (int64_t)poly[2 * j] * poly[2 * i + 1];
+      area2 += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
     }
-    if (area2 == 0) return false;
+    if (!(area2 != 0.0f)) return false;
     const float sign = area2 > 0 ? 1.0f : -1.0f;
     const float lim = 1e6f;
     hasPolygon = true;
     for (int i = 0; i < count; i++) {
       const int j = (i + 1) % count;
-      const int ex = poly[2 * j] - poly[2 * i];
-      const int ey = poly[2 * j + 1] - poly[2 * i + 1];
-      if (ex == 0 && ey == 0) continue;  // a repeated vertex
+      const float ex = poly[j].x - poly[i].x;
+      const float ey = poly[j].y - poly[i].y;
+      if (ex == 0.0f && ey == 0.0f) continue;  // a repeated vertex
       // The inward unit normal of the edge (for a positive area, its left
       // side): inside is nx u + ny v >= c, in absolute source coordinates
-      const float len = std::sqrt((float)ex * ex + (float)ey * ey);
-      const float nx = -(float)ey * sign / len, ny = (float)ex * sign / len;
-      const float c = nx * (float)(poly[2 * i] + s.x) +
-                      ny * (float)(poly[2 * i + 1] + s.y);
+      const float len = std::sqrt(ex * ex + ey * ey);
+      const float nx = -ey * sign / len, ny = ex * sign / len;
+      const float c = nx * (poly[i].x + (float)s.x) +
+                      ny * (poly[i].y + (float)s.y);
       // With u = A x + C y + E, v = B x + D y + F that is
       // g x >= h0 + hy y
       const float g = nx * A + ny * B;
@@ -871,11 +887,14 @@ void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
     return;
   }
   if (b.mode == BlendMode::ALPHA &&
+      (!b.keyed || img.format == PixelFormat::ARGB4444) &&
       blendRowFmt(target.format, img.format, target.linePtr(dst.y), dst.x,
-                  img.linePtr(src.y), src.x, dst.width, b.op64, b.alpha)) {
+                  img.linePtr(src.y), src.x, dst.width, b.op64, b.alphaMul,
+                  b.key)) {
     for (int j = 1; j < dst.height; j++) {
       blendRowFmt(target.format, img.format, target.linePtr(dst.y + j), dst.x,
-                  img.linePtr(src.y + j), src.x, dst.width, b.op64, b.alpha);
+                  img.linePtr(src.y + j), src.x, dst.width, b.op64, b.alphaMul,
+                  b.key);
     }
     return;
   }
@@ -995,6 +1014,11 @@ void Graphics2D::drawImage(const Texture &img, int dx, int dy,
       blitScaled(*this, img, Rect{dx + ox_, dy + oy_, s.width, s.height}, s);
     else
       blitPlain(*this, img, dx + ox_, dy + oy_, s);
+  } else if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawImageAA(
+        *this, img, s,
+        state_.transform * affine2f::translation((float)dx, (float)dy), nullptr,
+        0);
   } else if (kind_ == TransformKind::SCALE) {
     blitScaled(*this, img,
                G2Impl::mapRectSigned(*this, RectF{(float)dx, (float)dy,
@@ -1020,6 +1044,13 @@ void Graphics2D::drawImage(const Texture &img, int dx, int dy,
   if (s.isEmpty()) return;
   // The transformed path whatever the transform: the plain and scaled paths
   // have no polygon (and TRANSLATE snaps the offset, which this does not)
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawImageAA(
+        *this, img, s,
+        state_.transform * affine2f::translation((float)dx, (float)dy), polygon,
+        count);
+    return;
+  }
   blitAffine(*this, img,
              state_.transform * affine2f::translation((float)dx, (float)dy), s,
              polygon, count);
@@ -1030,6 +1061,15 @@ void Graphics2D::drawImage(const Texture &img, const Rect &dst,
   if (!hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
   const Rect s = srcRect.normalized();
   if (s.isEmpty() || dst.width == 0 || dst.height == 0) return;
+  if (G2Impl::wantsAntialias(*this) && kind_ > TransformKind::TRANSLATE) {
+    // (a destination rectangle of whole pixels has no edge to smooth)
+    affine2f m = state_.transform;
+    m.translate((float)dst.x, (float)dst.y)
+        .scale((float)dst.width / (float)s.width,
+               (float)dst.height / (float)s.height);
+    G2Impl::drawImageAA(*this, img, s, m, nullptr, 0);
+    return;
+  }
   if (!TRANSFORM || kind_ <= TransformKind::TRANSLATE) {
     blitScaled(*this, img, dst.offset(ox_, oy_), s);
   } else if (kind_ == TransformKind::SCALE) {
@@ -1041,6 +1081,318 @@ void Graphics2D::drawImage(const Texture &img, const Rect &dst,
                (float)dst.height / (float)s.height);
     blitAffine(*this, img, m, s);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Images with antialiasing: every pixel whose center lies within 0.71 pixel
+// of the image's outline (its rectangle, or the polygon) or inside it is
+// sampled bilinearly at the source point under its center (premultiplied,
+// so that a transparent or keyed texel lends no color), and the ones along
+// the outline take its coverage as a factor of their alpha. The coverage is
+// approximated from the outline's edges: for each edge the overlap of the
+// pixel with its inner side (the signed distance of the center plus a half,
+// clamped to 0..1), multiplied over the edges, which is exact along an edge
+// and a fair product at the corners; pixels deeper than 0.71 inside every
+// edge are whole and skip the arithmetic. No rasterizer, buffer or sub-rows
+// are needed.
+
+namespace {
+
+// 65536 / a for a in 1..255, to undo the premultiplication without a
+// division per pixel
+struct Reciprocal {
+  uint32_t v[256];
+  Reciprocal() {
+    v[0] = 0;
+    for (int a = 1; a < 256; a++) v[a] = 65536u / (uint32_t)a;
+  }
+};
+const Reciprocal RCP;
+
+struct ImageAA {
+  Graphics2D *g;
+  const Texture *img;
+  Rect src;        // the texels sampled (clamped to it)
+  affine2f inv;    // target pixels to image pixels
+  int32_t duQ, dvQ;  // inv.a, inv.b in 16.16: the step along a row
+  bool keyed;
+  uint32_t keyNative;
+  WriteMode mode;
+  uint32_t opacity64;
+  // The outline on the target as its edges, inside is nx x + ny y >= c, in
+  // 16.16 (the unit normals, so d below is a distance in pixels); and, for
+  // the spans, the bound each edge puts on x along a row, x >= (or <=)
+  // xb0 + xbdy * y in 24.8, for the outer and the inner inset (kind: 1
+  // lower bound, -1 upper, 0 the edge is across the rows: then xb0 + xbdy
+  // * y > 0 means the row is outside)
+  int n = 0;
+  int32_t nx[Graphics2D::IMAGE_POLYGON_MAX], ny[Graphics2D::IMAGE_POLYGON_MAX],
+      c[Graphics2D::IMAGE_POLYGON_MAX];
+  int8_t kind[Graphics2D::IMAGE_POLYGON_MAX];
+  int32_t xbOut0[Graphics2D::IMAGE_POLYGON_MAX], xbIn0[Graphics2D::IMAGE_POLYGON_MAX],
+      xbdy[Graphics2D::IMAGE_POLYGON_MAX];
+  // Pixels with centers up to OUT outside the outline are partly covered;
+  // those IN or more inside every edge are whole
+  static constexpr float OUT = 0.71f, IN = 0.71f;
+
+  static int32_t q16(float v) {
+    return (int32_t)std::clamp(v * 65536.0f, -2147483520.0f, 2147483520.0f);
+  }
+  static int32_t q8(float v) {
+    return (int32_t)std::clamp(v * 256.0f, -8388608.0f, 8388607.0f);
+  }
+
+  bool initEdges(const vec2f *pts, int count) {
+    float area2 = 0.0f;
+    for (int i = 0; i < count; i++) {
+      const int j = (i + 1) % count;
+      area2 += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    if (!(std::fabs(area2) > 1e-6f)) return false;
+    const float sign = area2 > 0.0f ? 1.0f : -1.0f;
+    n = 0;
+    for (int i = 0; i < count; i++) {
+      const int j = (i + 1) % count;
+      const float ex = pts[j].x - pts[i].x, ey = pts[j].y - pts[i].y;
+      const float len = std::sqrt(ex * ex + ey * ey);
+      if (!(len > 1e-6f)) continue;
+      const float fx = -ey * sign / len, fy = ex * sign / len;
+      const float fc = fx * pts[i].x + fy * pts[i].y;
+      nx[n] = q16(fx);
+      ny[n] = q16(fy);
+      c[n] = q16(fc);
+      // x >= (c + inset - fy * (y + 0.5)) / fx, with |1 / fx| kept within
+      // 2^10 so that the bounds of the rows on screen fit 24.8
+      if (std::fabs(fx) > 1e-3f) {
+        const float ifx = 1.0f / fx;
+        kind[n] = fx > 0.0f ? 1 : -1;
+        xbOut0[n] = q8((fc - OUT - fy * 0.5f) * ifx);
+        xbIn0[n] = q8((fc + IN - fy * 0.5f) * ifx);
+        xbdy[n] = q8(-fy * ifx);
+      } else {
+        // Across the rows: outside where fc + inset - fy (y + 0.5) > 0
+        kind[n] = 0;
+        xbOut0[n] = q8(fc - OUT - fy * 0.5f);
+        xbIn0[n] = q8(fc + IN - fy * 0.5f);
+        xbdy[n] = q8(-fy);
+      }
+      n++;
+    }
+    return n >= 3;
+  }
+
+  // The pixels of row y whose centers lie inside the outline moved out by
+  // OUT (`inner` false) or in by IN (true), as [a, b); false when there are
+  // none. Integer: one multiply-add per edge.
+  bool span(int y, bool inner, int &a, int &b) const {
+    const int32_t *xb0 = inner ? xbIn0 : xbOut0;
+    int32_t lo = INT32_MIN / 2, hi = INT32_MAX / 2;
+    for (int i = 0; i < n; i++) {
+      const int32_t xb = xb0[i] + xbdy[i] * y;
+      if (kind[i] > 0) {
+        lo = std::max(lo, xb);
+      } else if (kind[i] < 0) {
+        hi = std::min(hi, xb);
+      } else if (xb > 0) {
+        return false;
+      }
+    }
+    if (lo >= hi) return false;
+    // The centers (x + 0.5) within (lo, hi): x from ceil(lo - 0.5)
+    a = (lo - 128 + 255) >> 8;
+    b = ((hi - 128) >> 8) + 1;
+    return a < b;
+  }
+
+  // The texel at column u of `row` as a premultiplied Color: (r a, g a,
+  // b a, a) with the channels in 0..255 * 0..255
+  template <PixelFormat F>
+  inline void texel(const uint8_t *row, int u, uint32_t &r, uint32_t &gg,
+                    uint32_t &b, uint32_t &a) const {
+    typename FormatTraits<F>::Cursor cur;
+    cur.init((void *)row, u);
+    const uint32_t raw = cur.read();
+    if (keyed && raw == keyNative) {
+      r = gg = b = a = 0;
+      return;
+    }
+    const Color col = FormatTraits<F>::toColor(raw);
+    a = (uint32_t)colorA(col);
+    r = (uint32_t)colorR(col) * a;
+    gg = (uint32_t)colorG(col) * a;
+    b = (uint32_t)colorB(col) * a;
+  }
+
+  // The pixels [xa, xa + n_) of row y: `edge`: their coverage is computed
+  // (else they are whole). The four texels around the source point are
+  // fetched again only when the point leaves their cell (a magnified image
+  // keeps them over several pixels), and when all four are opaque the
+  // channels are mixed without the premultiplication.
+  template <PixelFormat F>
+  void row(int y, int xa, int n_, bool edge, Color *out) const {
+    const float yc = (float)y + 0.5f, xc = (float)xa + 0.5f;
+    // The source point under the first pixel's center, less half a texel
+    // (texel centers are at .5), in 16.16, stepped along the row in integers
+    int32_t u = q16(inv.a * xc + inv.c * yc + inv.tx - 0.5f);
+    int32_t v = q16(inv.b * xc + inv.d * yc + inv.ty - 0.5f);
+    const int uMax = src.right() - 1, vMax = src.bottom() - 1;
+    // The overlap of the first pixel with the inner side of each edge (its
+    // signed distance plus a half) in 16.16, stepped along the row
+    int32_t d[Graphics2D::IMAGE_POLYGON_MAX];
+    if (edge) {
+      const int32_t xcQ = q16(xc), ycQ = q16(yc);
+      for (int k = 0; k < n; k++)
+        d[k] = (int32_t)(((int64_t)nx[k] * xcQ + (int64_t)ny[k] * ycQ) >> 16) - c[k] + 32768;
+    }
+    // The cell of the last point, and its texels
+    int cu = INT_MIN, cv = INT_MIN;
+    uint32_t r00 = 0, g00 = 0, b00 = 0, a00 = 0, r10 = 0, g10 = 0, b10 = 0, a10 = 0,
+             r01 = 0, g01 = 0, b01 = 0, a01 = 0, r11 = 0, g11 = 0, b11 = 0, a11 = 0;
+    bool opaque = false;
+    for (int i = 0; i < n_; i++, u += duQ, v += dvQ) {
+      uint32_t cov = 64;
+      if (edge) {
+        // The product of the overlaps, 16.16
+        int32_t f = 65536;
+        for (int k = 0; k < n; k++) {
+          const int32_t dk = d[k];
+          d[k] = dk + nx[k];
+          if (dk <= 0) f = 0;
+          else if (dk < 65536) f = (int32_t)(((int64_t)f * dk) >> 16);
+        }
+        cov = (uint32_t)((f + 512) >> 10);
+        if (cov == 0) {
+          out[i] = 0;
+          continue;
+        }
+      }
+      const int iu = u >> 16, iv = v >> 16;
+      if (iu != cu || iv != cv) {
+        cu = iu;
+        cv = iv;
+        const int u0 = clampInt(src.x, uMax, iu), v0 = clampInt(src.y, vMax, iv);
+        const int u1 = clampInt(src.x, uMax, iu + 1), v1 = clampInt(src.y, vMax, iv + 1);
+        const uint8_t *row0 = img->linePtr(v0), *row1 = img->linePtr(v1);
+        texel<F>(row0, u0, r00, g00, b00, a00);
+        texel<F>(row0, u1, r10, g10, b10, a10);
+        texel<F>(row1, u0, r01, g01, b01, a01);
+        texel<F>(row1, u1, r11, g11, b11, a11);
+        opaque = (a00 & a10 & a01 & a11) == 255;
+      }
+      const uint32_t wx = ((uint32_t)u >> 8) & 255u, wy = ((uint32_t)v >> 8) & 255u;
+      const uint32_t w00 = (256 - wx) * (256 - wy), w10 = wx * (256 - wy),
+                     w01 = (256 - wx) * wy, w11 = wx * wy;  // sum 65536
+      uint32_t r, gg, b, a;
+      if (opaque) {
+        // The channels are premultiplied by 255: mix and divide by it
+        a = 255;
+        r = (r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11) / (65536u * 255u);
+        gg = (g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11) / (65536u * 255u);
+        b = (b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11) / (65536u * 255u);
+      } else {
+        a = (a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11) >> 16;
+        if (a == 0) {
+          out[i] = 0;
+          continue;
+        }
+        // The premultiplied sums are 65536 * 255 * 255 at most: fit 32 bits;
+        // the division by the alpha through the reciprocal table
+        const uint32_t rcp = RCP.v[a];
+        r = std::min<uint32_t>((((r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11) >> 16) * rcp) >> 16, 255u);
+        gg = std::min<uint32_t>((((g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11) >> 16) * rcp) >> 16, 255u);
+        b = std::min<uint32_t>((((b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11) >> 16) * rcp) >> 16, 255u);
+      }
+      const uint32_t ac = cov >= 64 ? a : (a * cov + 32u) >> 6;
+      out[i] = makeColor((int)r, (int)gg, (int)b, (int)ac);
+    }
+  }
+
+  // The pixels [xa, xb) of row y, clipped
+  void part(int y, int xa, int xb, bool edge) const {
+    const Rect &clip = g->clipRect();
+    xa = std::max(xa, clip.x);
+    xb = std::min(xb, clip.right());
+    if (xb <= xa) return;
+    constexpr int CHUNK = 32;
+    Color buf[CHUNK];
+    const Surface &t = g->target();
+    for (int x = xa; x < xb; x += CHUNK) {
+      const int k = std::min(CHUNK, xb - x);
+      withFormat(img->format, [&](auto tag) {
+        row<decltype(tag)::value>(y, x, k, edge, buf);
+      });
+      writeColorsFmt(t.format, t.linePtr(y), x, k, buf, mode, opacity64);
+    }
+  }
+
+  // Every row in [y0, y1]: the edge pixels on either side, the whole ones
+  // between
+  void rows(int y0, int y1) const {
+    for (int y = y0; y <= y1; y++) {
+      int oa, ob, ia, ib;
+      if (!span(y, false, oa, ob)) continue;
+      if (!span(y, true, ia, ib)) {
+        part(y, oa, ob, true);
+        continue;
+      }
+      part(y, oa, std::min(ob, ia), true);
+      part(y, std::max(oa, ia), std::min(ob, ib), false);
+      part(y, std::max(oa, ib), ob, true);
+    }
+  }
+};
+
+}  // namespace
+
+void detail::G2Impl::drawImageAA(Graphics2D &g, const Texture &img,
+                                 const Rect &src, const affine2f &mSrc,
+                                 const int16_t *polygon, int count) {
+  if (!g.hasTarget()) return;
+  ImageAA ctx;
+  ctx.g = &g;
+  ctx.img = &img;
+  ctx.src = src;
+  // mSrc maps points relative to the top-left corner of src (as the polygon
+  // is given); m maps image pixels
+  const affine2f m =
+      mSrc * affine2f::translation(-(float)src.x, -(float)src.y);
+  if (!m.invert(ctx.inv)) return;
+  // Within a texel per 32768 target pixels in 16.16: the steps are kept
+  // small enough for that (an image is at most AFFINE_SIZE_MAX texels)
+  if (!(std::fabs(ctx.inv.a) < 16384.0f && std::fabs(ctx.inv.b) < 16384.0f)) return;
+  ctx.duQ = ImageAA::q16(ctx.inv.a);
+  ctx.dvQ = ImageAA::q16(ctx.inv.b);
+  ctx.keyed = COLOR_KEY && g.hasColorKey();
+  ctx.keyNative = ctx.keyed ? colorToNative(img.format, g.colorKey()) : 0;
+  ctx.mode = g.blendMode() == BlendMode::ADD ? WriteMode::ADD : WriteMode::ALPHA;
+  ctx.opacity64 = alpha255To64((uint32_t)g.opacity());
+  // The outline on the target: the polygon (image pixels relative to src),
+  // or the source rectangle
+  vec2f pts[Graphics2D::IMAGE_POLYGON_MAX];
+  int n = 0;
+  if (polygon && count >= 3) {
+    if (count > Graphics2D::IMAGE_POLYGON_MAX) return;
+    for (int i = 0; i < count; i++)
+      pts[n++] = mSrc.apply((float)polygon[2 * i], (float)polygon[2 * i + 1]);
+  } else {
+    pts[n++] = mSrc.apply(0.0f, 0.0f);
+    pts[n++] = mSrc.apply((float)src.width, 0.0f);
+    pts[n++] = mSrc.apply((float)src.width, (float)src.height);
+    pts[n++] = mSrc.apply(0.0f, (float)src.height);
+  }
+  if (!ctx.initEdges(pts, n)) return;
+  float y0 = pts[0].y, y1 = pts[0].y;
+  for (int i = 1; i < n; i++) {
+    y0 = std::min(y0, pts[i].y);
+    y1 = std::max(y1, pts[i].y);
+  }
+  if (!(y0 <= y1)) return;
+  const Rect &clip = g.clipRect();
+  const float lim = 1e6f;
+  const int ry0 = std::max(clip.y, (int)std::floor(std::clamp(y0, -lim, lim) - ImageAA::OUT));
+  const int ry1 = std::min(clip.bottom() - 1, (int)std::ceil(std::clamp(y1, -lim, lim) + ImageAA::OUT));
+  if (ry0 > ry1) return;
+  ctx.rows(ry0, ry1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1216,6 +1568,75 @@ void detail::G2Impl::drawMask(Graphics2D &g, const MaskSource &m,
   }
 }
 
+// Under a transform with antialiasing: every target pixel samples the mask
+// at four points (a 2 x 2 grid half a pixel apart) and takes the foreground
+// with a quarter of its alpha per set bit, the background with a quarter
+// per clear one
+void detail::G2Impl::drawMaskAA(Graphics2D &g, const MaskSource &m,
+                                const Rect &src, int dx, int dy, Color fg,
+                                Color bg) {
+  if (src.isEmpty() || !g.hasTarget()) return;
+  const Raster ras = raster(g);
+  if (ras.clip.isEmpty()) return;
+  const affine2f mat =
+      g.state_.transform * affine2f::translation((float)dx, (float)dy);
+  affine2f inv;
+  if (!mat.invert(inv)) return;
+  // The target pixels the source rectangle may touch
+  float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+  for (int k = 0; k < 4; k++) {
+    const vec2f p = mat.apply((float)(k & 1 ? src.right() : src.x),
+                              (float)(k & 2 ? src.bottom() : src.y));
+    x0 = std::min(x0, p.x);
+    x1 = std::max(x1, p.x);
+    y0 = std::min(y0, p.y);
+    y1 = std::max(y1, p.y);
+  }
+  if (!(x0 <= x1 && y0 <= y1)) return;
+  const Rect area = Rect{snap(x0), snap(y0), snap(x1) + 1 - snap(x0),
+                         snap(y1) + 1 - snap(y0)}
+                        .intersect(ras.clip);
+  if (area.isEmpty()) return;
+  const WriteMode mode = g.blendMode() == BlendMode::ADD ? WriteMode::ADD
+                                                         : WriteMode::ALPHA;
+  const uint32_t op64 = alpha255To64((uint32_t)g.opacity());
+  const bool hasBg = colorA(bg) != 0;
+  if (colorA(fg) == 0 && !hasBg) return;
+  // The four sample offsets in source pixels
+  const float ox[4] = {-0.25f * inv.a - 0.25f * inv.c, 0.25f * inv.a - 0.25f * inv.c,
+                       -0.25f * inv.a + 0.25f * inv.c, 0.25f * inv.a + 0.25f * inv.c};
+  const float oy[4] = {-0.25f * inv.b - 0.25f * inv.d, 0.25f * inv.b - 0.25f * inv.d,
+                       -0.25f * inv.b + 0.25f * inv.d, 0.25f * inv.b + 0.25f * inv.d};
+  constexpr int CHUNK = 32;
+  Color fgRow[CHUNK], bgRow[CHUNK];
+  for (int y = area.y; y < area.bottom(); y++) {
+    for (int x = area.x; x < area.right(); x += CHUNK) {
+      const int n = std::min(CHUNK, area.right() - x);
+      // The source point under the first pixel's center, stepped along x
+      float u = inv.a * ((float)x + 0.5f) + inv.c * ((float)y + 0.5f) + inv.tx;
+      float v = inv.b * ((float)x + 0.5f) + inv.d * ((float)y + 0.5f) + inv.ty;
+      bool any = false;
+      for (int i = 0; i < n; i++, u += inv.a, v += inv.b) {
+        int set = 0, in = 0;
+        for (int k = 0; k < 4; k++) {
+          const int su = (int)std::floor(u + ox[k]), sv = (int)std::floor(v + oy[k]);
+          if (su < src.x || su >= src.right() || sv < src.y || sv >= src.bottom())
+            continue;
+          in++;
+          if (maskBit(m, m.base + (uint32_t)sv * m.stride + (uint32_t)su)) set++;
+        }
+        fgRow[i] = set ? colorWithAlpha(fg, (colorA(fg) * set + 2) / 4) : 0;
+        bgRow[i] = in > set ? colorWithAlpha(bg, (colorA(bg) * (in - set) + 2) / 4) : 0;
+        if (set || in > set) any = true;
+      }
+      if (!any) continue;
+      uint8_t *line = ras.target.linePtr(y);
+      if (hasBg) writeColorsFmt(ras.target.format, line, x, n, bgRow, mode, op64);
+      if (colorA(fg) != 0) writeColorsFmt(ras.target.format, line, x, n, fgRow, mode, op64);
+    }
+  }
+}
+
 void Graphics2D::drawBitmap(const Texture &bmp, int dx, int dy,
                             const Rect &srcRect, Color fg, Color bg) {
   if (!hasTarget() || !bmp.pixels || bmp.format != PixelFormat::GRAY1) return;
@@ -1223,6 +1644,12 @@ void Graphics2D::drawBitmap(const Texture &bmp, int dx, int dy,
   const Rect s = srcRect.normalized();
   const Rect in = s.intersect({0, 0, bmp.width, bmp.height});
   if (in.isEmpty()) return;
+  if (kind_ > TransformKind::TRANSLATE && G2Impl::wantsAntialias(*this)) {
+    const MaskSource mm = {(const uint8_t *)bmp.pixels, 0, bmp.stride * 8u};
+    G2Impl::drawMaskAA(*this, mm, in, dx + (in.x - s.x), dy + (in.y - s.y), fg,
+                       bg);
+    return;
+  }
   Paint pf, pb;
   const bool hasFg = G2Impl::makePaint(*this, fg, pf);
   const bool hasBg = colorA(bg) != 0 && G2Impl::makePaint(*this, bg, pb);

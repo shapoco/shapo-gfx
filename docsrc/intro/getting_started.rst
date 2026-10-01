@@ -181,6 +181,7 @@ CMake も PlatformIO も使わない
    "``SHAPOGFX2D_COLOR_KEY``", "1", "0 で ``drawImage()`` のカラーキーを除去する。``setColorKey()`` は何もしない (``src/gfx2d`` のみ)"
    "``SHAPOGFX2D_STACK_DEPTH``", "16", "2D のステートスタックの段数 (``src/gfx2d`` のみ)"
    "``SHAPOGFX2D_RIG``", "1", "0 でボーンアニメーション (``rig.hpp``) を除去する。``rig::Instance::init()`` は false を返し、他は何もしない (``src/gfx2d`` のみ)"
+   "``SHAPOGFX2D_ANTIALIAS``", "1", "0 でベクタ描画 (``fillPath()`` など) と面の塗りつぶしのアンチエイリアスを除去する。``setAntialias()`` に関係なく多角形と同じ描き方になる (``src/gfx2d`` のみ)"
    "``SHAPOGFX_ARCH_SPLIT_MUL64``", "Cortex-M0/M0+ と ESP8266 で 1、他は 0", "1 にすると 32x32→64 ビットの積をライブラリ呼び出しでなく 16x16 ビットの積 4 つで作る (乗算器が下位 32 ビットしか出さないコア向け。固定小数点の頂点段・セットアップ・透視補正除算)。結果は同じ"
    "``SHAPOGFX3D_DEPTH_BITS``", "32", "レコードの深度の精度 (32 または 16)。16 で深度付きレコードが 4 バイト小さくなる (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX3D_TEXTURE``", "1", "0 でテクスチャ/環境マッピングを除去 (``gfx3d.cpp`` のみ)"

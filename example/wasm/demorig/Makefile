@@ -14,7 +14,8 @@ COMMON := $(REPO_ROOT)/example/common/demorig
 SRCS := main.cpp $(COMMON)/demorig.cpp $(COMMON)/scene.cpp \
         $(wildcard $(REPO_ROOT)/src/gfx2d/*.cpp)
 HDRS := $(wildcard $(REPO_ROOT)/include/shapoco/gfx2d/*.hpp) \
-        $(COMMON)/demorig.hpp $(COMMON)/scene.hpp $(COMMON)/model/rgb_chan.hpp
+        $(COMMON)/demorig.hpp $(COMMON)/scene.hpp $(COMMON)/model/rgb_chan.hpp \
+        $(COMMON)/model/pop_star.hpp
 
 CXXFLAGS := -O2 -std=c++17 -Wall -Wextra -I $(REPO_ROOT)/include -I $(COMMON)
 
@@ -27,8 +28,11 @@ EXPORTS := $(EXPORTS),_demorig_set_screen,_demorig_pointer_down,_demorig_pointer
 # come from flash through a cache and are then stored without row padding
 # (a third fewer cache lines per frame)
 ASSETS := $(REPO_ROOT)/assets/2d/rgb_chan
-DBONES := $(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.4 --fit-rotate
-INPUTS := $(ASSETS)/rgb_chan_ske.json $(ASSETS)/Armature_animtion0.dbani
+DBONES := $(PYTHON) $(REPO_ROOT)/bin/dbones2cpp --scale 0.4 --fit-rotate --out-format auto
+INPUTS := $(ASSETS)/rgb_chan_ske.json
+# The pop star (an animated SVG, converted to an armature by bin/svg2cpp)
+SVG2CPP := $(PYTHON) $(REPO_ROOT)/bin/svg2cpp --rig --fps 30
+POP_STAR := $(REPO_ROOT)/assets/2d/pop_star.svg
 
 .PHONY: all clean serve native model
 
@@ -42,6 +46,7 @@ $(OUT): $(SRCS) $(HDRS) Makefile
 model:
 	$(DBONES) $(INPUTS) $(COMMON)/model/rgb_chan.hpp
 	$(DBONES) --atlas-width 0 $(INPUTS) $(COMMON)/model/rgb_chan_sep.hpp
+	$(SVG2CPP) $(POP_STAR) $(COMMON)/model/pop_star.hpp
 
 # Native build: renders one frame to demorig.ppm
 native: $(SRCS) $(HDRS)

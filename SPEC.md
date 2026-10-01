@@ -24,7 +24,8 @@ src/gfx2d/internal.hpp   internal declarations of the 2D renderer (options, span
 src/gfx2d/graphics2d.cpp 2D row operations, state, rectangles, lines, text
 src/gfx2d/shapes.cpp     2D ellipses, arcs, rounded rectangles, polygons
 src/gfx2d/images.cpp     2D images and 1-bit masks (bitmaps, glyphs)
-src/gfx2d/rig.cpp        2D skeletal animation (rig::Instance)
+src/gfx2d/vg.cpp         2D vector graphics (paths, brushes, strokes, pictures)
+src/gfx2d/rig.cpp        2D skeletal animation (rig::Instance, drawBind)
 src/gfx2d/arch.hpp       architecture hooks of the 2D renderer (internal; RP2)
 src/gfx3d/arch/          architecture hooks of the 3D renderer (internal; generic + RP2)
 example/wasm/            sample programs (WASM and native)
@@ -71,6 +72,7 @@ in git.
 | `SHAPOGFX2D_COLOR_KEY` | 1 | Color key of `drawImage()`; 0 removes it (`setColorKey()` does nothing) |
 | `SHAPOGFX2D_STACK_DEPTH` | 16 | Levels of the 2D state stack (`pushState()`) |
 | `SHAPOGFX2D_RIG` | 1 | Skeletal animation (`rig.hpp`); 0 removes it (`rig::Instance::init()` returns false, the rest does nothing) |
+| `SHAPOGFX2D_ANTIALIAS` | 1 | Antialiasing of the vector calls (`fillPath()`, `strokePath()`, `drawPicture()`) and of the area fills under `setAntialias(true)`; 0 removes the coverage code and draws their edges like polygons whatever `setAntialias()` says |
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise); see "Placing the rasterization side" |
 | `SHAPOGFX_ARCH_SPLIT_MUL64` | 1 on Cortex-M0/M0+ and ESP8266, else 0 | 1 forms 32x32 -> 64-bit products from four 16x16-bit ones inline instead of calling a library routine, for a core whose multiplier yields only the low 32 bits (fixed-point vertex stage, setup, perspective division); same results either way |
@@ -310,10 +312,12 @@ struct TextState {
   const GFXfont *font; Color color, background;
   int cursorX, cursorY, lineStartX; int16_t ascent, lineHeight;
 };
-struct GraphicsState2D {              // what pushState() saves (68 bytes on a 32-bit target)
+struct GraphicsState2D {              // what pushState() saves (100 bytes on a 32-bit target)
   affine2f transform; TextState text; Color colorKey;
+  vg::Brush fillBrush, strokeBrush; vg::StrokeStyle strokeStyle;   // of the vector calls
   ucoord_t clipX, clipY, clipWidth, clipHeight;   // SHAPOGFX_COORD_BITS: 8 or 16 bits
   BlendMode blendMode; uint8_t opacity; bool colorKeyEnabled;
+  bool antialias;                     // of the vector calls and the area fills (false)
 };
 
 class Graphics2D {
@@ -390,6 +394,15 @@ class Graphics2D {
   void drawString(const char *); void drawString(int x, int y, const char *);
   TextMetrics charMetrics(int code) const; TextMetrics textMetrics(const char *) const;
   TextMetricsF deviceCharMetrics(int code) const; TextMetricsF deviceTextMetrics(const char *) const;
+
+  // vector graphics (vg.hpp; brushes, stroke style and antialiasing of the state)
+  void setAntialias(bool); bool antialias() const;
+  void setFillBrush(const vg::Brush &); void setFillColor(Color); const vg::Brush &fillBrush() const;
+  void setStrokeBrush(const vg::Brush &); void setStrokeColor(Color); const vg::Brush &strokeBrush() const;
+  void setStrokeStyle(const vg::StrokeStyle &); void setStrokeWidth(float); const vg::StrokeStyle &strokeStyle() const;
+  void fillPath(const vg::Path &); void strokePath(const vg::Path &); void drawPath(const vg::Path &);  // fill, then stroke
+  void strokePolyline(const vec2f *, int n, bool closed = false);
+  void drawPicture(const vg::Picture &, Color currentColor = BLACK, float currentStrokeWidth = 1);
 };
 ```
 
@@ -399,10 +412,13 @@ Semantics:
   levels of `GraphicsState2D`, 1.1 KB by default) and uses the rest as scratch memory,
   taken and released within a drawing call: polygons with more than 12 edges keep
   their edges there (24 bytes each), and a rounded rectangle under rotation its corner
-  vertices when a corner takes more than 4 chords. Without an arena (or with too
+  vertices when a corner takes more than 4 chords; the vector calls keep the edges of
+  a path there (16 bytes each, plus 2 of bookkeeping) and the coverage of a row (2
+  bytes per pixel of the path's width). Without an arena (or with too
   little) everything still draws: `pushState()` returns false, polygons evaluate every
-  edge from its vertices on every row (slower, same pixels) and turned corners use 4
-  chords.
+  edge from its vertices on every row (slower, same pixels), turned corners use 4
+  chords, and a path is drawn in parts from a buffer of 24 edges on the stack, with
+  antialiasing only up to 128 pixels wide (see "Vector graphics").
 - **State**: `pushState()` copies the whole state; `popState()` restores it except for
   the text cursor (`cursorX`, `cursorY`, `lineStartX`), and clips the clip rectangle to
   the current target. `setState()` does the same checks and classifies the transform.
@@ -427,7 +443,12 @@ Semantics:
 - **Blend**: shapes and text put their color's alpha x opacity: `ALPHA` blends,
   `ADD` adds the color weighted by it with saturation, `NONE` overwrites with the
   color (its alpha goes into an ARGB4444 target). Images use their pixels' alpha
-  (ARGB4444 only) x opacity the same way, and `NONE` copies (ARGB4444 alpha into an
+  (ARGB4444 only) x opacity the same way (the blend helpers take their weight with
+  any number of fraction bits, `blendNative<F, SHIFT>`; the ARGB4444 sprite paths
+  turn the 4-bit alpha field into a 10-bit weight by one multiply with a factor
+  computed once per call from the opacity, `ImageBlit::alphaMul`, and blend with
+  it unrounded, while the Color path keeps the 6-bit weight of alpha x opacity),
+  and `NONE` copies (ARGB4444 alpha into an
   ARGB4444 target). Every shape reaches the pixels through one span function that
   switches on the blend (the opaque fill first); a color and blend become a native
   value, a weight and an operation once per call. `clear()` overwrites whatever the
@@ -439,6 +460,61 @@ Semantics:
   between its snapped corners, under `AFFINE` a polygon (a frame is its outer and
   inner outlines joined by an edge walked there and back, which the even-odd rule
   cancels).
+- **Antialiasing** (`setAntialias()`, off by default): with it on, the area fills
+  go through the vector rasterizer of `vg.cpp` as the path of the same shape
+  (`fillRect()` of a `RectF`, or of a `Rect` under `SCALE` / `AFFINE`, since whole
+  pixels under a translation have nothing to antialias; `fillEllipse()` and the
+  circles as the four-cubic ellipse of the rectangle; `fillRoundRect()`;
+  `fillPolygon()` and the triangles with the vertices as pixel centers, up to 64
+  vertices, with the even-odd rule) and are antialiased exactly as `fillPath()`
+  (see "Vector graphics"); not with the `NONE` blend mode, and not with
+  `SHAPOGFX2D_ANTIALIAS=0`. Lines and outlines become thin antialiased lines
+  on the target: the points are taken through the transform first (so they stay
+  a pixel wide whatever the scale) and each segment is drawn the way of Wu,
+  along its major axis every column (row) painting the two pixels the line
+  passes between, weighted by where it passes, a few instructions per pixel and
+  nothing per row; at a vertex the next segment paints a pixel of its first
+  column only by what its weight exceeds the one the last segment left there
+  (and the last segment of a polygon likewise against the first), so that a
+  vertex is neither painted twice (a translucent polyline would show its
+  joints) nor left dim where the two segments split its coverage. `drawLine()`,
+  `drawPolyline()` and `drawPolygon()` run between the pixel centers (an
+  axis-aligned line covers the same pixels as the plain one); `drawEllipse()`,
+  `drawCircle()`, `drawArc()` and `drawRoundRect()` draw the shape inset by half
+  a pixel (half a pixel of the target along each axis of the transform),
+  flattened like a path, so that the outline stays within the fill; `fillSector()` is
+  the path of the pie (the arc as cubics of at most a quarter turn each,
+  `vg::PathBuilder::arc()`) and `drawRect()` the even-odd path of its outer and
+  inner rectangles (an integer frame under a translation stays plain).
+  `drawHLine()` / `drawVLine()` under a translation are whole pixels and stay
+  plain. Text and bitmaps under a transform (`SCALE` or `AFFINE`) sample the
+  mask at four points per target pixel (a 2 x 2 grid half a pixel apart, through
+  the inverse transform) and blend the foreground with a quarter of its alpha
+  per set bit and the background with a quarter per clear one (5 levels; at a
+  whole scale the samples fall into one texel and nothing is gray);
+  untransformed text is pixel-exact already and unchanged. Images under a
+  transform (`SCALE` / `AFFINE`, the `dst` rectangle included) or clipped to a
+  polygon are drawn pixel by pixel (`G2Impl::drawImageAA()`, `ImageAA` in
+  `images.cpp`): every pixel whose center lies inside the outline (the rectangle
+  or the polygon) or within 0.71 pixel outside it samples the four texels around
+  the source point under its center bilinearly, premultiplied (a transparent
+  ARGB4444 texel or a keyed one has weight 0 and lends no color), the four
+  clamped to `src`; the four are fetched again only when the point leaves their
+  cell (a magnified image keeps them over several pixels) and mixed without the
+  premultiplication when all are opaque, the alpha undone through a reciprocal
+  table; the source point, the edge distances and their steps are 16.16 integers
+  and the span bounds of the rows 24.8, so that no floating point runs per pixel
+  or per row (a few conversions per chunk of 32 pixels). The pixels along the outline take its coverage as a factor of their
+  alpha, approximated from the outline's edges (per edge the overlap of the pixel
+  with its inner side, the signed distance of the center plus a half clamped to
+  0..1, multiplied over the edges: exact along an edge, a product at the corners;
+  stepped along the row, no rasterizer or buffer); the pixels 0.71 or more inside
+  every edge skip it. The color key and the opacity apply as before. A plain copy
+  (no transform, or a translation) has nothing to smooth and stays the plain
+  copy. The bilinear sampling costs about 10 ns per pixel on the host, 5 to 7
+  times the plain blit: with antialiasing on, a frame of demorig costs 7 times
+  the plain one at zoom 1 and zoom 8 alike, nearly all of it the character's
+  parts.
 - **Ellipses and rounded rectangles** are described by the horizontal extent of each
   row. An axis-aligned one (also under `SCALE`, after snapping its rectangle) is
   computed in 32-bit integers with one integer square root per row (the radicand
@@ -640,29 +716,175 @@ context: `translation(x, y).rotate(a).scale(s).translate(-w / 2, -h / 2)` center
 image on `(x, y)`, which is what `placement(x, y, a, s, s, w / 2, h / 2)` builds
 directly.
 
+### Vector graphics (`vg.hpp`)
+
+`shapoco::gfx2d::vg` holds vector data: paths of lines and bezier curves, brushes
+(a color or a gradient), stroke styles, and pictures (shapes with their brushes,
+transforms and clips) that `Graphics2D` draws with `fillPath()`, `strokePath()`
+and `drawPicture()`. The data is plain `const` structs that live in flash,
+generated from SVG by `bin/svg2cpp` or written by hand (`PathBuilder`). The names
+are those of vector formats in general, not of SVG. `gfx2d.hpp` includes the
+header (through `graphics2d.hpp`).
+
+```c++
+constexpr uint16_t FORMAT_VERSION = 1;      // members so far (as rig: generated headers assert on it)
+constexpr uint16_t SUPPORTED_FEATURES = 0;  // bits of Picture::features this build honors (none yet)
+enum class PathOp : uint8_t { MOVE, LINE, QUAD, CUBIC, CLOSE };   // 2, 2, 4, 6, 0 coordinates
+constexpr int pathOpCoords(PathOp);
+enum class FillRule : uint8_t { NONZERO, EVEN_ODD };
+struct Path { const uint8_t *ops; const float *coords; uint16_t opCount, coordCount;
+              FillRule rule; uint8_t pad[3]; RectF bounds; };               // 32 B
+RectF pathBounds(const Path &);              // of the points, control points included
+class PathBuilder {                          // into arrays the caller provides
+  PathBuilder(uint8_t *ops, int opCapacity, float *coords, int coordCapacity);
+  PathBuilder &moveTo(x, y), &lineTo(x, y), &quadTo(cx, cy, x, y), &cubicTo(c1x, c1y, c2x, c2y, x, y), &close();
+  PathBuilder &rect(x, y, w, h), &roundRect(x, y, w, h, rx, ry), &ellipse(cx, cy, rx, ry), &circle(cx, cy, r),
+              &polyline(const vec2f *, int n, bool closed);
+  bool overflowed() const; int opCount() const; int coordCount() const;
+  Path path(FillRule = NONZERO) const;       // bounds included
+};
+enum class GradientKind : uint8_t { LINEAR, RADIAL };
+enum class Spread : uint8_t { PAD, REFLECT, REPEAT };
+struct GradientStop { float offset; Color color; };          // offsets 0..1 in order
+struct Gradient { GradientKind kind; Spread spread; uint8_t stopCount, pad;
+                  const GradientStop *stops; affine2f toGradient; };        // 32 B
+Gradient linearGradient(const vec2f &p0, const vec2f &p1, const GradientStop *, int n, Spread = PAD);
+Gradient radialGradient(const vec2f &center, float radius, const GradientStop *, int n, Spread = PAD);
+struct Brush { Color color; const Gradient *gradient; };    // gradient == nullptr: solid
+constexpr Brush solidBrush(Color), gradientBrush(const Gradient *, int opacity = 255), NO_BRUSH;
+enum class LineCap : uint8_t { BUTT, ROUND, SQUARE };
+enum class LineJoin : uint8_t { MITER, ROUND, BEVEL };
+struct StrokeStyle { float width; LineCap cap; LineJoin join; uint8_t pad[2]; float miterLimit; };
+constexpr StrokeStyle strokeStyle(float width, LineCap = BUTT, LineJoin = MITER, float miterLimit = 4);
+enum class ShapeKind : uint8_t { PATH, IMAGE, TEXT };
+enum ShapeFlags : uint8_t { SHAPE_FILL_CURRENT_COLOR = 1, SHAPE_STROKE_CURRENT_COLOR = 2 };
+struct Text { const char *text; const GFXfont *font; float x, y; };  // (x, y) on the baseline
+struct Shape { ShapeKind kind; uint8_t flags, pad[2]; const void *data;  // Path, Texture or Text
+               Brush fill, stroke; StrokeStyle strokeStyle; affine2f transform; const RectF *clip; };  // 64 B
+struct Picture { const Shape *shapes; uint16_t shapeCount, features; RectF bounds; };
+```
+
+- **Paths**: every op but the first continues from the current point; a LINE, QUAD or
+  CUBIC right after CLOSE (or first) starts at the last MOVE. Filling closes every
+  subpath; stroking closes only those ending in CLOSE. Coordinates are continuous like
+  those of `affine2f` (a path along the edges of the rectangle `(x, y)-(x + w, y + h)`
+  fills the pixels of `Rect{x, y, w, h}`). `bounds` is used to size the coverage
+  buffer and to skip paths outside the clip; left empty, it is computed when drawn.
+- **Brushes**: a `Brush` is a color, or a gradient whose colors the alpha of `color`
+  scales (its RGB is ignored). A gradient lives in its own space: LINEAR runs along x
+  from 0 to 1, RADIAL from the origin to the unit circle; `toGradient` maps the
+  coordinates of the drawing calls to that space, so a gradient between two points, an
+  ellipse or a tilted one are all the same code (`linearGradient()` maps p0 to 0 and p1
+  to 1 along x, `radialGradient()` the center to the origin and the radius to 1).
+  Beyond its ends a gradient shows its end colors (PAD), itself mirrored (REFLECT) or
+  itself again (REPEAT). Colors are interpolated between the stops (not premultiplied)
+  into a table of 64 entries once per call; a pixel's position is stepped in Q16 from
+  an exact value at the start of every run of 32 pixels (no drift), the radial
+  distance by `isqrt32` of the Q12 components (clamped to 8 radii); no floating point
+  per pixel. The brushes of the state default to opaque white.
+- **Strokes**: `width` is centered on the path, in the coordinates of the drawing
+  calls, so the transform scales it (non-uniformly too). Caps BUTT / ROUND / SQUARE,
+  joins MITER / ROUND / BEVEL with `miterLimit` as in SVG (a miter beyond
+  `miterLimit x width / 2` from the corner is beveled). A zero-length subpath
+  (`M L` to the same point, or `M Z`) draws a dot with ROUND caps and a square with
+  SQUARE ones; a lone MOVE draws nothing (as in SVG). Each segment becomes a
+  quadrilateral, each corner a join polygon, each end a cap, every loop turned the same
+  way and all filled at once with the nonzero rule, so a translucent stroke is painted
+  once where its pieces overlap. Round joins and caps are polygons of 8, 16 or 32
+  vertices by their radius on screen (no trigonometry at run time). Dashes are not
+  supported (svg2cpp splits static dashes into subpaths).
+- **Drawing**: curves are flattened when drawn, into `ceil(sqrt(1.5 L))` segments
+  for a control polygon of `L` pixels on the target (at most 64; the coefficient in
+  `segmentsFor()` of `vg.cpp` sets the density), so a picture scaled up keeps its
+  round corners (the error is about a tenth of a pixel). The edges go to the
+  scratch memory of the arena (16 + 2 bytes each, a stroke about 7 per segment),
+  sorted by their top row, and are scanned as the polygons of `shapes.cpp` are
+  (columns in 1/16 pixel, a pixel inside where its center is, edges stepped by a DDA
+  in 1/16384 of a 1/16 pixel) with the crossings of each row sorted (at most 64; the
+  rest are dropped) and joined by the fill rule (`FillRule` of the path for fills,
+  always nonzero for strokes). When the curves would make more edges than the memory
+  holds, a fill's curves are flattened coarser (the segment count goes with the square
+  root of the length, so by the square of the shortfall; strokes are not coarsened,
+  since their loops are convex and may be cut); a loop that still does not fit is cut
+  and both parts closed with the chord to its first point, which is exact for a convex
+  loop (every loop of a stroke) and may show the chord on a concave fill; the parts of
+  a path are drawn one after the other, which can show where translucent parts meet.
+  Without an arena a buffer of 24 edges on the stack is used the same way. The fill
+  brush, blend mode and opacity of the state apply; `NONE` copies.
+- **Antialiasing** (`setAntialias()`, off by default; `SHAPOGFX2D_ANTIALIAS`): the
+  path is scanned on 4 sub-rows per pixel row, each sampled at its center, and the
+  1/16 columns inside on each sub-row are summed into the coverage of the pixel,
+  0..64, which is directly the alpha64 of the blend (so a pixel half covered gets half
+  the color's alpha x opacity). The coverage of a row is accumulated as deltas (2
+  bytes per pixel of the path's width, in the scratch memory or, up to 128 pixels, on
+  the stack; without room the path is drawn without antialiasing) and painted in runs
+  of equal coverage for a solid brush, per pixel for a gradient. Not with the `NONE`
+  blend mode, which copies. The other calls (rectangles, polygons, images, text) are
+  not antialiased.
+- **Pictures**: `drawPicture()` draws the shapes in order, each under
+  `transform of the state x Shape::transform`, with its own brushes and stroke style
+  (a shape whose `fill` has no alpha and no gradient is not filled, one whose `stroke`
+  has none or whose width is 0 is not stroked). `SHAPE_FILL_CURRENT_COLOR` /
+  `SHAPE_STROKE_CURRENT_COLOR` replace the RGB of the brush's color by `currentColor`
+  (SVG's `currentColor`; the slot's color in rig), keeping its alpha and gradient.
+  `clip` (in the picture's space, through the transform of the state) becomes the clip
+  rectangle of the context for the shape: exact without a rotation, else its bounding
+  box; a shape clipped away entirely is skipped. `SHAPE_STROKE_CURRENT_WIDTH`
+  replaces the width of the stroke style by `currentStrokeWidth` (the stroke width
+  of the slot in rig, which an animation changes). IMAGE shapes draw the texture with
+  its pixels at `(0, 0)-(width, height)` of the shape's space (`drawImage()` under the
+  transform, nearest neighbor) with the alpha of `fill.color` as the opacity; TEXT
+  shapes draw `text` with the bitmap font `font` (or the context's font) in
+  `fill.color`, the baseline at `(x, y)` (the cursor `ascent` above). The state is
+  restored afterwards (no state stack is used). A picture with a bit of `features`
+  outside `SUPPORTED_FEATURES` draws nothing.
+- **Room for later features**: as for rig, generated headers initialize the
+  structures by position, members are only appended and zero means "not used", so
+  `FORMAT_VERSION` and `Picture::features` leave room for dashes, masks, patterns and
+  the like.
+
+Cost: `src/gfx2d/vg.cpp` is 26.0 KB on a Cortex-M33 and 31.4 KB on a Cortex-M0+
+(`-O2`; about 3 KB of it the antialiased lines, outlines, sectors and frames).
+The fills, lines and outlines reference it (for their antialiased path), so a
+program using `Graphics2D` links it; the sampled masks and the bilinear images add
+11.4 KB to `images.cpp` (a sampler per source format), and the routing about
+1.5 KB to `graphics2d.cpp` and `shapes.cpp`. With antialiasing on, the fills
+and the Wu lines of demorig's stars, ring and buttons cost about twice the plain
+ones on the host; the bilinear images dominate the frame (see "Antialiasing"
+under `Graphics2D`). Off, only a flag is tested per call. A stroked segment
+costs its quadrilateral and a join polygon (3 or 4 vertices; 8 to 32 for round
+ones); the pixel work is that of the polygons of `shapes.cpp` plus, with
+antialiasing, four sub-rows per row and the per-pixel blend along the edges.
+
 ### Skeletal animation (`rig.hpp`, optional)
 
-`shapoco::gfx2d::rig` poses armatures (trees of bones carrying images) from keyframed
-animations and draws them with `Graphics2D`. The data is static (`static const`, in
-flash) and is generated from DragonBones by `bin/dbones2cpp`; `rig::Instance` keeps
-the pose of one armature in memory the user provides. `gfx2d.hpp` does not include
-the header. Conventions are those of DragonBones: y down, angles clockwise, Flash
-matrices (`x' = a x + c y + tx`, as `affine2f`).
+`shapoco::gfx2d::rig` poses armatures (trees of bones carrying images or vector
+pictures) from keyframed animations and draws them with `Graphics2D`. The data is
+static (`static const`, in flash) and is generated from DragonBones by
+`bin/dbones2cpp` and from animated SVG by `bin/svg2cpp`; `rig::Instance` keeps
+the pose of one armature in memory the user provides, and `drawBind()` draws the
+bind pose without one. `gfx2d.hpp` does not include the header. Conventions are
+those of DragonBones: y down, angles clockwise, Flash matrices (`x' = a x + c y +
+tx`, as `affine2f`).
 
 ```c++
 using angle16_t = int16_t;  // 1/65536 turn: differences wrap to the shortest way
 using scale16_t = int16_t;  // Q12 (SCALE_ONE = 4096)
-constexpr uint16_t FORMAT_VERSION = 1;      // members added so far (see "Room for later features")
-constexpr uint16_t SUPPORTED_FEATURES = 0;  // feature bits this build honors (none defined yet)
-enum class AttachmentKind : uint8_t { IMAGE, MESH, ARMATURE, BOUNDING_BOX };  // only IMAGE is drawn
+constexpr uint16_t FORMAT_VERSION = 3;      // members added so far (see "Room for later features")
+constexpr uint16_t FEATURE_SLOT_COLOR = 1;    // Slot::colorR / G / B and COLOR timelines are meaningful
+constexpr uint16_t FEATURE_STROKE_WIDTH = 2;  // Slot::strokeWidth and STROKE_WIDTH timelines are meaningful
+constexpr uint16_t SUPPORTED_FEATURES = FEATURE_SLOT_COLOR | FEATURE_STROKE_WIDTH;
+enum class AttachmentKind : uint8_t { IMAGE, MESH, ARMATURE, BOUNDING_BOX, VECTOR };  // IMAGE and VECTOR are drawn
 struct Bone { const char *name; float x, y; angle16_t rotX, rotY;
               scale16_t scaleX, scaleY; uint8_t parent, flags; };   // 24 B (32-bit)
 struct Attachment { const Texture *texture; Rect src; affine2f local;
                     const int16_t *hull; uint8_t hullCount; AttachmentKind kind;
-                    uint8_t pad[2]; const void *ext; };              // 56 B
+                    uint8_t pad[2]; const void *ext; };              // 56 B; VECTOR: ext = const vg::Picture *
 struct Slot { const char *name; const Attachment *attachments; uint8_t attachmentCount;
               int8_t defaultAttachment; uint8_t bone, alpha; BlendMode blend;
-              uint8_t tintR, tintG, tintB; };                        // 16 B
+              uint8_t colorR, colorG, colorB;                        // the slot's color (FEATURE_SLOT_COLOR)
+              const RectF *clip; uint8_t clipBone, pad[3];           // version 2
+              float strokeWidth; };                                  // 28 B; version 3 (FEATURE_STROKE_WIDTH)
 struct Armature { const char *name; const Bone *bones; const Slot *slots;
                   uint8_t boneCount, slotCount; bool colorKeyEnabled; Color colorKey;
                   RectF bounds; uint32_t signature; uint16_t features; };
@@ -672,6 +894,9 @@ struct RotateKey { uint16_t frame; uint8_t curve; int8_t turns; angle16_t rotX, 
 struct ScaleKey { uint16_t frame; uint8_t curve, pad; scale16_t scaleX, scaleY; };
 struct AttachmentKey { uint16_t frame; int8_t attachment; uint8_t pad; };
 struct AlphaKey { uint16_t frame; uint8_t curve, alpha; };
+struct ColorKey { uint16_t frame; uint8_t curve, r, g, b, pad[2]; };   // version 2
+struct StrokeWidthKey { uint16_t frame; uint8_t curve, pad; float width; };   // version 3
+enum class Channel : uint8_t { TRANSLATE, ROTATE, SCALE, ATTACHMENT, ALPHA, COLOR, STROKE_WIDTH };
 struct BoneTimeline { const void *keys; uint16_t keyCount; uint8_t bone; Channel channel; };
 struct SlotTimeline { const void *keys; uint16_t keyCount; uint8_t slot; Channel channel; };
 struct DrawOrderKey { uint16_t frame; const uint8_t *order; };
@@ -681,6 +906,7 @@ struct Animation { const char *name; uint16_t duration; uint8_t frameRate,
                    const SlotTimeline *slotTimelines; const DrawOrderKey *drawOrderKeys;
                    const Curve *curves; uint32_t signature; uint16_t features; };
 float frameAt(const Animation &, float seconds, bool loop = true);
+void drawBind(Graphics2D &, const Armature &);   // the bind pose, without an Instance
 ```
 
 - **Bones** are ordered parents first (`parent` is a smaller index or `NO_PARENT`;
@@ -690,18 +916,30 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   skew); its world transform is the parent's world transform times the local one
   (a plain affine product, so a child of a non-uniformly scaled bone is sheared).
 - **Slots** are in the base draw order. A slot shows one of its attachments (-1:
-  none). An attachment maps the top-left corner of `src` (a part of a texture atlas)
-  to the bone's space; `texture == nullptr` marks a display that is not drawn (an
-  unsupported DragonBones display kept so that the indices match). `hull` is a
+  none). An IMAGE attachment maps the top-left corner of `src` (a part of a texture
+  atlas) to the bone's space; `texture == nullptr` marks a display that is not drawn
+  (an unsupported DragonBones display kept so that the indices match). `hull` is a
   convex polygon around the opaque pixels of `src` (x, y pairs relative to its
   top-left corner, at most `Graphics2D::IMAGE_POLYGON_MAX` vertices; `nullptr` / 0
-  for the whole rectangle), the polygon `draw()` clips the image to. `alpha` is the
-  slot's opacity, `blend` ALPHA or ADD.
+  for the whole rectangle), the polygon `draw()` clips the image to. A VECTOR
+  attachment is a `vg::Picture` behind `ext`, `local` mapping the picture's space to
+  the bone's, drawn with `drawPicture()` in the slot's color. `alpha` is the
+  slot's opacity, `blend` ALPHA or ADD. `colorR / G / B` is the slot's color when
+  `FEATURE_SLOT_COLOR` is set in `Armature::features` (white otherwise): the
+  `currentColor` of its vector pictures (SVG's `currentColor`, and the fill or
+  stroke an animation changes); for images it is reserved as a tint, not applied
+  today. `strokeWidth` (with `FEATURE_STROKE_WIDTH`; 1 otherwise) is the width of
+  the strokes of its pictures flagged `SHAPE_STROKE_CURRENT_WIDTH`, in the
+  picture's coordinates. `clip` is a rectangle in the space of bone `clipBone` the slot is clipped
+  to (`nullptr`: none), drawn as the clip rectangle of the `Graphics2D`: exact
+  while that bone is not turned on screen, else its bounding box.
 - **Animations** hold one timeline per channel of a bone (TRANSLATE, ROTATE, SCALE)
-  or a slot (ATTACHMENT, ALPHA), sorted by bone / slot and channel, with keys in
-  frame order starting at frame 0. Bone key values are offsets added to the bind
-  pose (angles wrap in int16, positions add in float), scale keys multiply it (Q12);
-  slot key values replace the slot's. `curve` is the easing from a key to the next:
+  or a slot (ATTACHMENT, ALPHA, COLOR, STROKE_WIDTH), sorted by bone / slot and
+  channel, with keys in frame order starting at frame 0. Bone key values are offsets
+  added to the bind pose (angles wrap in int16, positions add in float), scale keys
+  multiply it (Q12); slot key values replace the slot's (COLOR keys the RGB of its
+  color, interpolated per component like alphas; STROKE_WIDTH keys its stroke width,
+  in float). `curve` is the easing from a key to the next:
   `CURVE_LINEAR`, `CURVE_STEP` (hold) or an index into `curves`. Draw order keys
   hold complete orders (draw position -> slot; `nullptr` returns to the base order).
   `signature` (FNV-1a of the bone and slot names) ties an animation to its armature.
@@ -713,24 +951,29 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   header `static_assert`s on the version it needs, so old library code refuses new
   data at compile time instead of misreading it (a header generated before a member
   compiles with a `-Wmissing-field-initializers` warning under `-Wextra`). The
-  reserved members, all unused today: `Bone::flags` (inheritance of rotation / scale /
-  reflection; fills the padding), `Attachment::kind` (`IMAGE`; the other kinds name
-  what a DragonBones display can be, and only `IMAGE` with a texture is drawn) and
-  `Attachment::ext` (their data), `Slot::tintR / G / B` (the RGB tint; dbones2cpp
-  writes 255, 255, 255, and since an older header leaves 0, 0, 0 they are only read
-  once a feature bit says the data has them; fill the padding),
-  `RotateKey::turns` (extra whole turns, `clockwise` / `tweenRotate`; was padding) and
-  `Armature::features` / `Animation::features`, bits the data uses, to be defined per
-  feature. `init()` and `pose()` refuse data with a bit outside `SUPPORTED_FEATURES`,
-  since drawing it without the feature would show something else than what was made.
+  members added so far: version 1 reserved `Bone::flags` (inheritance of rotation /
+  scale / reflection; fills the padding), `Attachment::kind` / `ext`,
+  `Slot::colorR / G / B` (then named the tint; dbones2cpp writes 255, 255, 255, and
+  since an older header leaves 0, 0, 0 they are only read once `FEATURE_SLOT_COLOR`
+  says the data has them; fill the padding), `RotateKey::turns` (extra whole turns,
+  `clockwise` / `tweenRotate`; was padding) and `Armature::features` /
+  `Animation::features`, bits the data uses; version 2 added `AttachmentKind::VECTOR`
+  (its data behind `ext`), `Slot::clip` / `clipBone`, `Channel::COLOR` with
+  `ColorKey`, and defined `FEATURE_SLOT_COLOR`; version 3 added `Slot::strokeWidth`
+  and `Channel::STROKE_WIDTH` with `StrokeWidthKey` under `FEATURE_STROKE_WIDTH`.
+  Still unused: `Bone::flags`,
+  `RotateKey::turns`, the kinds MESH / ARMATURE / BOUNDING_BOX and the tint of
+  images. `init()`, `pose()` and `drawBind()` refuse data with a bit outside
+  `SUPPORTED_FEATURES`, since drawing it without the feature would show something
+  else than what was made.
 - `frameAt()` converts seconds to a frame (`seconds * frameRate`), wrapped to
   `[0, duration)` or clamped to `[0, duration]`.
 
 `rig::Instance` (a small handle; copies share the memory):
 
-- `static size_t bytes(const Armature &)`: 24 bytes per bone (world transforms), 12
-  per slot (bounding box, attachment, alpha) and 1 per slot (draw order), rounded up
-  to 4, plus 3 bytes of alignment slack. `init(armature, memory, size)` fails if the
+- `static size_t bytes(const Armature &)`: 24 bytes per bone (world transforms), 20
+  per slot (bounding box, attachment, alpha, color, stroke width) and 1 per slot (draw order),
+  rounded up to 4, plus 3 bytes of alignment slack. `init(armature, memory, size)` fails if the
   memory is too small or `features` has a bit outside `SUPPORTED_FEATURES`, and starts
   in the bind pose; nothing is allocated.
 - `pose(anim, frame, visitor = nullptr)` clamps `frame` to `[0, duration]` (NaN to 0)
@@ -747,9 +990,10 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   table interpolated linearly (error below 5e-5; one pair when rotX == rotY), not from
   libm, whose `sinf()` / `cosf()` cost thousands of cycles in software floating point
   and 3.5-4 KB of code. Then each slot takes its
-  attachment and alpha, and its bounding box in the armature's space (the four
-  corners of `src` through `world * local`, floor / ceil, int16; an attachment
-  that is not an `IMAGE` with a texture gets an empty box and is not drawn). The draw order is
+  attachment, alpha, color and stroke width, and its bounding box in the armature's space (the four
+  corners of `src`, or of the picture's `bounds`, through `world * local`, floor /
+  ceil, int16; an attachment of a reserved kind, an `IMAGE` without a texture or a
+  `VECTOR` without a picture gets an empty box and is not drawn). The draw order is
   that of the last key at or before the frame, copied only when it changes (an order
   with an index out of range falls back to the base order). `poseBind()` does the
   same without an animation. `bin/shapogfx_dbones.py` evaluates poses with the same
@@ -759,21 +1003,32 @@ float frameAt(const Animation &, float seconds, bool loop = true);
   non-zero alpha, `setTransform(placement * world[bone] * local)` and
   `drawImage(texture, 0, 0, src, hull, hullCount)` (the transformed path; the hull
   cuts only pixels that would not have shown, so the picture is that of the whole
-  rectangles). The slot's alpha scales
+  rectangles) or `drawPicture(picture, color, strokeWidth)`, with the clip rectangle of `g`
+  narrowed to the slot's `clip` (through `placement * world[clipBone]`) while it is
+  drawn. The slot's alpha scales
   `g`'s opacity, ADD slots draw additively unless `g`'s blend mode is NONE, and a
   keyed armature sets its key color for its keyed textures and clears it for its
   ARGB4444 ones (a conversion with `--out-format auto` mixes them; comparing pixels
   that have alpha with a key would only cost). Slots whose bounding box, mapped
   by the placement, lies outside `g`'s clip rectangle (a pixel wider) are skipped,
-  so drawing in bands costs little. The transform, opacity, blend mode and color key
-  of `g` are restored (no state stack is used). Without `SHAPOGFX2D_TRANSFORM`
+  so drawing in bands costs little. The transform, opacity, blend mode, color key
+  and clip rectangle of `g` are restored (no state stack is used); the vector
+  pictures use `g`'s antialiasing flag. Without `SHAPOGFX2D_TRANSFORM`
   nothing is drawn. Drawing something between two slots is `draw(g, 0, k)`, the
   drawing, `draw(g, k, n)` with `k = drawIndexOf(slot)`.
+- `drawBind(g, armature)` draws the bind pose (default attachments, alphas and
+  colors, the base order) the same way without an `Instance`, computing each bone's
+  world transform up its chain of parents on the fly: no memory, more arithmetic per
+  frame for a deep tree. It is the way to draw a converted SVG that is not animated
+  as an armature (svg2cpp emits a plain `vg::Picture` for those unless asked for the
+  rig).
 - Accessors: `drawIndexOf(slot)`, `slotAt(drawIndex)`, `boneIndex(name)`,
   `slotIndex(name)` (linear `strcmp`, -1 if none), `boneTransform(bone)` (armature
-  space), `attachmentOf` / `setAttachment` and `alphaOf` / `setAlpha` (overrides
-  until the next pose), `bounds()` (union of the visible slots' boxes) and
-  `bounds(placement)` (the box of its corners after `placement`).
+  space), `attachmentOf` / `setAttachment`, `alphaOf` / `setAlpha`, `colorOf` /
+  `setColor` (the color's alpha is ignored) and `strokeWidthOf` / `setStrokeWidth`
+  (overrides until the next pose),
+  `bounds()` (union of the visible slots' boxes) and `bounds(placement)` (the box of
+  its corners after `placement`).
 
 Drawing on several cores: `draw()` reads the `Instance` and the armature and
 changes nothing but the state of the `Graphics2D` it is given, and `gfx2d` has no
@@ -799,9 +1054,10 @@ timelines); `draw()` adds about 3,000 to the `drawImage()` calls it makes, which
 the pixel work (a transformed ARGB4444 blit over the parts' footprints, about 51,000
 source pixels here). Drawing in 8 bands of 40 rows costs 3% more than at once
 (8% more without the clip skip), and a band the character misses costs 3,000
-instructions (27,000 without the skip). `src/gfx2d/rig.cpp` is 5.1 KB on a
-Cortex-M33 and 6.4 KB on a Cortex-M0+ (`-O2`, code and the sine table); it is not
-linked in when unused.
+instructions (27,000 without the skip). `src/gfx2d/rig.cpp` is 8.5 KB on a
+Cortex-M33 and 11.0 KB on a Cortex-M0+ (`-O2`, code and the sine table; 5.1 / 6.4
+KB before the vector attachments, the clips and `drawBind()`); it is not linked in
+when unused, and the vector drawing (`vg.cpp`) only when a picture is drawn.
 
 What the pixel work costs is decided by the images: on x86-64 a transformed
 ARGB4444 pixel onto RGB565 retires about 25 instructions when it is transparent, 50
@@ -819,8 +1075,8 @@ demorig frame of 320 x 240 from 4.11 to 3.88 million instructions (-5.5%), the
 (338 to 296 KB) and about 1% more off the zoomed frames, at the price of one
 resampling of the turned images.
 
-Not supported (the tool warns and drops them): mesh deformation (FFD, weighted
-meshes), IK, nested armatures, events, the RGB tint of slots, extra turns
+Not supported (dbones2cpp warns and drops them): mesh deformation (FFD, weighted
+meshes), IK, nested armatures, events, the RGB tint of image slots, extra turns
 (`clockwise` / `tweenRotate`), bones not inheriting rotation or scale, several skins
 at run time, blending of animations. The structures hold room for them (see "Room
 for later features"): each would be data behind `Attachment::ext`, `Bone::flags`,
@@ -1605,6 +1861,106 @@ module.
   animation from the converted data to PNG, `--dump-pose` writes the poses of every
   animation as JSON. Unsupported features are listed in the header's comment.
 
+
+- **svg2cpp** `[--namespace NS] [--scale S] [--picture | --rig] [--keep IDS] [--keep-all] [--fps N] [--duration SECONDS] [--anim-name NAME] [--font FAMILY=PATH ...] [--font-dir DIR ...] [--text-font EXPR] [--image-format F] [--dither D] [--dump JSON] [--verbose] input.svg output.hpp`
+  converts an SVG file for `vg` and `rig` (`shapogfx_svg.py` is its core; it
+  imports the curve tables, angle / Q12 conversion, signature and emitting
+  helpers of `shapogfx_dbones.py`, and `shapogfx_imgconv.py` for images). A
+  static SVG (or `--picture`) becomes one `vg::Picture` named `picture`: the tree
+  is flattened, every drawable leaf a `vg::Shape` whose `transform` is its CTM
+  relative to the root, the path in the leaf's own user space (so stroke widths
+  are right under non-uniform scales), with `path<i>Ops` / `path<i>Coords` /
+  `path<i>`, `stops<i>` / `gradient<i>` (`gradient<i>s` for strokes; stop arrays
+  deduplicated), `clip<i>` (`RectF`), `text<i>` (`vg::Text`), `img<i>Data` /
+  `img<i>` (textures, deduplicated by content), `shapes[]` and `picture` (bounds
+  = the SVG's pixel size x `--scale`). The header `static_assert`s
+  `vg::FORMAT_VERSION >= 1`, defines `OP_MOVE` .. `OP_CLOSE` inside the
+  namespace for the op arrays, and lists the options and every warning in its
+  comment. Supported: `svg` (width / height / viewBox / preserveAspectRatio),
+  `g`, `a`, `path` (every command, absolute and relative; arcs become cubics),
+  `rect` (`rx` / `ry`), `circle`, `ellipse`, `line`, `polyline`, `polygon`,
+  `image` (`data:` URIs or files next to the SVG, `preserveAspectRatio`;
+  `--image-format` / `--dither` as img2cpp), `text` / `tspan` (outlined with
+  fontTools when `--font` / `--font-dir` finds the family: `x` / `y` lists, `dx` /
+  `dy`, `text-anchor`, `letter-spacing`, `kern` table; else a `vg::Text` drawn
+  with the bitmap font of `--text-font`, with a warning), `defs`, `use` (expanded;
+  `symbol` with a viewBox when the use has a size), `switch` (the first child whose
+  `systemLanguage` fits), `linearGradient` / `radialGradient` (`href` inheritance,
+  `objectBoundingBox` and `userSpaceOnUse`, `gradientTransform`, `spreadMethod`,
+  stop opacity; `fx` / `fy` warned and ignored), `clipPath` holding one `rect`
+  (`clipPathUnits` too; a turned clip becomes its bounding box with a warning),
+  presentation attributes, `style` attributes and `<style>` sheets (type, class,
+  id, `*`, comma and descendant selectors; specificity, later rules win; other
+  selectors are dropped with a warning), inheritance, `currentColor` (the
+  `SHAPE_*_CURRENT_COLOR` flags), CSS colors in every notation, units (px, pt, mm,
+  cm, in, pc, %), `fill-rule`, `stroke-linecap` / `linejoin` / `miterlimit`,
+  `stroke-dasharray` / `dashoffset` (static: the path is cut along its length into
+  dash subpaths, closed subpaths as open ones), `visibility` / `display`. The
+  `opacity` of a group is multiplied into the brushes of its descendants (an
+  approximation where they overlap, noted in the header). Warned and skipped:
+  `mask`, `pattern` (the fill becomes none), `filter`, `marker`, `foreignObject`,
+  `textPath`, SVG images, unknown elements.
+
+  An SVG with SMIL animation (`animate`, `set`, `animateTransform`,
+  `animateMotion`; or `--rig`) becomes a `rig::Armature` (`armature`, `bones[]`,
+  `slots[]`, `attachments_<slot>[]`, a `picture_<slot>` per VECTOR attachment with
+  its `path_<slot>_<i>` .. objects, `clip_<slot>`) and one `rig::Animation`
+  (`anim_<name>`, `animations[]`, `ANIMATION_COUNT`) in the layout of dbones2cpp,
+  asserting `rig::FORMAT_VERSION >= 3` with `features = FEATURE_SLOT_COLOR`, plus
+  `FEATURE_STROKE_WIDTH` when a stroke width is animated.
+  Elements with animation (and those on the way to them, `--keep` ids and, with
+  `--keep-all`, every element with an id) become bones named after their ids: one
+  bone for the element's static transform (`<id>_base` when animated bones
+  follow; any affine matrix is decomposed exactly into the rig's rotation / skew /
+  scale parameters, scales clamped to the Q12 range with a warning), then one
+  bone per `animateTransform` with an identity bind pose and the full values as
+  keys (`additive="sum"` chains are therefore automatic; `replace` keeps a static
+  item of the same type as the base value and drops anything else with a
+  warning): `_translate`, `_scale`, `_pivot` + `_rotate` (+ `_unpivot`) for a
+  rotation about a center (a constant center folds the `-cx, -cy` into the
+  children), `_skewX` / `_skewY` (ROTATE + SCALE keys, an approximation), and a
+  `_motion` bone per `animateMotion` (sampled per frame along the path with
+  `keyPoints` / `keyTimes` / `calcMode`, straight runs merged, `rotate`
+  auto / auto-reverse / angle → ROTATE keys); the last bone of the chain takes
+  the element's name. Animated `x` / `y` / `cx` / `cy` go to a position bone
+  (`<id>_pos`, or `<id>` when there is no other) as TRANSLATE keys; `r` / `rx` /
+  `ry` / `width` / `height` as SCALE keys relative to a reference size (the base,
+  or the largest value when the base is 0 or the growth exceeds 8 x; the stroke
+  scales too, warned). `opacity` (and `fill-opacity` / `stroke-opacity` reaching a
+  shape) → ALPHA keys, products of nested animated opacities sampled at the
+  union of their keys; `fill` / `stroke` / `color` → the shape flagged
+  `SHAPE_*_CURRENT_COLOR`, the slot's color set to the base and a COLOR timeline
+  (one animated color per slot; others warned); `stroke-width` → the shape flagged
+  `SHAPE_STROKE_CURRENT_WIDTH`, `Slot::strokeWidth` the base and a STROKE_WIDTH
+  timeline (one per slot), its keys divided by the scale of a size animation of the
+  same element (sampled per frame while either moves, straight runs merged) so that
+  the drawn width stays what SVG shows; `visibility` / `display` → ATTACHMENT keys
+  (0 / -1). Static subtrees collapse into one slot with one
+  VECTOR attachment holding all their shapes (one slot per run of consecutive
+  static siblings; the first run under a kept container is named after it, e.g.
+  `root`), so bones and slots stay few (255 each; errors beyond). Images directly
+  under a kept container or animated become IMAGE attachments with a texture of
+  their own. Slot clips come from the innermost `clip-path` rectangle, in the
+  space of the clipped element's bone. Timing: `begin` (offsets only; event
+  begins drop the animation with a warning), `dur`, `repeatCount` / `repeatDur`,
+  `fill` (`remove` returns to the base value with a STEP key on the end frame,
+  which the key search of `pose()` honors), `calcMode` (discrete → STEP keys,
+  linear, paced, spline with `keySplines` as 17-sample curve tables), `keyTimes`,
+  `values` / `from` / `to` / `by`, `additive` (sum: the values added at the union
+  of key times; replace: the later active one wins); `end`, `min` / `max`,
+  `accumulate` and animations of `d`, `points`, `transform` via `animate` and line
+  end points are warned and dropped. Keys are placed at
+  `--fps` frames (rounding within half a frame), every timeline starts at frame 0
+  with the base value, repeats are unrolled over the document duration
+  (`--duration`, or the common period of the repeating animations extended to the
+  end of the others, 1 frame when nothing animates, at most 60 s with a warning),
+  and rotations are split into keys at most a quarter turn apart so that the
+  shortest-way interpolation of the rig stays right. `--dump` writes a JSON
+  summary (shapes with their kinds, flags, brushes and first ops, or the bones,
+  slots and key counts per timeline) for checking a conversion without compiling.
+  Limits: 255 bones, slots and timelines, 253 curves, 65535 frames and ops per
+  path, 255 stops, `use` nesting 8 deep.
+
 ## Sample programs
 
 The samples are 480x320 and render into an RGB565_SWAPPED buffer. Each has a WASM entry
@@ -1631,7 +1987,11 @@ served as a static site.
   backdrop (gradient, stars, caption) drawn with `Graphics2D`, then the 3D scene
   rendered in four bands with the clear disabled. Mouse and keyboard control the
   camera in the browser.
-- `example/wasm/demorig/`: a DragonBones character
+- `example/wasm/demorig/`: a DragonBones character, pop stars from an animated SVG
+  (`assets/2d/pop_star.svg` converted by svg2cpp: two `rig::Instance`s restarted in
+  turn every second at a random place, size and angle behind the character), and
+  an (AA) button at the bottom left that turns antialiasing on for everything
+  `Graphics2D` antialiases (the pictures and the area fills)
   (`example/common/demorig/model/rgb_chan.hpp`, generated with
   `dbones2cpp --scale 0.4 --fit-rotate` from `assets/2d/rgb_chan/`, whose images
   are drawn at twice the size they show at so that the turned parts are
@@ -1752,7 +2112,53 @@ drawn at the same time on two threads by two contexts from one `Instance` (as cl
 rectangles and as targets of their own; checked with ThreadSanitizer), the
 restored `Graphics2D` state, drawn pixels within `bounds(placement)`, and the atlas
 pixels against the source images (the trimmed bar included) with every hull
-holding the opaque pixels and leaving out transparent ones. The tests are meant to be run with AddressSanitizer and
+holding the opaque pixels and leaving out transparent ones. For `vg` (`test/vg_test.cpp`): the
+path builder (ops, coordinates, bounds, overflow), a rectangle path filling what
+`fillRect()` fills under translations and scales and, turned, exactly the pixels
+whose centers are inside, a circle path against `fillEllipse()`, the fill rules (a
+star's center, holes with either winding), antialiasing (a quarter and half covered
+corners and edges, a thin slanted stroke never covering a pixel fully, none with the
+flag off or the NONE blend mode, every format), gradients (linear along x, PAD /
+REPEAT / REFLECT, radial symmetry, three stops under a turned transform, the brush's
+alpha, no stops, ADD and NONE, antialiased edges), strokes (butt / square / round
+caps pixel-exact, miter / bevel / round joins, the miter limit, a closed polyline,
+a translucent stroke painted once, width 0, zero-length subpaths, the width under
+a non-uniform scale, a gradient stroke, a mirrored transform), flattening (a unit
+circle scaled 60 x within a pixel of the true circle, a quadratic curve), pictures
+(brushes, the current color, clips moving with the transform, a feature bit,
+IMAGE shapes against `drawImage()`, TEXT shapes against `drawString()`, the state
+restored), drawing without an arena and with a too-small one (the same pixels as
+with one for opaque colors; a star antialiased identically from the stack buffer),
+the state stack and opacity / clipping, and the vector attachments of rig (a
+hand-made armature with a VECTOR attachment in the slot's color, a clipped slot,
+`drawBind()` against `Instance::draw()`, a COLOR timeline, the feature bit off).
+For svg2cpp (`test/tools/make_test_vg.py` writes `test_vg.svg`, a static SVG
+exercising every element and most properties, and `test_vg_anim.svg` with every
+animation element, and converts them to `test_vg.hpp` (picture), `test_vg_text.hpp`
+(the same with a DejaVu font, when installed) and `test_vg_anim.hpp` (rig, `--keep
+kept`, 30 fps, 2 s), plus their `--dump` JSONs): the shape kinds, flags, clips and
+gradients the conversion decided on, the drawn pixels (the class rule, gradients,
+a dash gap, even-odd, the clip, `use`, `switch`, hidden elements, the images,
+the texts outlined or as bitmap text, nothing right of an end-anchored text), and
+the armature (13 bones, 8 slots, the names of the kept element and the
+collapsed backdrop, the quarter turn, the summed translation, the position and
+radius keys, the hidden interval, the color timeline, the stroke width timeline
+divided by the radius scale, the pixels at three frames, `drawBind()` against the
+instance). The antialiased area fills are checked against the paths of the same
+shapes (rectangles float and integer under a rotation, the plain fill under a
+translation, ellipses, circles, rounded rectangles, polygons with pixel-center
+vertices, nothing with the flag off or the NONE blend mode); the antialiased
+lines and outlines (axis-aligned lines and a rectangle's outline unchanged, a
+diagonal line partial along the plain one, frames against the even-odd path, an
+ellipse and a rounded rectangle outline within their fills, a quarter arc in its
+quadrant, a sector and the full-turn sector equal to the ellipse, a pixel wide
+under a scale) and the sampled text and bitmaps (unchanged untransformed, gray at a
+fractional scale along the plain shape, a turned bitmap with both colors), and the
+antialiased images (a solid image turned and clipped to a polygon equals the
+antialiased quadrilateral and triangle, a 2 x 2 checker scaled 8 x is a monotonic
+gradient between the texel centers, the scaled overload samples the same way and an
+unscaled copy stays plain, a keyed texel lends no color, an ARGB4444 image's alpha
+multiplies the coverage, the plain copy with the flag off). The tests are meant to be run with AddressSanitizer and
 UndefinedBehaviorSanitizer on the native build, and with ThreadSanitizer for the
 ones that draw on two threads (where it stops with "unexpected memory mapping",
 run the tests with `setarch -R`). The CMake options of the renderer

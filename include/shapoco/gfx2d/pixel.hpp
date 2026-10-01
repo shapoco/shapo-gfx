@@ -213,16 +213,20 @@ static inline void fill16(uint16_t *dst, int n, uint16_t v) {
   if (n & 1) dst[n - 1] = v;
 }
 
-// Alpha-blend src over dst. alpha64 is the opacity of src in 0..64.
-// The R+B fields and the G field are interpolated separately in one multiply
-// each; the products never carry into the neighboring field.
+// Alpha-blend src over dst. `alpha` is the opacity of src in 0..2^SHIFT
+// (0..64 by default; the image paths pass a 10-bit one straight from the
+// texel's alpha). The R+B fields and the G field are interpolated separately
+// in one multiply each; the products never carry into the neighboring field
+// (SHIFT up to 15: the fields are 16 bits).
+template <int SHIFT = 6>
 static inline uint16_t blendAlphaRgb565(uint16_t dst, uint16_t src,
-                                        uint32_t alpha64) {
-  uint32_t ia = 64u - alpha64;
+                                        uint32_t alpha) {
+  static_assert(SHIFT >= 1 && SHIFT <= 15, "the fields would overflow");
+  const uint32_t ia = (1u << SHIFT) - alpha;
   uint32_t rb =
-      (((dst & 0xF81Fu) * ia + (src & 0xF81Fu) * alpha64) >> 6) & 0xF81Fu;
+      (((dst & 0xF81Fu) * ia + (src & 0xF81Fu) * alpha) >> SHIFT) & 0xF81Fu;
   uint32_t g =
-      (((dst & 0x07E0u) * ia + (src & 0x07E0u) * alpha64) >> 6) & 0x07E0u;
+      (((dst & 0x07E0u) * ia + (src & 0x07E0u) * alpha) >> SHIFT) & 0x07E0u;
   return (uint16_t)(rb | g);
 }
 
@@ -269,13 +273,15 @@ static inline uint16_t rgb444ToRgb565(uint16_t p) {
                     (b << 1) | (b >> 3));
 }
 
-// alpha64: opacity of src in 0..64. R+B and G are blended separately.
+// `alpha`: opacity of src in 0..2^SHIFT. R+B and G are blended separately.
+template <int SHIFT = 6>
 static inline uint16_t blendAlphaRgb444(uint16_t dst, uint16_t src,
-                                        uint32_t alpha64) {
-  uint32_t ia = 64u - alpha64;
+                                        uint32_t alpha) {
+  static_assert(SHIFT >= 1 && SHIFT <= 15, "the fields would overflow");
+  const uint32_t ia = (1u << SHIFT) - alpha;
   uint32_t rb =
-      (((dst & 0xF0Fu) * ia + (src & 0xF0Fu) * alpha64) >> 6) & 0xF0Fu;
-  uint32_t g = (((dst & 0x0F0u) * ia + (src & 0x0F0u) * alpha64) >> 6) & 0x0F0u;
+      (((dst & 0xF0Fu) * ia + (src & 0xF0Fu) * alpha) >> SHIFT) & 0xF0Fu;
+  uint32_t g = (((dst & 0x0F0u) * ia + (src & 0x0F0u) * alpha) >> SHIFT) & 0x0F0u;
   return (uint16_t)(rb | g);
 }
 
@@ -309,13 +315,15 @@ constexpr Color argb4444ToColor(uint16_t p) {
   return ((a * 17u) << 24) | ((r * 17u) << 16) | ((g * 17u) << 8) | (b * 17u);
 }
 
-// Alpha-blend src (RGB part, with external opacity alpha64) over an ARGB4444
-// destination. The destination alpha becomes the union of both alphas.
+// Alpha-blend src (RGB part, with external opacity `alpha` in 0..2^SHIFT)
+// over an ARGB4444 destination. The destination alpha becomes the union of
+// both alphas.
+template <int SHIFT = 6>
 static inline uint16_t blendAlphaArgb4444(uint16_t dst, uint16_t src,
-                                          uint32_t alpha64) {
-  uint32_t rgb = blendAlphaRgb444(dst & 0x0FFFu, src & 0x0FFFu, alpha64);
+                                          uint32_t alpha) {
+  uint32_t rgb = blendAlphaRgb444<SHIFT>(dst & 0x0FFFu, src & 0x0FFFu, alpha);
   uint32_t da = (dst >> 12) & 15u;
-  uint32_t a = da + ((15u - da) * alpha64 + 32u) / 64u;
+  uint32_t a = da + (((15u - da) * alpha + (1u << (SHIFT - 1))) >> SHIFT);
   return (uint16_t)((a << 12) | rgb);
 }
 
@@ -514,49 +522,24 @@ struct CursorRgb565 {
 };
 #endif
 
-// Blend a native pixel `src` (with opacity alpha64 in 0..64) over `dst`
-template <PixelFormat F>
-static inline uint32_t blendNative(uint32_t dst, uint32_t src,
-                                   uint32_t alpha64);
+// Blend a native pixel `src` (with opacity `alpha` in 0..2^SHIFT, 0..64 by
+// default) over `dst`
+template <PixelFormat F, int SHIFT = 6>
+static inline uint32_t blendNative(uint32_t dst, uint32_t src, uint32_t alpha);
 
-#if SHAPOGFX_FORMAT_GRAY1
-template <>
-inline uint32_t blendNative<PixelFormat::GRAY1>(uint32_t dst, uint32_t src,
-                                                uint32_t alpha64) {
-  return alpha64 >= 32u ? src : dst;
+template <PixelFormat F, int SHIFT>
+inline uint32_t blendNative(uint32_t dst, uint32_t src, uint32_t alpha) {
+  if constexpr (F == PixelFormat::GRAY1) {
+    return alpha >= (1u << (SHIFT - 1)) ? src : dst;
+  } else if constexpr (F == PixelFormat::RGB444) {
+    return blendAlphaRgb444<SHIFT>((uint16_t)dst, (uint16_t)src, alpha);
+  } else if constexpr (F == PixelFormat::ARGB4444) {
+    return blendAlphaArgb4444<SHIFT>((uint16_t)dst, (uint16_t)src, alpha);
+  } else {
+    return blendAlphaRgb565<SHIFT>((uint16_t)dst, (uint16_t)src, alpha);
+  }
 }
-#endif
-#if SHAPOGFX_FORMAT_RGB444
-template <>
-inline uint32_t blendNative<PixelFormat::RGB444>(uint32_t dst, uint32_t src,
-                                                 uint32_t alpha64) {
-  return blendAlphaRgb444((uint16_t)dst, (uint16_t)src, alpha64);
-}
-#endif
-#if SHAPOGFX_FORMAT_ARGB4444
-template <>
-inline uint32_t blendNative<PixelFormat::ARGB4444>(uint32_t dst, uint32_t src,
-                                                   uint32_t alpha64) {
-  return blendAlphaArgb4444((uint16_t)dst, (uint16_t)src, alpha64);
-}
-#endif
-#if SHAPOGFX_FORMAT_RGB565_SWAPPED
-template <>
-inline uint32_t blendNative<PixelFormat::RGB565_SWAPPED>(uint32_t dst,
-                                                         uint32_t src,
-                                                         uint32_t alpha64) {
-  return blendAlphaRgb565((uint16_t)dst, (uint16_t)src, alpha64);
-}
-#endif
-#if SHAPOGFX_FORMAT_RGB565
-template <>
-inline uint32_t blendNative<PixelFormat::RGB565>(uint32_t dst, uint32_t src,
-                                                 uint32_t alpha64) {
-  return blendAlphaRgb565((uint16_t)dst, (uint16_t)src, alpha64);
-}
-#endif
 
-// Add the RGB of native pixel `src` to `dst` with saturation
 template <PixelFormat F>
 static inline uint32_t addNative(uint32_t dst, uint32_t src);
 

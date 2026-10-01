@@ -60,8 +60,9 @@ static void writeColorsT(uint8_t *line, int x, int n, const Color *src,
       const uint32_t a = (colorAlpha64(c) * opacity64) >> 6;
       if (a != 0) {
         if (!BLEND || mode == WriteMode::ALPHA) {
-          cur.write(blendNative<F>(
-              cur.read(), FormatTraits<F>::fromColor(c | 0xFF000000u), a));
+          cur.write(a >= 64 ? FormatTraits<F>::fromColor(c | 0xFF000000u)
+                            : blendNative<F>(cur.read(),
+                                             FormatTraits<F>::fromColor(c | 0xFF000000u), a));
         } else {
           // Additive: scale the color by its weight, then saturating add
           const Color scaled = makeColor(
@@ -384,7 +385,12 @@ void Graphics2D::fillRect(const Rect &r, Color c) {
   Paint p;
   if (!G2Impl::makePaintInline(*this, c, p)) return;
   if (kind_ <= TransformKind::TRANSLATE) {
+    // Whole pixels: nothing to antialias
     fillRectRaw(target_, clipRect(), r.normalized().offset(ox_, oy_), p);
+    return;
+  }
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillRectAA(*this, RectF(r).normalized(), c);
     return;
   }
   fillRectF(*this, RectF(r).normalized(), p);
@@ -392,6 +398,10 @@ void Graphics2D::fillRect(const Rect &r, Color c) {
 
 void Graphics2D::fillRect(const RectF &r, Color c) {
   if (!hasTarget()) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillRectAA(*this, r.normalized(), c);
+    return;
+  }
   Paint p;
   if (!G2Impl::makePaint(*this, c, p)) return;
   fillRectF(*this, r.normalized(), p);
@@ -440,6 +450,10 @@ void Graphics2D::drawRect(const Rect &rect, Color c, int thickness) {
   if (!hasTarget() || thickness <= 0) return;
   const Rect r = rect.normalized();
   if (r.isEmpty()) return;
+  if (kind_ > TransformKind::TRANSLATE && G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawRectAA(*this, RectF(r), (float)thickness, c);
+    return;
+  }
   Paint p;
   if (!G2Impl::makePaint(*this, c, p)) return;
   if (kind_ <= TransformKind::TRANSLATE) {
@@ -457,6 +471,10 @@ void Graphics2D::drawRect(const RectF &rect, Color c, float thickness) {
   if (!hasTarget() || !(thickness > 0.0f)) return;
   const RectF r = rect.normalized();
   if (r.isEmpty()) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawRectAA(*this, r, thickness, c);
+    return;
+  }
   Paint p;
   if (!G2Impl::makePaint(*this, c, p)) return;
   drawRectF(*this, r, thickness, p);
@@ -629,6 +647,11 @@ void detail::drawLineRaw(const Raster &ras, int x0, int y0, int x1, int y1,
 
 void Graphics2D::drawLine(int x0, int y0, int x1, int y1, Color c) {
   if (!hasTarget()) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    const vec2i v[2] = {{x0, y0}, {x1, y1}};
+    G2Impl::strokePointsAA(*this, v, nullptr, 2, false, c);
+    return;
+  }
   Paint p;
   if (!G2Impl::makePaint(*this, c, p)) return;
   if (kind_ <= TransformKind::TRANSLATE) {
@@ -644,6 +667,11 @@ void Graphics2D::drawLine(int x0, int y0, int x1, int y1, Color c) {
 
 void Graphics2D::drawLine(const vec2f &a, const vec2f &b, Color c) {
   if (!hasTarget()) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    const vec2f v[2] = {a, b};
+    G2Impl::strokePointsAA(*this, nullptr, v, 2, false, c);
+    return;
+  }
   Paint p;
   if (!G2Impl::makePaint(*this, c, p)) return;
   int x0, y0, x1, y1;
@@ -653,27 +681,49 @@ void Graphics2D::drawLine(const vec2f &a, const vec2f &b, Color c) {
 }
 
 void Graphics2D::drawPolyline(const vec2i *pts, int n, Color c) {
+  if (!hasTarget() || !pts) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::strokePointsAA(*this, pts, nullptr, n, false, c);
+    return;
+  }
   for (int i = 1; i < n; i++) drawLine(pts[i - 1], pts[i], c);
 }
 
 void Graphics2D::drawPolyline(const vec2f *pts, int n, Color c) {
+  if (!hasTarget() || !pts) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::strokePointsAA(*this, nullptr, pts, n, false, c);
+    return;
+  }
   for (int i = 1; i < n; i++) drawLine(pts[i - 1], pts[i], c);
 }
 
 void Graphics2D::drawPolygon(const vec2i *pts, int n, Color c) {
-  if (n < 2) return;
+  if (!hasTarget() || !pts || n < 2) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::strokePointsAA(*this, pts, nullptr, n, n > 2, c);
+    return;
+  }
   drawPolyline(pts, n, c);
   if (n > 2) drawLine(pts[n - 1], pts[0], c);
 }
 
 void Graphics2D::drawPolygon(const vec2f *pts, int n, Color c) {
-  if (n < 2) return;
+  if (!hasTarget() || !pts || n < 2) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::strokePointsAA(*this, nullptr, pts, n, n > 2, c);
+    return;
+  }
   drawPolyline(pts, n, c);
   if (n > 2) drawLine(pts[n - 1], pts[0], c);
 }
 
 void Graphics2D::fillPolygon(const vec2i *pts, int n, Color c) {
   if (!hasTarget() || !pts || n < 3) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillPolygonAA(*this, pts, nullptr, n, c);
+    return;
+  }
   Paint p;
   if (!G2Impl::makePaint(*this, c, p)) return;
   G2Impl::fillPolygon(*this, pts, nullptr, n, p, true);
@@ -681,6 +731,10 @@ void Graphics2D::fillPolygon(const vec2i *pts, int n, Color c) {
 
 void Graphics2D::fillPolygon(const vec2f *pts, int n, Color c) {
   if (!hasTarget() || !pts || n < 3) return;
+  if (G2Impl::wantsAntialias(*this)) {
+    G2Impl::fillPolygonAA(*this, nullptr, pts, n, c);
+    return;
+  }
   Paint p;
   if (!G2Impl::makePaint(*this, c, p)) return;
   G2Impl::fillPolygon(*this, nullptr, pts, n, p, true);
@@ -780,6 +834,11 @@ int Graphics2D::drawChar(int x, int y, int code) {
     return g.xAdvance;
   const MaskSource m = {t.font->bitmap, (uint32_t)g.bitmapOffset * 8u,
                         g.width};
+  if (kind_ > TransformKind::TRANSLATE && G2Impl::wantsAntialias(*this)) {
+    G2Impl::drawMaskAA(*this, m, Rect{0, 0, g.width, g.height}, x + g.xOffset,
+                       y + t.ascent + g.yOffset, t.color, Colors::TRANSPARENT);
+    return g.xAdvance;
+  }
   G2Impl::drawMask(*this, m, Rect{0, 0, g.width, g.height}, x + g.xOffset,
                    y + t.ascent + g.yOffset, &fg, nullptr);
   return g.xAdvance;

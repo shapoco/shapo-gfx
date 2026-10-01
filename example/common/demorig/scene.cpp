@@ -12,6 +12,8 @@
 #else
 #include "model/rgb_chan.hpp"
 #endif
+// Generated from assets/2d/pop_star.svg by the same make target
+#include "model/pop_star.hpp"
 
 namespace demorig {
 
@@ -24,17 +26,23 @@ void Scene::init(int width, int height) {
   scale_ = (float)height / 320;
   rig_.init(rgb_chan::armature, rigMemory_, sizeof(rigMemory_));
   handDrawIndex_ = rig_.drawIndexOf(rig_.slotIndex("l_arm"));
+  for (int k = 0; k < NUM_POPS; k++) {
+    popRigs_[k].init(pop_star::armature, popMemory_[k], sizeof(popMemory_[k]));
+    pops_[k] = Pop();
+  }
+  lastBurst_ = -1;
   update(0.0f);
 }
 
 void Scene::update(float t) {
   t_ = t;
-  const rig::Animation &anim = rgb_chan::anim_animtion0;
+  const rig::Animation &anim = rgb_chan::anim_main;
   // 24 fps data, interpolated at any rate
   float t2 = ((int)(t * 1000) % 2000) / 1000.0f + 1.0f;
   rig_.pose(anim, rig::frameAt(anim, t2));
   updateStars(t);
   updateRing();
+  updatePops(t);
 }
 
 // Bounding box of points in world coordinates
@@ -121,6 +129,49 @@ void Scene::drawBackground(g2::Graphics2D &g, const Box &view) const {
         g.fillRect(ix * sz + shift, iy * sz + shift, sz, sz, col);
       }
     }
+  }
+}
+
+// Pop stars: a burst every POP_EVERY seconds, the two instances in turn,
+// each at a random place, size (x0.5 to x2) and angle from the burst number
+void Scene::updatePops(float t) {
+  const int burst = std::max(-1, (int)std::floor(t / POP_EVERY));
+  if (burst - lastBurst_ > NUM_POPS) lastBurst_ = burst - NUM_POPS;  // a jump in time
+  while (lastBurst_ < burst) {
+    lastBurst_++;
+    const uint32_t n = (uint32_t)lastBurst_ * 4u + 1000u;
+    Pop &pop = pops_[lastBurst_ % NUM_POPS];
+    pop.active = true;
+    pop.start = lastBurst_ * POP_EVERY;
+    const float x = hash01(n) * width_, y = hash01(n + 1) * height_;
+    const float size = (0.5f + hash01(n + 2) * 1.5f) * scale_;
+    const float angle = hash01(n + 3) * 2.0f * (float)M_PI;
+    // The picture is 64 x 64 with the star at its center
+    pop.placement = g2::affine2f::placement(x, y, angle, size, size, 32.0f, 32.0f);
+  }
+  const rig::Animation &anim = pop_star::anim_main;
+  for (int k = 0; k < NUM_POPS; k++) {
+    Pop &pop = pops_[k];
+    if (!pop.active) continue;
+    const float elapsed = t - pop.start;
+    if (elapsed < 0.0f || elapsed * anim.frameRate > anim.duration) {
+      pop.active = false;  // played to the end (no loop)
+      continue;
+    }
+    popRigs_[k].pose(anim, rig::frameAt(anim, elapsed, false));
+    const g2::RectF b = popRigs_[k].bounds(pop.placement);
+    pop.box = {b.x, b.y, b.right(), b.bottom()};
+  }
+}
+
+void Scene::drawPops(g2::Graphics2D &g, const Box &view) const {
+  for (int k = 0; k < NUM_POPS; k++) {
+    const Pop &pop = pops_[k];
+    if (!pop.active || !pop.box.overlaps(view)) continue;
+    g.pushState();
+    g.applyTransform(pop.placement);
+    popRigs_[k].draw(g);
+    g.popState();
   }
 }
 
@@ -220,6 +271,7 @@ void Scene::draw(g2::Graphics2D &g) const {
 
   drawBackground(g, view);
   drawStars(g, view);
+  drawPops(g, view);
 
   // Draw a scene where a ring of rectangles rotates around the character.
   // To make the character appear to be placed inside the ring,

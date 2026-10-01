@@ -1,12 +1,13 @@
 #ifndef SHAPOGFX2D_RIG_HPP
 #define SHAPOGFX2D_RIG_HPP
 
-// 2D skeletal animation: armatures of bones carrying images, posed from
-// keyframed animations and drawn with Graphics2D. The data (Armature,
-// Animation) is static and lives in flash; bin/dbones2cpp generates it from
-// DragonBones. An Instance keeps the pose of one character in memory the user
-// provides (Instance::bytes()). Optional: gfx2d.hpp does not include this
-// header.
+// 2D skeletal animation: armatures of bones carrying images or vector
+// pictures (vg.hpp), posed from keyframed animations and drawn with
+// Graphics2D. The data (Armature, Animation) is static and lives in flash;
+// bin/dbones2cpp generates it from DragonBones and bin/svg2cpp from animated
+// SVG. An Instance keeps the pose of one character in memory the user
+// provides (Instance::bytes()); drawBind() draws the bind pose without one.
+// Optional: gfx2d.hpp does not include this header.
 //
 //   alignas(4) static uint8_t mem[...];  // >= rig::Instance::bytes(chara::armature)
 //   rig::Instance inst;
@@ -28,6 +29,7 @@
 #include <cstdint>
 
 #include "shapoco/gfx2d/graphics2d.hpp"
+#include "shapoco/gfx2d/vg.hpp"
 
 namespace shapoco::gfx2d::rig {
 
@@ -55,16 +57,26 @@ constexpr int MAX_ATTACHMENTS = 127;
 // FORMAT_VERSION counts the members added this way; a generated header
 // static_asserts on the version its members need, so that old library code
 // refuses new data at compile time rather than misreading it.
-constexpr uint16_t FORMAT_VERSION = 1;
+//   1: the first layout
+//   2: Slot::clip / clipBone, AttachmentKind::VECTOR, Channel::COLOR
+//   3: Slot::strokeWidth, Channel::STROKE_WIDTH
+constexpr uint16_t FORMAT_VERSION = 3;
 
-// Bits of Armature::features and Animation::features. None is defined yet: a
-// feature added later takes a bit here, and generated data sets it when it
-// uses the feature. The bits this build of rig honors; Instance::init() and
-// pose() refuse data with any other bit set, since drawing it without the
-// feature would show something else than what was made.
-constexpr uint16_t SUPPORTED_FEATURES = 0;
+// Bits of Armature::features and Animation::features: a feature takes a bit
+// here, and generated data sets it when it uses the feature. SUPPORTED_FEATURES
+// are the bits this build of rig honors; Instance::init() and pose() refuse
+// data with any other bit set, since drawing it without the feature would
+// show something else than what was made.
+//
+// FEATURE_SLOT_COLOR: Slot::colorR / G / B and COLOR timelines are meaningful
+// (a header generated before them leaves 0, 0, 0; without the bit the slots
+// are white). FEATURE_STROKE_WIDTH: Slot::strokeWidth and STROKE_WIDTH
+// timelines are meaningful (without the bit the width is 1).
+constexpr uint16_t FEATURE_SLOT_COLOR = 1;
+constexpr uint16_t FEATURE_STROKE_WIDTH = 2;
+constexpr uint16_t SUPPORTED_FEATURES = FEATURE_SLOT_COLOR | FEATURE_STROKE_WIDTH;
 
-// What an attachment is. Only IMAGE is drawn today; the others name what a
+// What an attachment is. IMAGE and VECTOR are drawn; the others name what a
 // DragonBones display can be, so that a later version can put its data
 // behind Attachment::ext without moving the images.
 enum class AttachmentKind : uint8_t {
@@ -72,6 +84,7 @@ enum class AttachmentKind : uint8_t {
   MESH,          // reserved: a textured mesh, deformable / skinned
   ARMATURE,      // reserved: a nested armature
   BOUNDING_BOX,  // reserved: a hit area, not drawn
+  VECTOR,        // a vg::Picture (Attachment::ext), drawn in the slot's color
 };
 
 // --- Armature (static data) ---------------------------------------------------
@@ -88,20 +101,23 @@ struct Bone {
   uint8_t flags;
 };
 
-// An image a slot can show (a DragonBones "display")
+// What a slot can show (a DragonBones "display"): an image, or a vector
+// picture
 struct Attachment {
-  const Texture *texture;  // nullptr: not drawn (an unsupported display)
+  const Texture *texture;  // IMAGE: nullptr is not drawn (an unsupported display)
   Rect src;                // the part of `texture` (a texture atlas)
-  affine2f local;          // the top-left corner of `src` to the bone's space
+  // IMAGE: the top-left corner of `src` to the bone's space; VECTOR: the
+  // picture's space to the bone's
+  affine2f local;
   // Convex polygon around the opaque pixels, as x, y pairs relative to the
   // top-left corner of `src` (Graphics2D::drawImage with a polygon); nullptr
   // / 0: the whole rectangle
   const int16_t *hull;
   uint8_t hullCount;
-  AttachmentKind kind;  // IMAGE today; anything else is not drawn
+  AttachmentKind kind;
   uint8_t pad[2];
-  // Reserved for the data of the other kinds (a Mesh, an Armature, a hit
-  // area, by `kind`); nullptr today
+  // VECTOR: the const vg::Picture *. Reserved for the data of the other
+  // kinds (a Mesh, an Armature, a hit area)
   const void *ext;
 };
 
@@ -113,11 +129,21 @@ struct Slot {
   uint8_t bone;
   uint8_t alpha;             // 0..255
   BlendMode blend;           // ALPHA or ADD
-  // Reserved for the RGB tint of the slot (DragonBones' color transform); a
-  // feature bit will say when they are meaningful, since a header generated
-  // before them leaves 0, 0, 0. dbones2cpp writes 255, 255, 255 (no tint).
-  // Fills the padding.
-  uint8_t tintR, tintG, tintB;
+  // The color of the slot (FEATURE_SLOT_COLOR): the current color of a
+  // VECTOR picture (vg::SHAPE_*_CURRENT_COLOR); for images reserved as a
+  // tint (DragonBones' color transform), not applied today. dbones2cpp
+  // writes 255, 255, 255.
+  uint8_t colorR, colorG, colorB;
+  // Clip rectangle of the slot in the space of bone `clipBone`, nullptr:
+  // none. Drawn as the clip rectangle of Graphics2D, so one turned on
+  // screen clips to its bounding box. Version 2.
+  const RectF *clip;
+  uint8_t clipBone;
+  uint8_t pad[3];
+  // The stroke width of the slot (FEATURE_STROKE_WIDTH): the width of the
+  // strokes of its VECTOR picture flagged vg::SHAPE_STROKE_CURRENT_WIDTH, in
+  // the picture's coordinates. Version 3.
+  float strokeWidth;
 };
 
 struct Armature {
@@ -180,8 +206,28 @@ struct AlphaKey {
   uint8_t curve;
   uint8_t alpha;
 };
+struct ColorKey {  // version 2; FEATURE_SLOT_COLOR
+  uint16_t frame;
+  uint8_t curve;
+  uint8_t r, g, b;
+  uint8_t pad[2];
+};
+struct StrokeWidthKey {  // version 3; FEATURE_STROKE_WIDTH
+  uint16_t frame;
+  uint8_t curve;
+  uint8_t pad;
+  float width;
+};
 
-enum class Channel : uint8_t { TRANSLATE, ROTATE, SCALE, ATTACHMENT, ALPHA };
+enum class Channel : uint8_t {
+  TRANSLATE,
+  ROTATE,
+  SCALE,
+  ATTACHMENT,
+  ALPHA,
+  COLOR,         // version 2: the slot's color (ColorKey)
+  STROKE_WIDTH,  // version 3: the slot's stroke width (StrokeWidthKey)
+};
 
 struct BoneTimeline {  // TRANSLATE, ROTATE or SCALE
   const void *keys;    // TranslateKey / RotateKey / ScaleKey by the channel
@@ -189,7 +235,7 @@ struct BoneTimeline {  // TRANSLATE, ROTATE or SCALE
   uint8_t bone;
   Channel channel;
 };
-struct SlotTimeline {  // ATTACHMENT or ALPHA
+struct SlotTimeline {  // ATTACHMENT, ALPHA, COLOR or STROKE_WIDTH
   const void *keys;
   uint16_t keyCount;
   uint8_t slot;
@@ -230,6 +276,15 @@ inline float frameAt(const Animation &a, float seconds, bool loop = true) {
   }
   return f < 0.0f ? 0.0f : (f > d ? d : f);
 }
+
+// --- Drawing without an Instance ------------------------------------------------
+
+// The bind pose of an armature (its default attachments, alphas and colors,
+// in the base draw order) with the transform of `g` as its placement, like
+// Instance::draw(). The world transforms are computed on the fly, so this
+// costs more per frame than an Instance for a deep tree, but needs no
+// memory: the way to draw a picture that is not animated.
+void drawBind(Graphics2D &g, const Armature &a);
 
 // --- Instance -------------------------------------------------------------------
 
@@ -283,12 +338,17 @@ class Instance {
   // World transform of a bone in the armature's space (identity if out of
   // range)
   const affine2f &boneTransform(int bone) const;
-  // Overrides until the next pose(): the attachment (-1 hides the slot) and
-  // the alpha (0..255) of a slot
+  // Overrides until the next pose(): the attachment (-1 hides the slot),
+  // the alpha (0..255) and the color (RGB; the alpha of the Color is
+  // ignored) of a slot
   int attachmentOf(int slot) const;
   void setAttachment(int slot, int attachment);
   int alphaOf(int slot) const;
   void setAlpha(int slot, int alpha);
+  Color colorOf(int slot) const;  // opaque; WHITE if out of range
+  void setColor(int slot, Color c);
+  float strokeWidthOf(int slot) const;  // 1 if out of range
+  void setStrokeWidth(int slot, float width);
   // Bounding box of the visible attachments, in the armature's space and
   // after `placement` (conservative)
   RectF bounds() const { return bounds_; }
@@ -299,7 +359,9 @@ class Instance {
     int16_t x0, y0, x1, y1;  // bounding box; x1 < x0 when not drawn
     int8_t attachment;
     uint8_t alpha;
-    uint8_t pad[2];
+    uint8_t r, g, b;
+    uint8_t pad;
+    float strokeWidth;
   };
 
   const Armature *arm_ = nullptr;
