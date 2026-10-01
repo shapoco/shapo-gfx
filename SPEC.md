@@ -446,8 +446,10 @@ Semantics:
   (ARGB4444 only) x opacity the same way (the blend helpers take their weight with
   any number of fraction bits, `blendNative<F, SHIFT>`; the ARGB4444 sprite paths
   turn the 4-bit alpha field into a 10-bit weight by one multiply with a factor
-  computed once per call from the opacity, `ImageBlit::alphaMul`, and blend with
-  it unrounded, while the Color path keeps the 6-bit weight of alpha x opacity),
+  computed once per call from the opacity, `ImageBlit::alphaMul`, which the
+  helpers round to the 6 bits their packed arithmetic allows: the R and B fields
+  are interpolated in one multiply, and only a weight of up to 6 bits keeps a
+  product of B below R),
   and `NONE` copies (ARGB4444 alpha into an
   ARGB4444 target). Every shape reaches the pixels through one span function that
   switches on the blend (the opaque fill first); a color and blend become a native

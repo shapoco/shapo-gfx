@@ -213,20 +213,38 @@ static inline void fill16(uint16_t *dst, int n, uint16_t v) {
   if (n & 1) dst[n - 1] = v;
 }
 
+// The weight of a blend, 0..2^SHIFT, brought to 0..64 (rounded) when it has
+// more bits: the packed blends below interpolate two fields in one multiply,
+// which works only while a product of the lower field stays below the upper
+// one, i.e. with the 6 bits of room between B and R of RGB565
+template <int SHIFT>
+static inline uint32_t blendWeight64(uint32_t alpha) {
+  static_assert(SHIFT >= 1, "the weight needs a bit");
+  if constexpr (SHIFT > 6) {
+    return (alpha + (1u << (SHIFT - 7))) >> (SHIFT - 6);
+  } else if constexpr (SHIFT < 6) {
+    return alpha << (6 - SHIFT);
+  } else {
+    return alpha;
+  }
+}
+
 // Alpha-blend src over dst. `alpha` is the opacity of src in 0..2^SHIFT
 // (0..64 by default; the image paths pass a 10-bit one straight from the
-// texel's alpha). The R+B fields and the G field are interpolated separately
-// in one multiply each; the products never carry into the neighboring field
-// (SHIFT up to 15: the fields are 16 bits).
+// texel's alpha, which is rounded to 6 bits here). The R+B fields and the G
+// field are interpolated separately in one multiply each; with a 6-bit
+// weight the products never carry into the neighboring field.
 template <int SHIFT = 6>
 static inline uint16_t blendAlphaRgb565(uint16_t dst, uint16_t src,
                                         uint32_t alpha) {
-  static_assert(SHIFT >= 1 && SHIFT <= 15, "the fields would overflow");
-  const uint32_t ia = (1u << SHIFT) - alpha;
+  if constexpr (SHIFT != 6) {
+    return blendAlphaRgb565<6>(dst, src, blendWeight64<SHIFT>(alpha));
+  }
+  const uint32_t ia = 64u - alpha;
   uint32_t rb =
-      (((dst & 0xF81Fu) * ia + (src & 0xF81Fu) * alpha) >> SHIFT) & 0xF81Fu;
+      (((dst & 0xF81Fu) * ia + (src & 0xF81Fu) * alpha) >> 6) & 0xF81Fu;
   uint32_t g =
-      (((dst & 0x07E0u) * ia + (src & 0x07E0u) * alpha) >> SHIFT) & 0x07E0u;
+      (((dst & 0x07E0u) * ia + (src & 0x07E0u) * alpha) >> 6) & 0x07E0u;
   return (uint16_t)(rb | g);
 }
 
@@ -273,16 +291,21 @@ static inline uint16_t rgb444ToRgb565(uint16_t p) {
                     (b << 1) | (b >> 3));
 }
 
-// `alpha`: opacity of src in 0..2^SHIFT. R+B and G are blended separately.
+// `alpha`: opacity of src in 0..2^SHIFT (brought to 6 bits, as above). The
+// three fields are blended separately: 4-bit fields leave only 4 bits of
+// room between them, so a product with a 6-bit weight would carry across
+// (R + B in one multiply, as for RGB565, put bits of R into B).
 template <int SHIFT = 6>
 static inline uint16_t blendAlphaRgb444(uint16_t dst, uint16_t src,
                                         uint32_t alpha) {
-  static_assert(SHIFT >= 1 && SHIFT <= 15, "the fields would overflow");
-  const uint32_t ia = (1u << SHIFT) - alpha;
-  uint32_t rb =
-      (((dst & 0xF0Fu) * ia + (src & 0xF0Fu) * alpha) >> SHIFT) & 0xF0Fu;
-  uint32_t g = (((dst & 0x0F0u) * ia + (src & 0x0F0u) * alpha) >> SHIFT) & 0x0F0u;
-  return (uint16_t)(rb | g);
+  if constexpr (SHIFT != 6) {
+    return blendAlphaRgb444<6>(dst, src, blendWeight64<SHIFT>(alpha));
+  }
+  const uint32_t ia = 64u - alpha;
+  uint32_t r = (((dst & 0xF00u) * ia + (src & 0xF00u) * alpha) >> 6) & 0xF00u;
+  uint32_t g = (((dst & 0x0F0u) * ia + (src & 0x0F0u) * alpha) >> 6) & 0x0F0u;
+  uint32_t b = (((dst & 0x00Fu) * ia + (src & 0x00Fu) * alpha) >> 6) & 0x00Fu;
+  return (uint16_t)(r | g | b);
 }
 
 static inline uint16_t addSaturateRgb444(uint16_t dst, uint32_t r4, uint32_t g4,
@@ -321,9 +344,12 @@ constexpr Color argb4444ToColor(uint16_t p) {
 template <int SHIFT = 6>
 static inline uint16_t blendAlphaArgb4444(uint16_t dst, uint16_t src,
                                           uint32_t alpha) {
-  uint32_t rgb = blendAlphaRgb444<SHIFT>(dst & 0x0FFFu, src & 0x0FFFu, alpha);
+  if constexpr (SHIFT != 6) {
+    return blendAlphaArgb4444<6>(dst, src, blendWeight64<SHIFT>(alpha));
+  }
+  uint32_t rgb = blendAlphaRgb444<6>(dst & 0x0FFFu, src & 0x0FFFu, alpha);
   uint32_t da = (dst >> 12) & 15u;
-  uint32_t a = da + (((15u - da) * alpha + (1u << (SHIFT - 1))) >> SHIFT);
+  uint32_t a = da + (((15u - da) * alpha + 32u) >> 6);
   return (uint16_t)((a << 12) | rgb);
 }
 
@@ -523,7 +549,7 @@ struct CursorRgb565 {
 #endif
 
 // Blend a native pixel `src` (with opacity `alpha` in 0..2^SHIFT, 0..64 by
-// default) over `dst`
+// default; more bits are rounded to 6) over `dst`
 template <PixelFormat F, int SHIFT = 6>
 static inline uint32_t blendNative(uint32_t dst, uint32_t src, uint32_t alpha);
 

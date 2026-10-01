@@ -1129,7 +1129,9 @@ struct ImageAA {
   int32_t nx[Graphics2D::IMAGE_POLYGON_MAX], ny[Graphics2D::IMAGE_POLYGON_MAX],
       c[Graphics2D::IMAGE_POLYGON_MAX];
   int8_t kind[Graphics2D::IMAGE_POLYGON_MAX];
-  int32_t xbOut0[Graphics2D::IMAGE_POLYGON_MAX], xbIn0[Graphics2D::IMAGE_POLYGON_MAX],
+  // (64 bits: where a row meets an edge that is nearly along it lies far
+  // away, up to a thousand times the coordinates)
+  int64_t xbOut0[Graphics2D::IMAGE_POLYGON_MAX], xbIn0[Graphics2D::IMAGE_POLYGON_MAX],
       xbdy[Graphics2D::IMAGE_POLYGON_MAX];
   // Pixels with centers up to OUT outside the outline are partly covered;
   // those IN or more inside every edge are whole
@@ -1138,8 +1140,8 @@ struct ImageAA {
   static int32_t q16(float v) {
     return (int32_t)std::clamp(v * 65536.0f, -2147483520.0f, 2147483520.0f);
   }
-  static int32_t q8(float v) {
-    return (int32_t)std::clamp(v * 256.0f, -8388608.0f, 8388607.0f);
+  static int64_t q8(float v) {
+    return (int64_t)std::clamp(v * 256.0f, -1e15f, 1e15f);
   }
 
   bool initEdges(const vec2f *pts, int count) {
@@ -1185,10 +1187,12 @@ struct ImageAA {
   // OUT (`inner` false) or in by IN (true), as [a, b); false when there are
   // none. Integer: one multiply-add per edge.
   bool span(int y, bool inner, int &a, int &b) const {
-    const int32_t *xb0 = inner ? xbIn0 : xbOut0;
-    int32_t lo = INT32_MIN / 2, hi = INT32_MAX / 2;
+    const int64_t *xb0 = inner ? xbIn0 : xbOut0;
+    // The bounds, clamped to the pixels that exist (24.8)
+    constexpr int64_t LIM = (int64_t)1 << 23;
+    int64_t lo = -LIM, hi = LIM;
     for (int i = 0; i < n; i++) {
-      const int32_t xb = xb0[i] + xbdy[i] * y;
+      const int64_t xb = xb0[i] + xbdy[i] * y;
       if (kind[i] > 0) {
         lo = std::max(lo, xb);
       } else if (kind[i] < 0) {
@@ -1199,8 +1203,8 @@ struct ImageAA {
     }
     if (lo >= hi) return false;
     // The centers (x + 0.5) within (lo, hi): x from ceil(lo - 0.5)
-    a = (lo - 128 + 255) >> 8;
-    b = ((hi - 128) >> 8) + 1;
+    a = (int)((lo - 128 + 255) >> 8);
+    b = (int)((hi - 128) >> 8) + 1;
     return a < b;
   }
 

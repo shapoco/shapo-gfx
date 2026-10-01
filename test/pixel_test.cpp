@@ -123,6 +123,22 @@ static void testBlend() {
   CHECK_EQ(blendAlphaRgb565(0x1234, 0xABCD, 64), 0xABCD);
   CHECK_EQ(blendAlphaRgb444(0x123, 0xABC, 0), 0x123);
   CHECK_EQ(blendAlphaRgb444(0x123, 0xABC, 64), 0xABC);
+  // Halfway, a channel both lack stays 0 (the fields must not carry into
+  // each other), and the others are halved
+  for (uint32_t a = 1; a < 64; a++) {
+    CHECK_EQ(blendAlphaRgb444(0xF00, 0x000, a) & 0x0FF, 0);
+    CHECK_EQ(blendAlphaRgb444(0x000, 0x00F, a) & 0xFF0, 0);
+    CHECK_EQ(blendAlphaRgb565(0xF800, 0x0000, a) & 0x07FF, 0);
+    CHECK_EQ(blendAlphaRgb565(0x0000, 0x001F, a) & 0xFFE0, 0);
+  }
+  CHECK_EQ(blendAlphaRgb444(0xF00, 0x000, 32), 0x700);
+  CHECK_EQ(blendAlphaRgb444(0x0F0, 0x000, 32), 0x070);
+  CHECK_EQ(blendAlphaRgb444(0x00F, 0x000, 32), 0x007);
+  // A wider weight is rounded to 6 bits: 1024 is opaque, 512 is half
+  CHECK_EQ(blendAlphaRgb565<10>(0x1234, 0xABCD, 1024), 0xABCD);
+  CHECK_EQ(blendAlphaRgb565<10>(0x0000, 0xFFFF, 512),
+           blendAlphaRgb565(0x0000, 0xFFFF, 32));
+  CHECK_EQ(blendAlphaRgb444<10>(0xF00, 0x000, 1024), 0x000);
   CHECK_EQ(blendAlphaArgb4444(0x0000, 0x0FFF, 64),
            0xFFFF);  // opaque over transparent
   CHECK_EQ(blendAlphaArgb4444(0xF123, 0x0ABC, 0), 0xF123);

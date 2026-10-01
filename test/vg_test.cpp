@@ -776,6 +776,115 @@ void testImagesAntialiased() {
 #endif
 }
 
+// ARGB4444 texels blended through the fast image paths agree with the Color
+// path (within the rounding of its 6-bit weight): a translucent black texel
+// over a colored background must not pick up a color of its own (the packed
+// R+B blend must not carry between the fields)
+void testArgbBlendAgreesWithColors() {
+#if SHAPOGFX_FORMAT_ARGB4444
+  OwnedSurface img(PixelFormat::ARGB4444, 16, 1);
+  Graphics2D gi(img);
+  gi.setBlendMode(BlendMode::NONE);
+  for (int a = 0; a < 16; a++) gi.setPixel(a, 0, makeColor(0, 0, 0, a * 17));
+  const Texture tex = img;
+  const Color bgs[] = {Colors::RED, Colors::GREEN, Colors::BLUE, Colors::WHITE,
+                       makeColor(200, 100, 50)};
+  const PixelFormat fmts[] = {PixelFormat::RGB565_SWAPPED, PixelFormat::RGB444,
+                              PixelFormat::ARGB4444};
+  for (PixelFormat f : fmts) {
+    for (Color bg : bgs) {
+      for (int op = 255; op >= 100; op -= 155) {
+        OwnedSurface sa(f, 16, 2), sb(f, 16, 2);
+        Graphics2D ga(sa), gb(sb);
+        ga.clear(bg);
+        gb.clear(bg);
+        ga.setOpacity(op);
+        gb.setOpacity(op);
+        ga.drawImage(tex, 0, 0);  // the plain blit: the ARGB row blend
+#if SHAPOGFX2D_TRANSFORM
+        // (a transform of kind SCALE: the transformed op, onto row 1)
+        ga.setTransform(affine2f{1.0f, 0.0f, 0.0f, 1.0001f, 0.0f, 1.0f});
+        ga.drawImage(tex, 0, 0, Rect{0, 0, 16, 1});
+        ga.resetTransform();
+#else
+        ga.drawImage(tex, 0, 1);
+#endif
+        // The Color path: the same texels as colors
+        for (int a = 0; a < 16; a++) {
+          gb.fillRect(a, 0, 1, 2, makeColor(0, 0, 0, a * 17));
+        }
+        for (int a = 0; a < 16; a++) {
+          for (int y = 0; y < 2; y++) {
+            const Color got = ga.getPixel(a, y, false), want = gb.getPixel(a, 0, false);
+            // Black darkens every channel alike: within a step of the format
+            CHECK(std::abs(colorR(got) - colorR(want)) <= 17);
+            CHECK(std::abs(colorG(got) - colorG(want)) <= 17);
+            CHECK(std::abs(colorB(got) - colorB(want)) <= 17);
+            // and a channel the background lacks stays dark
+            if (colorB(bg) == 0) CHECK(colorB(got) <= 8);
+            if (colorR(bg) == 0) CHECK(colorR(got) <= 8);
+          }
+        }
+      }
+    }
+  }
+#endif
+}
+
+// An antialiased image turned through every angle never vanishes (the
+// spans of its rows are bounded by edges that lie nearly along the row,
+// whose crossings are far away)
+void testImagesEveryAngle() {
+#if SHAPOGFX2D_TRANSFORM
+  OwnedSurface solid(PixelFormat::RGB565_SWAPPED, 24, 16);
+  Graphics2D gs(solid);
+  gs.clear(Colors::WHITE);
+  const Texture white = solid;
+  OwnedSurface s(PixelFormat::RGB565_SWAPPED, 64, 64);
+  Graphics2D g = makeContext(s);
+  g.setAntialias(true);
+  // Every whole degree, and angles a hair off the axes (where an edge's
+  // crossing with a row is thousands of pixels away)
+  float angles[360 + 4 * 6];
+  int na = 0;
+  for (int deg = 0; deg < 360; deg++) angles[na++] = (float)deg;
+  for (int q = 0; q < 4; q++)
+    for (float off : {0.001f, 0.01f, 0.03f, 0.06f, 0.1f, -0.04f})
+      angles[na++] = (float)(q * 90) + off;
+  int minLit = 1 << 30, maxLit = 0;
+  for (int i = 0; i < na; i++) {
+    const float deg = angles[i];
+    g.clear(Colors::BLACK);
+    g.setTransform(affine2f::placement(32, 32, deg * PI / 180.0f, 1.0f, 1.0f, 12, 8));
+    g.drawImage(white, 0, 0);
+    int lit = 0;
+    for (int y = 0; y < 64; y++)
+      for (int x = 0; x < 64; x++)
+        if (lum(g, x, y) > 128) lit++;
+    minLit = std::min(minLit, lit);
+    maxLit = std::max(maxLit, lit);
+  }
+  g.resetTransform();
+  CHECK(minLit >= 24 * 16 - 60);  // the area, less the edge pixels
+  CHECK(maxLit <= 24 * 16 + 60);
+  // The hull polygon the rig uses, likewise
+  const int16_t hull[8] = {0, 0, 24, 0, 24, 16, 0, 16};
+  minLit = 1 << 30;
+  for (int deg = 0; deg < 360; deg += 3) {
+    g.clear(Colors::BLACK);
+    g.setTransform(affine2f::placement(32, 32, (float)deg * PI / 180.0f, 1.0f, 1.0f, 12, 8));
+    g.drawImage(white, 0, 0, Rect{0, 0, 24, 16}, hull, 4);
+    int lit = 0;
+    for (int y = 0; y < 64; y++)
+      for (int x = 0; x < 64; x++)
+        if (lum(g, x, y) > 128) lit++;
+    minLit = std::min(minLit, lit);
+  }
+  g.resetTransform();
+  CHECK(minLit >= 24 * 16 - 60);
+#endif
+}
+
 // --- Brushes ------------------------------------------------------------------
 
 void testGradients() {
@@ -1450,6 +1559,8 @@ void testVg() {
   testOutlinesAntialiased();
   testMaskAntialiased();
   testImagesAntialiased();
+  testArgbBlendAgreesWithColors();
+  testImagesEveryAngle();
   testGradients();
   testStrokes();
   testFlattening();
