@@ -38,7 +38,7 @@ void Scene::update(float t) {
   t_ = t;
   const rig::Animation &anim = rgb_chan::anim_main;
   // 24 fps data, interpolated at any rate
-  float t2 = ((int)(t * 1000) % 2000) / 1000.0f + 1.0f;
+  float t2 = ((int)(t * 1000) % 4000) / 1000.0f + 1.0f;
   rig_.pose(anim, rig::frameAt(anim, t2));
   updateStars(t);
   updateRing();
