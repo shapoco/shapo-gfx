@@ -10,3 +10,14 @@
   <a href="{{ pathto('', 1) }}../example/demo3d/">demo3d</a>
 </div>
 {% endblock %}
+{% block extrahead %}
+{{ super() }}
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-KJ53WNQ22G"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-KJ53WNQ22G');
+</script>
+{% endblock %}
