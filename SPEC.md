@@ -345,6 +345,8 @@ class Graphics2D {
   TransformKind transformKind() const; void applyTransform(const affine2f &);   // transform * m
   void translate(float x, float y); void scale(float sx, float sy); void scale(float s);
   void rotate(float angle); void rotate(float angle, float cx, float cy);
+  vec2f toTarget(const vec2f &) const;                 // transform.apply(p)
+  bool fromTarget(const vec2f &, vec2f &out) const;    // false: not invertible
   void setBlend(BlendMode, int opacity = 255); void setBlendMode(BlendMode); void setOpacity(int);
   BlendMode blendMode() const; int opacity() const;
   void setColorKey(Color); void clearColorKey(); bool hasColorKey() const; Color colorKey() const;
@@ -353,6 +355,11 @@ class Graphics2D {
   void clear(Color);                          // overwrites the clip rectangle
   void setPixel(int x, int y, Color, bool transformed = true);
   Color getPixel(int x, int y, bool transformed = true) const;
+  // (free functions) a pixel of a texture: TRANSPARENT outside it, in a format
+  // left out of the build, or (with `key`) where it is the color key as
+  // drawImage() compares it
+  Color texturePixel(const Texture &, int x, int y);
+  Color texturePixel(const Texture &, int x, int y, Color key);
   void fillRect(const Rect &, Color); void fillRect(int x, int y, int w, int h, Color); void fillRect(const RectF &, Color);
   void drawRect(const Rect &, Color, int thickness = 1); void drawRect(const RectF &, Color, float thickness = 1);
   void fillRoundRect(const Rect &, int radius, Color); void fillRoundRect(const RectF &, float radius, Color);
@@ -977,7 +984,7 @@ void drawBind(Graphics2D &, const Armature &);   // the bind pose, without an In
 `rig::Instance` (a small handle; copies share the memory):
 
 - `static size_t bytes(const Armature &)`: 24 bytes per bone (world transforms), 20
-  per slot (bounding box, attachment, alpha, color, stroke width) and 1 per slot (draw order),
+  per slot (bounding box, attachment, alpha, color, flags, stroke width) and 1 per slot (draw order),
   rounded up to 4, plus 3 bytes of alignment slack. `init(armature, memory, size)` fails if the
   memory is too small or `features` has a bit outside `SUPPORTED_FEATURES`, and starts
   in the bind pose; nothing is allocated.
@@ -1003,7 +1010,8 @@ void drawBind(Graphics2D &, const Armature &);   // the bind pose, without an In
   with an index out of range falls back to the base order). `poseBind()` does the
   same without an animation. `bin/shapogfx_dbones.py` evaluates poses with the same
   arithmetic (float32 progress, integer easing), the reference of the tests.
-- `draw(g)` / `draw(g, first, end)` draw the draw positions `[first, end)` (clamped)
+- `draw(g, painter = nullptr)` / `draw(g, first, end, painter = nullptr)` draw the
+  draw positions `[first, end)` (clamped)
   with `g`'s transform as the placement of the armature: per visible slot with a
   non-zero alpha, `setTransform(placement * world[bone] * local)` and
   `drawImage(texture, 0, 0, src, hull, hullCount)` (the transformed path; the hull
@@ -1018,9 +1026,31 @@ void drawBind(Graphics2D &, const Armature &);   // the bind pose, without an In
   by the placement, lies outside `g`'s clip rectangle (a pixel wider) are skipped,
   so drawing in bands costs little. The transform, opacity, blend mode, color key
   and clip rectangle of `g` are restored (no state stack is used); the vector
-  pictures use `g`'s antialiasing flag. Without `SHAPOGFX2D_TRANSFORM`
+  pictures use `g`'s antialiasing flag. A keyed texture is drawn with the
+  armature's key even when the caller had set another one. Without `SHAPOGFX2D_TRANSFORM`
   nothing is drawn. Drawing something between two slots is `draw(g, 0, k)`, the
   drawing, `draw(g, k, n)` with `k = drawIndexOf(slot)`.
+- Custom paint: `setCustomPaint(slot, enable)` / `customPaintOf(slot)` (a flag in
+  the slot's state, off after `init()`, kept by `pose()`) leave a slot to the
+  `SlotPainter` given to `draw()` (nullptr: the slot is not drawn), for a texture
+  in RAM in place of one in flash, for instance. In the slot's place,
+  after the culling, the opacity / blend mode, the clip and (for an image of a
+  keyed armature) the color key are set as for drawing the attachment and the
+  transform as `placement * world[bone] * local`, `draw()` calls
+  `painter->paintSlot(g, SlotPaint{slot, attachment, sl, at, alpha, color,
+  strokeWidth})` (`alpha` is already in `g`'s opacity) and then sets the
+  opacity, blend mode, color key and clip rectangle back to what it tracks. The
+  culling and `bounds()` still use the attachment's box, so what is painted
+  should lie within it. `drawBind()` has no custom paint.
+- Attachment spaces: `attachmentTransform(slot, [attachment,] out)` is
+  `world[bone] * local` (for an image: from the pixels of `src`, origin at its
+  top-left corner, to the armature's space), without `attachment` that of the
+  attachment shown; false if the slot or attachment is out of range or hidden.
+  `attachmentToArmature(slot, [attachment,] p, out)` and
+  `armatureToAttachment(...)` map points with it or its inverse (false also if
+  not invertible). With `Graphics2D::fromTarget()` and `texturePixel()` they make
+  a hit test on the pixels of an image: the target point through the inverse of
+  the placement and the attachment transform, floored, plus `src.x / src.y`.
 - `drawBind(g, armature)` draws the bind pose (default attachments, alphas and
   colors, the base order) the same way without an `Instance`, computing each bone's
   world transform up its chain of parents on the fly: no memory, more arithmetic per

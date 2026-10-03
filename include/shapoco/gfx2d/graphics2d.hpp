@@ -160,6 +160,11 @@ class Graphics2D {
   void scale(float s) { scale(s, s); }
   void rotate(float angle);                    // radians, clockwise on screen
   void rotate(float angle, float cx, float cy);  // about (cx, cy)
+  // A point of the drawing calls' coordinates to target pixels (continuous:
+  // the pixel is the floor of the result), and back; fromTarget() is false
+  // (and `out` unchanged) if the transform is not invertible
+  vec2f toTarget(const vec2f &p) const { return state_.transform.apply(p); }
+  bool fromTarget(const vec2f &p, vec2f &out) const;
 
   // Blend mode and opacity (0..255) of everything drawn. Shapes and text
   // use their color's alpha x opacity, images their pixels' alpha (only
@@ -465,6 +470,13 @@ class Graphics2D {
 
   void updateTransform();
 };
+
+// The pixel (x, y) of a texture; TRANSPARENT outside it or in a pixel
+// format left out of the build
+Color texturePixel(const Texture &t, int x, int y);
+// Also TRANSPARENT where the pixel is the color key `key` (compared as
+// drawImage() does, in the texture's format)
+Color texturePixel(const Texture &t, int x, int y, Color key);
 
 // 0..255 opacity as 0..64 (64 = opaque): (a * 64 + 127) / 255, with the
 // division by 255 replaced by a multiply-shift that is exact for 0..255

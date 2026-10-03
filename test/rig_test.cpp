@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <thread>
+#include <vector>
 
 #include "check.hpp"
 #include "data/test_rig.hpp"
@@ -654,11 +655,15 @@ static void testRigColorKey() {
   }
   CHECK_EQ(keyed, 0);
   CHECK(drawn > 200);
-  // A key set by the caller is restored
+  // A key set by the caller is not the armature's, and is restored
+  clearTarget(g);
   g.setColorKey(g2::Colors::WHITE);
   inst.draw(g);
   CHECK(g.hasColorKey());
   CHECK_EQ(g.colorKey(), g2::Colors::WHITE);
+  keyed = 0;
+  for (int i = 0; i < DW * DH; i++) keyed += p[i] == key;
+  CHECK_EQ(keyed, 0);
 #endif
 }
 
@@ -719,6 +724,146 @@ static void testRigDrawRange() {
   CHECK_EQ((int)before.blendMode, (int)after.blendMode);
   CHECK_EQ(before.colorKeyEnabled, after.colorKeyEnabled);
   CHECK_EQ(before.colorKey, after.colorKey);
+}
+
+// A painter drawing the attachments as draw() would, from a copy of the
+// texture in RAM, and then messing with the state of `g`
+struct CopyPainter : rig::SlotPainter {
+  const rig::Instance *inst = nullptr;
+  g2::Texture copy = {};
+  const g2::affine2f *placement = nullptr;
+  int calls = 0;
+  bool ok = true;
+  void paintSlot(g2::Graphics2D &g, const rig::SlotPaint &p) override {
+    calls++;
+    ok = ok && inst->customPaintOf(p.slot) &&
+         p.attachment == inst->attachmentOf(p.slot) &&
+         &p.sl == &inst->armature()->slots[p.slot] &&
+         &p.at == &p.sl.attachments[p.attachment] &&
+         p.alpha == inst->alphaOf(p.slot) &&
+         p.color == inst->colorOf(p.slot);
+    g2::affine2f m;
+    ok = ok && inst->attachmentTransform(p.slot, m);
+    const g2::affine2f e = *placement * m, &t = g.transform();
+    ok = ok && nearlyEqual(t.a, e.a, 1e-5f) && nearlyEqual(t.d, e.d, 1e-5f) &&
+         nearlyEqual(t.tx, e.tx) && nearlyEqual(t.ty, e.ty);
+    g.drawImage(copy, 0, 0, p.at.src, p.at.hull, p.at.hullCount);
+    g.setBlend(g2::BlendMode::ADD, 9);
+    g.setColorKey(g2::Colors::GREEN);
+    g.setClipRect(1, 2, 3, 4);
+  }
+};
+
+// Custom paint: the slots it is on are left to the painter
+static void testRigCustomPaint() {
+  for (const rig::Armature *arm :
+       {&test_rig::armature, &test_rig_keyed::armature}) {
+    const g2::Texture &tex = *arm->slots[0].attachments[0].texture;
+    std::vector<uint8_t> ram((const uint8_t *)tex.pixels,
+                             (const uint8_t *)tex.pixels +
+                                 (size_t)tex.stride * tex.height);
+    const g2::PixelFormat fmt = g2::PixelFormat::RGB565_SWAPPED;
+    g2::OwnedSurface a = g2::createSurface(fmt, DW, DH);
+    g2::OwnedSurface b = g2::createSurface(fmt, DW, DH);
+    g2::Graphics2D ga(a), gb(b);
+    rig::Instance inst;
+    CHECK(inst.init(*arm, rigMemory, sizeof(rigMemory)));
+    CHECK(!inst.customPaintOf(0));
+    CHECK(!inst.customPaintOf(-1));
+    CHECK(!inst.customPaintOf(99));
+    inst.setCustomPaint(99, true);  // ignored
+    const g2::affine2f m = placement();
+    CopyPainter painter;
+    painter.inst = &inst;
+    painter.copy = tex;
+    painter.copy.pixels = ram.data();
+    painter.placement = &m;
+    inst.pose(test_rig::anim_move, 3.5f);
+    clearTarget(ga);
+    ga.setTransform(m);
+    inst.draw(ga);
+    for (int s = 0; s < arm->slotCount; s += 2) inst.setCustomPaint(s, true);
+    CHECK(inst.customPaintOf(0) && !inst.customPaintOf(1));
+    inst.pose(test_rig::anim_move, 3.5f);  // keeps the flags
+    CHECK(inst.customPaintOf(0) && !inst.customPaintOf(1));
+
+    // The same picture, and the state restored
+    clearTarget(gb);
+    gb.setTransform(m);
+    gb.setBlend(g2::BlendMode::ALPHA, 255);
+    const g2::GraphicsState2D before = gb.state();
+    inst.draw(gb, &painter);
+    const g2::GraphicsState2D after = gb.state();
+    CHECK(painter.ok);
+    CHECK(painter.calls > 0);
+    CHECK(samePixels(a, b));
+    CHECK_EQ(after.opacity, before.opacity);
+    CHECK_EQ((int)after.blendMode, (int)before.blendMode);
+    CHECK_EQ(after.colorKeyEnabled, before.colorKeyEnabled);
+    CHECK(gb.clipRect().width == DW && gb.clipRect().height == DH);
+
+    // Without a painter they are not drawn
+    clearTarget(gb);
+    gb.setTransform(m);
+    inst.draw(gb);
+    for (int s = 0; s < arm->slotCount; s += 2) inst.setAttachment(s, -1);
+    clearTarget(ga);
+    ga.setTransform(m);
+    inst.draw(ga);
+    CHECK(samePixels(a, b));
+
+    // init() turns them off
+    CHECK(inst.init(*arm, rigMemory, sizeof(rigMemory)));
+    CHECK(!inst.customPaintOf(0));
+  }
+}
+
+// Points between the target, the armature's space and an attachment's
+static void testRigAttachmentSpace() {
+  const rig::Armature &arm = test_rig_keyed::armature;
+  g2::OwnedSurface s = g2::createSurface(g2::PixelFormat::RGB565_SWAPPED, DW, DH);
+  g2::Graphics2D g(s);
+  rig::Instance inst;
+  CHECK(inst.init(arm, rigMemory, sizeof(rigMemory)));
+  inst.pose(test_rig::anim_move, 7.0f);
+  clearTarget(g);
+  g.setTransform(placement());
+  inst.draw(g);
+
+  g2::affine2f m;
+  g2::vec2f p;
+  CHECK(!inst.attachmentTransform(-1, m));
+  CHECK(!inst.attachmentTransform(0, 99, m));
+  CHECK(!inst.attachmentToArmature(99, {0, 0}, p));
+  inst.setAttachment(1, -1);
+  CHECK(!inst.armatureToAttachment(1, {0, 0}, p));
+  CHECK(inst.armatureToAttachment(1, 0, {0, 0}, p));
+
+  // Each opaque pixel of an attachment, from the target back to the texture
+  int hits = 0;
+  for (int sl = 0; sl < arm.slotCount; sl++) {
+    const int att = inst.attachmentOf(sl);
+    if (att < 0) continue;
+    const rig::Attachment &at = arm.slots[sl].attachments[att];
+    for (int y = 0; y < at.src.height; y++) {
+      for (int x = 0; x < at.src.width; x++) {
+        const g2::vec2f c = {x + 0.5f, y + 0.5f};
+        g2::vec2f w, q;
+        CHECK(inst.attachmentToArmature(sl, c, w));
+        const g2::vec2f t = g.toTarget(w);
+        CHECK(g.fromTarget(t, w));
+        CHECK(inst.armatureToAttachment(sl, att, w, q));
+        CHECK(nearlyEqual(q.x, c.x) && nearlyEqual(q.y, c.y));
+        const g2::Color k = g2::texturePixel(*at.texture, at.src.x + x,
+                                             at.src.y + y, arm.colorKey);
+        if (g2::colorA(k) != 0) hits++;
+      }
+    }
+  }
+  CHECK(hits > 100);
+  g2::Graphics2D z(s);
+  z.scale(0.0f);
+  CHECK(!z.fromTarget({1, 1}, p));
 }
 
 // Every pixel drawn lies within bounds(placement)
@@ -868,6 +1013,8 @@ void testRig() {
   testRigBounds();
   testRigBands();
   testRigThreads();
+  testRigCustomPaint();
+  testRigAttachmentSpace();
 #else
   std::printf("  drawing skipped (transform or pixel formats disabled)\n");
 #endif

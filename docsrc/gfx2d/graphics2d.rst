@@ -79,6 +79,8 @@ Graphics2D
    "``const affine2f &transform() const``", "取得"
    "``void applyTransform(const affine2f &m)``", "``transform = transform * m`` (``m`` が先に効く)"
    "``void translate(x, y)`` / ``scale(sx, sy)`` / ``scale(s)`` / ``rotate(angle)`` / ``rotate(angle, cx, cy)``", "右から掛ける (canvas と同じく、後に書いたものが先に効く)。角度はラジアン、画面上で時計回り"
+   "``vec2f toTarget(const vec2f &p) const``", "描画関数の座標を描画先のピクセル座標へ (連続座標。ピクセルは結果の floor)"
+   "``bool fromTarget(const vec2f &p, vec2f &out) const``", "描画先のピクセル座標を描画関数の座標へ。変換行列が逆変換できなければ false (``out`` は変えない)"
    "``TransformKind transformKind() const``", "行列の種類: ``IDENTITY`` / ``TRANSLATE`` (平行移動のみ) / ``SCALE`` (拡大縮小・鏡像と平行移動) / ``AFFINE`` (回転・せん断を含む)"
 
 行列の種類は変更時に 1 度だけ判定され、描画関数はそれでコードパスを選びます。
@@ -132,6 +134,8 @@ Graphics2D
    "``void clear(Color)``", "クリップ矩形全体を上書きする (変換行列とブレンドは効かない)"
    "``void setPixel(int x, int y, Color, bool transformed = true)``", "1 ピクセル描く。``transformed`` が false なら変換行列を通さない"
    "``Color getPixel(int x, int y, bool transformed = true) const``", "1 ピクセル読む (描画先の外は ``TRANSPARENT``)"
+   "``Color texturePixel(const Texture &, int x, int y)``", "(自由関数) テクスチャの 1 ピクセルを読む。範囲外と、ビルドから外したピクセル形式は ``TRANSPARENT``"
+   "``Color texturePixel(const Texture &, int x, int y, Color key)``", "(自由関数) 加えて、``drawImage()`` と同じ比較でカラーキー ``key`` に一致するピクセルも ``TRANSPARENT``"
    "``void fillRect(const Rect &, Color)`` / ``fillRect(x, y, w, h, Color)`` / ``fillRect(const RectF &, Color)``", "塗りつぶし矩形"
    "``void drawRect(const Rect &, Color, int thickness = 1)`` / ``drawRect(x, y, w, h, Color, thickness)`` / ``drawRect(const RectF &, Color, float thickness = 1)``", "矩形の輪郭。矩形の内側に ``thickness`` の幅で描く"
    "``void fillRoundRect(const Rect &, int radius, Color)`` / ``fillRoundRect(x, y, w, h, radius, Color)`` / ``fillRoundRect(const RectF &, float, Color)``", "丸角矩形の塗り"

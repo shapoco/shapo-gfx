@@ -950,6 +950,16 @@ static void testColorKey() {
     auto keyed = [&](int x, int y) {
       return colorToNative(sf, gi.getPixel(x, y)) == colorToNative(sf, key);
     };
+    // texturePixel() reads the same pixels and keys the same ones
+    for (int y = -1; y <= 7; y++) {
+      for (int x = -1; x <= 11; x++) {
+        const Color c = texturePixel(img, x, y);
+        if (c != gi.getPixel(x, y, false)) failures++;
+        const Color k = texturePixel(img, x, y, key);
+        const bool in = x >= 0 && y >= 0 && x < 11 && y < 7;
+        if (k != (in && keyed(x, y) ? Colors::TRANSPARENT : c)) failures++;
+      }
+    }
     for (PixelFormat df : kFormats) {
       for (int n = 0; n < 12; n++) {
         OwnedSurface a = createSurface(df, 36, 24),

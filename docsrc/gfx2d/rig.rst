@@ -150,11 +150,14 @@ Instance
    "``void deinit()`` / ``bool isInitialized()`` / ``armature()``", "解放 (メモリは使わなくなるだけ) と状態の取得"
    "``bool pose(anim, frame, visitor = nullptr)``", "``frame`` (小数可、``[0, duration]`` に収める) の姿勢にする。別のアーマチュアのアニメーションなら false で何も変えない"
    "``void poseBind(visitor = nullptr)``", "バインドポーズにする"
-   "``void draw(g)`` / ``draw(g, first, end)``", "描画 (後述)。後者は描画位置 ``[first, end)`` のスロットだけ"
+   "``void draw(g, painter = nullptr)`` / ``draw(g, first, end, painter = nullptr)``", "描画 (後述)。後者は描画位置 ``[first, end)`` のスロットだけ。``painter`` はカスタムペイントのスロットを描く"
    "``int drawIndexOf(slot)`` / ``int slotAt(drawIndex)``", "スロットと現在の描画位置の対応。範囲外は -1"
    "``int boneIndex(name)`` / ``int slotIndex(name)``", "名前から添字 (線形探索)。無ければ -1"
    "``const affine2f &boneTransform(bone)``", "ボーンのワールド変換 (アーマチュア座標系、配置は含まない)"
    "``attachmentOf`` / ``setAttachment`` / ``alphaOf`` / ``setAlpha`` / ``colorOf`` / ``setColor`` / ``strokeWidthOf`` / ``setStrokeWidth``", "スロットの表示中アタッチメント (-1 で非表示)、不透明度、色 (RGB。α は無視)、ストローク幅。次の ``pose()`` まで有効な上書き"
+   "``customPaintOf(slot)`` / ``setCustomPaint(slot, enable)``", "スロットをカスタムペイント (後述) にするか。``pose()`` では変わらず、``init()`` で全て off"
+   "``bool attachmentTransform(slot, [attachment,] affine2f &out)``", "アタッチメントの空間からアーマチュア座標系への変換 (ボーンのワールド変換 × ``local``)。画像なら ``src`` の左上を原点とするピクセル座標。``attachment`` 省略時は表示中のもの。範囲外・非表示なら false"
+   "``bool attachmentToArmature(slot, [attachment,] p, vec2f &out)`` / ``armatureToAttachment(...)``", "アタッチメント上の点とアーマチュア座標系の点の相互変換 (逆変換できない場合も false)"
    "``RectF bounds()`` / ``RectF bounds(placement)``", "表示中のスロットを囲む矩形。アーマチュア座標系と、``placement`` を掛けた後 (保守的)"
 
 ``Instance`` は小さなハンドルで、コピーすると同じメモリを指す 2 つめのハンドルになります。
@@ -204,7 +207,7 @@ Instance
 - クリップ矩形、ブレンドモード、不透明度は ``g`` の状態に従います。境界が (配置を掛けて) クリップ矩形の外にある
   スロットは飛ばすので、帯ごとに描画しても無駄がありません。
 - キーカラー出力のアーマチュアは、キーカラーのテクスチャを描く間だけそのキーカラーを設定し、ARGB4444 の
-  テクスチャ (``--out-format auto`` で混在する) を描く間は外します。終わると呼び出し前の状態に戻します。
+  テクスチャ (``--out-format auto`` で混在する) を描く間は外します。呼び出し側が別のキーを設定していても、キーカラーのテクスチャはアーマチュアのキーで描きます。終わると呼び出し前の状態に戻します。
 - 終わると ``g`` の変換、不透明度、ブレンドモード、カラーキー、クリップ矩形を呼び出し前に戻します
   (ステートスタックは使いません)。ベクタピクチャは ``g`` のアンチエイリアス設定で描かれます。
 - ``SHAPOGFX2D_TRANSFORM=0`` の構成では何も描きません。
@@ -226,6 +229,60 @@ Instance
    g.fillCircle(p, 20, g2::Colors::RED);                 // 手に持ったボール
    g.setTransform(placement);
    inst.draw(g, k, chara::armature.slotCount);           // 手から手前
+
+カスタムペイント
+--------------------------------------------------------------------------------
+
+``setCustomPaint(slot, true)`` にしたスロットは、``draw()`` に渡した ``SlotPainter`` の
+``paintSlot(g, SlotPaint)`` で描きます (``painter`` が nullptr なら描きません)。Flash に置いたリグの一部の
+テクスチャを RAM 上の画像に差し替える、といった用途です。
+
+- 描画順のそのスロットの位置で、カリングの後に呼ばれます。``g`` の変換は ``配置 × ボーンのワールド変換 ×
+  アタッチメントの local`` (``attachmentTransform()`` と同じアタッチメントの空間)、不透明度・ブレンドモード・
+  クリップ矩形、キーカラー出力のアーマチュアの画像ならカラーキーも、通常の描画と同じに設定済みです。
+  ``SlotPaint::alpha`` は ``g`` の不透明度に掛け済みなので、もう一度掛ける必要はありません。
+- ``paintSlot()`` が変えた不透明度・ブレンドモード・カラーキー・クリップ矩形は、``draw()`` が戻します
+  (変換は次のスロットで設定し直し、最後に元に戻します)。フォントや色などその他の状態は戻しません。
+- カリングと ``bounds()`` は元のアタッチメントの矩形で計算されるので、描く内容はその範囲に収めてください。
+  ``texture`` が nullptr のアタッチメントや予約された種類のものは、スロットごと描画の対象外です。
+- ``drawBind()`` にはカスタムペイントはありません。
+
+.. code-block:: cpp
+
+   struct Painter : rig::SlotPainter {
+     g2::Texture face;  // RAM 上の、元のアトラスと同じ配置のテクスチャ
+     void paintSlot(g2::Graphics2D &g, const rig::SlotPaint &p) override {
+       g.drawImage(face, 0, 0, p.at.src, p.at.hull, p.at.hullCount);
+     }
+   };
+   Painter painter;
+   inst.setCustomPaint(inst.slotIndex("face"), true);
+   g.setTransform(placement);
+   inst.draw(g, &painter);
+
+当たり判定
+--------------------------------------------------------------------------------
+
+``Graphics2D::fromTarget()`` と ``armatureToAttachment()`` で画面上の点をアタッチメントの空間に戻し、
+``texturePixel()`` でその位置のテクスチャを読めば、ピクセルの透明度で当たり判定ができます。
+
+.. code-block:: cpp
+
+   bool hit(const g2::Graphics2D &g, const rig::Instance &inst, int slot, g2::vec2f screen) {
+     g2::vec2f w, q;
+     if (!g.fromTarget(screen, w) || !inst.armatureToAttachment(slot, w, q)) return false;
+     const rig::Armature &arm = *inst.armature();
+     const rig::Attachment &at = arm.slots[slot].attachments[inst.attachmentOf(slot)];
+     const int x = (int)std::floor(q.x), y = (int)std::floor(q.y);
+     if (x < 0 || y < 0 || x >= at.src.width || y >= at.src.height) return false;
+     const g2::Color c = arm.colorKeyEnabled
+         ? g2::texturePixel(*at.texture, at.src.x + x, at.src.y + y, arm.colorKey)
+         : g2::texturePixel(*at.texture, at.src.x + x, at.src.y + y);
+     return g2::colorA(c) >= 128;
+   }
+
+``g`` には描画時と同じ配置が設定されている必要があります (``draw()`` は終了時に変換を元に戻すので、
+描画後の ``g`` をそのまま使えます)。ベクタのアタッチメントにはピクセルがないので、この方法は画像のみです。
 
 左右反転は配置の負の倍率 (``affine2f::scaling(-1, 1)`` など) でできます。
 

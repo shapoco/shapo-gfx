@@ -184,6 +184,7 @@ struct Drawer {
   // The clip rectangle a pixel wider (the image paths round positions)
   float cx0, cy0, cx1, cy1;
   bool keyOn;
+  Color curKey;  // while keyOn
   int curOpacity;
   BlendMode curBlend;
   bool clipped = false;
@@ -200,13 +201,14 @@ struct Drawer {
     // ARGB4444 texture has alpha, and comparing its pixels with a key
     // would cost
     keyOn = hadKey;
+    curKey = oldKey;
     curOpacity = opacity;
     curBlend = blend;
   }
   ~Drawer() {
     g.setTransform(base);
     if (curOpacity != opacity || curBlend != blend) g.setBlend(blend, opacity);
-    if (arm.colorKeyEnabled) {
+    if (keyOn != hadKey || (keyOn && curKey != oldKey)) {
       if (hadKey) {
         g.setColorKey(oldKey);
       } else {
@@ -228,10 +230,40 @@ struct Drawer {
              o.y + std::min(bx, 0.0f) + std::min(dy, 0.0f) > cy1);
   }
 
-  // `world`: of the slot's bone; `clipWorld`: of the clip's bone
+  void setKey(const Attachment &at) {
+    if (!arm.colorKeyEnabled || at.kind != AttachmentKind::IMAGE) return;
+    const bool wantKey = at.texture->format != PixelFormat::ARGB4444;
+    if (wantKey == keyOn && (!wantKey || curKey == arm.colorKey)) return;
+    if (wantKey) {
+      g.setColorKey(arm.colorKey);
+      curKey = arm.colorKey;
+    } else {
+      g.clearColorKey();
+    }
+    keyOn = wantKey;
+  }
+
+  // Sets back what a SlotPainter changed of the state the drawing tracks
+  void resync() {
+    if (g.opacity() != curOpacity || g.blendMode() != curBlend) {
+      g.setBlend(curBlend, curOpacity);
+    }
+    if (g.hasColorKey() != keyOn || (keyOn && g.colorKey() != curKey)) {
+      if (keyOn) {
+        g.setColorKey(curKey);
+      } else {
+        g.clearColorKey();
+      }
+    }
+  }
+
+  // `world`: of the slot's bone; `clipWorld`: of the clip's bone; `paint`:
+  // the slot is left to `painter` (nullptr: not drawn)
   void slot(const Slot &sl, const Attachment &at, int alpha, Color color,
             float strokeWidth, const affine2f &world,
-            const affine2f &clipWorld) {
+            const affine2f &clipWorld, SlotPainter *painter = nullptr,
+            const SlotPaint *paint = nullptr) {
+    if (paint && !painter) return;
     const int op = alpha == 255 ? opacity : (opacity * alpha + 127) / 255;
     if (op == 0) return;
     const BlendMode bm =
@@ -261,21 +293,17 @@ struct Drawer {
     } else if (clipped) {
       g.setClipRect(clip);
     }
-    if (at.kind == AttachmentKind::VECTOR) {
+    if (paint) {
+      setKey(at);
+      g.setTransform(base * world * at.local);
+      painter->paintSlot(g, *paint);
+      resync();
+      if (!sl.clip) g.setClipRect(clip);
+    } else if (at.kind == AttachmentKind::VECTOR) {
       g.setTransform(base * world * at.local);
       g.drawPicture(*(const vg::Picture *)at.ext, color, strokeWidth);
     } else {
-      if (arm.colorKeyEnabled) {
-        const bool wantKey = at.texture->format != PixelFormat::ARGB4444;
-        if (wantKey != keyOn) {
-          if (wantKey) {
-            g.setColorKey(arm.colorKey);
-          } else {
-            g.clearColorKey();
-          }
-          keyOn = wantKey;
-        }
-      }
+      setKey(at);
       g.setTransform(base * world * at.local);
       g.drawImage(*at.texture, 0, 0, at.src, at.hull, at.hullCount);
     }
@@ -343,6 +371,7 @@ bool Instance::init(const Armature &a, void *memory, size_t size) {
   slots_ = (SlotState *)(p + sizeof(affine2f) * a.boneCount);
   order_ = (uint8_t *)(slots_ + a.slotCount);
   orderSrc_ = order_;  // forces setOrder() to write the base order
+  for (int i = 0; i < a.slotCount; i++) slots_[i].flags = 0;
   poseBind();
   return true;
 }
@@ -501,7 +530,8 @@ void Instance::updateBounds() {
   }
 }
 
-void Instance::draw(Graphics2D &g, int first, int end) const {
+void Instance::draw(Graphics2D &g, int first, int end,
+                    SlotPainter *painter) const {
   if (!RIG || !TRANSFORM || !arm_) return;
   const Armature &arm = *arm_;
   first = std::max(first, 0);
@@ -517,10 +547,18 @@ void Instance::draw(Graphics2D &g, int first, int end) const {
       continue;
     const Slot &sl = arm.slots[s];
     const Attachment &at = sl.attachments[st.attachment];
-    d.slot(sl, at, st.alpha, makeColor(st.r, st.g, st.b), st.strokeWidth,
-           world_[sl.bone],
-           sl.clip && sl.clipBone < arm.boneCount ? world_[sl.clipBone]
-                                                  : world_[sl.bone]);
+    const Color c = makeColor(st.r, st.g, st.b);
+    const affine2f &cw = sl.clip && sl.clipBone < arm.boneCount
+                             ? world_[sl.clipBone]
+                             : world_[sl.bone];
+    if (st.flags & FLAG_CUSTOM_PAINT) {
+      const SlotPaint p = {s, st.attachment, sl, at, st.alpha, c,
+                           st.strokeWidth};
+      d.slot(sl, at, st.alpha, c, st.strokeWidth, world_[sl.bone], cw,
+             painter, &p);
+    } else {
+      d.slot(sl, at, st.alpha, c, st.strokeWidth, world_[sl.bone], cw);
+    }
   }
 }
 
@@ -605,6 +643,66 @@ float Instance::strokeWidthOf(int slot) const {
 void Instance::setStrokeWidth(int slot, float width) {
   if (!arm_ || slot < 0 || slot >= arm_->slotCount) return;
   slots_[slot].strokeWidth = width;
+}
+
+bool Instance::customPaintOf(int slot) const {
+  if (!arm_ || slot < 0 || slot >= arm_->slotCount) return false;
+  return (slots_[slot].flags & FLAG_CUSTOM_PAINT) != 0;
+}
+
+void Instance::setCustomPaint(int slot, bool enable) {
+  if (!arm_ || slot < 0 || slot >= arm_->slotCount) return;
+  uint8_t &f = slots_[slot].flags;
+  f = enable ? (uint8_t)(f | FLAG_CUSTOM_PAINT)
+             : (uint8_t)(f & ~FLAG_CUSTOM_PAINT);
+}
+
+bool Instance::attachmentTransform(int slot, affine2f &out) const {
+  if (!arm_ || slot < 0 || slot >= arm_->slotCount) return false;
+  return attachmentTransform(slot, slots_[slot].attachment, out);
+}
+
+bool Instance::attachmentTransform(int slot, int attachment,
+                                   affine2f &out) const {
+  if (!arm_ || slot < 0 || slot >= arm_->slotCount) return false;
+  const Slot &sl = arm_->slots[slot];
+  if (attachment < 0 || attachment >= sl.attachmentCount ||
+      sl.bone >= arm_->boneCount)
+    return false;
+  out = world_[sl.bone] * sl.attachments[attachment].local;
+  return true;
+}
+
+bool Instance::attachmentToArmature(int slot, const vec2f &p,
+                                    vec2f &out) const {
+  affine2f m = affine2f::identity();
+  if (!attachmentTransform(slot, m)) return false;
+  out = m.apply(p);
+  return true;
+}
+
+bool Instance::attachmentToArmature(int slot, int attachment, const vec2f &p,
+                                    vec2f &out) const {
+  affine2f m = affine2f::identity();
+  if (!attachmentTransform(slot, attachment, m)) return false;
+  out = m.apply(p);
+  return true;
+}
+
+bool Instance::armatureToAttachment(int slot, const vec2f &p,
+                                    vec2f &out) const {
+  affine2f m = affine2f::identity(), inv = m;
+  if (!attachmentTransform(slot, m) || !m.invert(inv)) return false;
+  out = inv.apply(p);
+  return true;
+}
+
+bool Instance::armatureToAttachment(int slot, int attachment, const vec2f &p,
+                                    vec2f &out) const {
+  affine2f m = affine2f::identity(), inv = m;
+  if (!attachmentTransform(slot, attachment, m) || !m.invert(inv)) return false;
+  out = inv.apply(p);
+  return true;
 }
 
 RectF Instance::bounds(const affine2f &placement) const {

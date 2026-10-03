@@ -303,6 +303,32 @@ class BoneVisitor {
   virtual void onBone(int bone, BonePose &local) = 0;
 };
 
+// A slot with custom paint on (Instance::setCustomPaint()), as Instance::draw()
+// would have drawn it
+struct SlotPaint {
+  int slot;
+  int attachment;
+  const Slot &sl;
+  const Attachment &at;
+  int alpha;          // of the slot, 0..255 (already in the opacity of `g`)
+  Color color;        // of the slot (opaque)
+  float strokeWidth;  // of the slot
+};
+
+// Paints the slots with custom paint on, in place of their attachments (a
+// texture in RAM in place of one in flash, ...)
+class SlotPainter {
+ public:
+  virtual ~SlotPainter() = default;
+  // Called by Instance::draw() in the slot's place in the draw order, with
+  // the transform of `g` mapping the attachment's space (that of
+  // Instance::attachmentTransform(): the pixels of `at.src` from its
+  // top-left corner for an image) to target pixels, and the opacity, blend
+  // mode, clip rectangle and color key of `g` set as for drawing the
+  // attachment. The painter may change them; draw() sets them back.
+  virtual void paintSlot(Graphics2D &g, const SlotPaint &p) = 0;
+};
+
 // The pose of one armature: the world transforms of the bones, the state of
 // the slots and the draw order, in memory the user provides. No memory is
 // allocated. Copying an Instance makes a second handle to the same memory.
@@ -326,10 +352,14 @@ class Instance {
   // Draw with the transform of `g` as the placement of the armature (its
   // clip, blend mode and opacity apply too). Restores the transform,
   // opacity, blend mode and color key of `g` afterwards. Needs
-  // SHAPOGFX2D_TRANSFORM (draws nothing without).
-  void draw(Graphics2D &g) const { draw(g, 0, arm_ ? arm_->slotCount : 0); }
+  // SHAPOGFX2D_TRANSFORM (draws nothing without). `painter` paints the slots
+  // with custom paint on (nullptr: they are not drawn).
+  void draw(Graphics2D &g, SlotPainter *painter = nullptr) const {
+    draw(g, 0, arm_ ? arm_->slotCount : 0, painter);
+  }
   // Only the draw positions [first, end), to draw something between slots
-  void draw(Graphics2D &g, int first, int end) const;
+  void draw(Graphics2D &g, int first, int end,
+            SlotPainter *painter = nullptr) const;
 
   int drawIndexOf(int slot) const;  // -1 if out of range
   int slotAt(int drawIndex) const;  // -1 if out of range
@@ -349,6 +379,26 @@ class Instance {
   void setColor(int slot, Color c);
   float strokeWidthOf(int slot) const;  // 1 if out of range
   void setStrokeWidth(int slot, float width);
+  // Whether draw() leaves a slot to its SlotPainter. Kept by pose(); off
+  // after init().
+  bool customPaintOf(int slot) const;  // false if out of range
+  void setCustomPaint(int slot, bool enable);
+
+  // The transform from the space of an attachment of a slot to the
+  // armature's space (the bone's world transform x Attachment::local); for
+  // an image its space is that of the pixels of `src` from its top-left
+  // corner. Without `attachment`, the one the slot shows. False (and `out`
+  // unchanged) if the slot or attachment is out of range or hidden.
+  bool attachmentTransform(int slot, affine2f &out) const;
+  bool attachmentTransform(int slot, int attachment, affine2f &out) const;
+  // A point of the attachment's space to the armature's space, and back
+  // (false also if the transform is not invertible)
+  bool attachmentToArmature(int slot, const vec2f &p, vec2f &out) const;
+  bool attachmentToArmature(int slot, int attachment, const vec2f &p,
+                            vec2f &out) const;
+  bool armatureToAttachment(int slot, const vec2f &p, vec2f &out) const;
+  bool armatureToAttachment(int slot, int attachment, const vec2f &p,
+                            vec2f &out) const;
   // Bounding box of the visible attachments, in the armature's space and
   // after `placement` (conservative)
   RectF bounds() const { return bounds_; }
@@ -360,9 +410,10 @@ class Instance {
     int8_t attachment;
     uint8_t alpha;
     uint8_t r, g, b;
-    uint8_t pad;
+    uint8_t flags;  // FLAG_*
     float strokeWidth;
   };
+  static constexpr uint8_t FLAG_CUSTOM_PAINT = 0x01;
 
   const Armature *arm_ = nullptr;
   affine2f *world_ = nullptr;

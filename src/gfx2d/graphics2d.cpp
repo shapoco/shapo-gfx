@@ -369,6 +369,32 @@ Color Graphics2D::getPixel(int x, int y, bool transformed) const {
   return c;
 }
 
+bool Graphics2D::fromTarget(const vec2f &p, vec2f &out) const {
+  affine2f inv = affine2f::identity();
+  if (!state_.transform.invert(inv)) return false;
+  out = inv.apply(p);
+  return true;
+}
+
+Color texturePixel(const Texture &t, int x, int y) {
+  if (!t.pixels || x < 0 || y < 0 || x >= t.width || y >= t.height) {
+    return Colors::TRANSPARENT;
+  }
+  Color c;
+  readColorsFmt(t.format, t.linePtr(y), x, 1, &c);
+  return c;
+}
+
+Color texturePixel(const Texture &t, int x, int y, Color key) {
+  const Color c = texturePixel(t, x, y);
+  // The conversion to Color is one-to-one: the same test as on the native
+  // pixels
+  if (c == nativeToColor(t.format, colorToNative(t.format, key))) {
+    return Colors::TRANSPARENT;
+  }
+  return c;
+}
+
 // A continuous rectangle through the transform (normalized)
 static void fillRectF(Graphics2D &g, const RectF &r, const Paint &p) {
   if (!TRANSFORM || G2Impl::kind(g) <= TransformKind::SCALE) {
