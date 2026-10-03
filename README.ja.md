@@ -154,9 +154,11 @@ src/                     実装
 bin/                     img2cpp, gltf2cpp, dbones2cpp, svg2cpp とその依存パッケージ定義
 library.json             PlatformIO マニフェスト
 example/wasm/            demo2d, demo3d, demorig (WASM 版とネイティブ版のエントリポイント)
-example/common/demorig/  demorig のシーン、ビュー、オーバーレイ (WASM 版と M5Stack 版で共用)
+example/common/          各デモ (demo2d, demo3d, demorig) のシーン (WASM 版と実機版で共用)
 example/m5*/demorig/     M5Stack CoreS3 / Tab5 版の demorig (ESP-IDF プロジェクト)
 example/m5common/        それらが共用する ESP-IDF コンポーネント (同ディレクトリの README 参照)
+example/rp2350-touch-lcd-2/  Waveshare RP2350-Touch-LCD-2 版の demo2d, demo3d, demorig (Pico SDK、同ディレクトリの README 参照)
+example/rp2common/       それらが共用する RP2350 のフロントエンド (パネル、タッチ、2 コアのフレームループ)
 docs/                    公開サイト: デモページとその WASM ビルド
 docsrc/                  マニュアルの Sphinx ソース。CI で /ref/ にデプロイ
                          (ローカルで読むには `make -C docsrc preview`)

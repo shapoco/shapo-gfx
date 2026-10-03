@@ -143,7 +143,10 @@ root, which a core without an FPU keeps. With `SHAPOGFX2D_RP2_INTERP`
 a rotated or sheared `drawImage()` walks the source through `interp0` -- lane 0 turns
 the 16.16 u into the byte offset of the texel, lane 1 the 16.16 v into the byte
 offset of the row (hence the power-of-two stride), `POP_FULL` returns the address
-and steps both -- which takes the per-pixel fetch of a copy from 11 instructions
+and steps both; the lanes' shift is a right rotation, so each mask ends at the top of
+the integer part (lane 0 bits 1..16, lane 1 bits log2(stride)..15 + log2(stride)) to
+keep the rotated fraction bits out (1.7.1 and earlier masked up to bit 31 and read
+from a wrong address on the hardware) -- which takes the per-pixel fetch of a copy from 11 instructions
 to 5 on the Cortex-M33. The call saves and restores `interp0` of the calling core;
 the same caveat about interrupt handlers applies, and the target must link
 `hardware_interp`. Every other image goes through the portable walk, which gives
@@ -1965,13 +1968,14 @@ module.
 
 ## Sample programs
 
-The samples are 480x320 and render into an RGB565_SWAPPED buffer. Each has a WASM entry
-point (`<name>_init`, `<name>_frame`, `<name>_get_fb`, `<name>_get_width`,
+The samples are 480x320 and render into an RGB565_SWAPPED buffer. Their scenes are
+`example/common/<name>/` (ShapoGFX only), shared with the builds for devices. Each has a
+WASM entry point (`<name>_init`, `<name>_frame`, `<name>_get_fb`, `<name>_get_width`,
 `<name>_get_height`) driven by `docs/example/viewer.js`, and a native `main()` that
 writes one frame as a PPM file. The WASM binaries are committed so that `docs/` can be
 served as a static site.
 
-- `example/wasm/demo2d/`: exercises the `Graphics2D` API only (no reference to
+- `example/wasm/demo2d/` (scene: `example/common/demo2d/`): exercises the `Graphics2D` API only (no reference to
   `gfx3d`): a scrolling ellipse pattern, filled and outlined polygon stars, ARGB4444
   sprites with alpha and additive blending, GRAY1 bitmaps with and without a
   background color, an RGB444 off-screen surface drawn with a second `Graphics2D` and
@@ -1981,14 +1985,23 @@ served as a static site.
   a partial copy of the panel with its background keyed out (color key), and the
   panel scaled, mirrored and rotated (with a frame and a caption turning with it,
   under `pushState()`) next to a squashed, spinning sprite. It runs with an arena of
-  4 KB.
-- `example/wasm/demo3d/`: a textured floor, an environment-mapped torus (`putTorus`),
+  4 KB. `sceneInit(w, h)` picks one of two layouts: the 480 x 320 one, and a compact
+  one for 320 x 240 (smaller groups, no mirrored thumbnail, a few overlapping a
+  little). `sceneUpdate(t)` moves the balls and draws the off-screen panel once per
+  frame; `sceneDraw(g, bandY)` only reads the scene and draws any band of rows (the
+  band's translation is the base of the transform, and the clip rectangle of the
+  striped viewport moves with it), so two cores can draw one frame. The native build
+  takes the size and a band count on the command line.
+- `example/wasm/demo3d/` (scene: `example/common/demo3d/`): a textured floor, an environment-mapped torus (`putTorus`),
   opaque, alpha-blended and additive cubes, and a vertex-colored windmill generated
   from `model/windmill.glb` (`model/make_windmill.py`) with `gltf2cpp` whose "Blades"
   node is rotated by a `NodeVisitor`. The frame is composed in two passes: a 2D
   backdrop (gradient, stars, caption) drawn with `Graphics2D`, then the 3D scene
   rendered in four bands with the clear disabled. Mouse and keyboard control the
-  camera in the browser.
+  camera in the browser. `example/common/demo3d/demo3d.cpp` (`demo3d::Demo`) is the
+  touch screen version of the controls for the device builds: a drag turns the
+  camera, (+) / (-) buttons move it closer / farther (animated), and the frame rate
+  is drawn at the bottom left; its backdrop and overlay draw any band of rows.
 - `example/wasm/demorig/`: a DragonBones character, pop stars from an animated SVG
   (`assets/2d/pop_star.svg` converted by svg2cpp: two `rig::Instance`s restarted in
   turn every second at a random place, size and angle behind the character), and
@@ -2041,6 +2054,20 @@ served as a static site.
   (`rgb_chan_sep.hpp`): the parts come from flash through the cache, and the
   padding of the atlas rows would cost a third more cache lines per frame
   (rgb_chan: 5133 lines of 64 bytes against 3464).
+- `example/rp2350-touch-lcd-2/demo2d/`, `demo3d/`, `demorig/`: the three demos on the
+  Waveshare RP2350-Touch-LCD-2 (RP2350A, 240 x 320 ST7789T3 on SPI used in landscape
+  as 320 x 240, CST816D touch), Pico SDK projects sharing `example/rp2common/`: the
+  board header, the clocks (250 MHz at 1.20 V, the flash interface at clk_sys / 3,
+  clk_peri put back on clk_sys / 2 since the SDK moves it to the 48 MHz USB PLL, the
+  panel's SPI at 62.5 MHz), post-mortem diagnostics (fault record and watchdog), the panel and touch drivers and the frame loop of the
+  M5Stack builds (strips of 60 rows split between the cores, two strip buffers, DMA
+  to the panel with one window per frame). demo2d uses the compact layout and shows
+  the frame rate; demo3d renders with two render contexts (one per core) and its
+  rasterizer in RAM (`SHAPOGFX3D_HOT_ATTR`); demorig draws from the atlas
+  (`rgb_chan.hpp`), whose power-of-two stride lets the turned parts take the
+  interpolator path (a little faster than the per-image textures there, 28.6
+  against 28.0 fps). The SIO interpolator paths of ShapoGFX are on (`RP2COMMON_INTERP=OFF`
+  turns them off for comparison).
 
 ## Tests
 

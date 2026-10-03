@@ -1,9 +1,10 @@
 #include "scene.hpp"
 
-#include <cstring>
-
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+
+#include "shapoco/gfx2d/fonts.hpp"
 
 // Windmill model generated from model/windmill.glb with bin/gltf2cpp
 #include "model/windmill.hpp"
@@ -235,6 +236,31 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   r.popState();
 
   r.endScene();
+}
+
+void drawBackdrop(g2::Graphics2D &g, int width, int height, float t) {
+  constexpr int BANDS = 20;
+  const g2::Color top = g2::makeColor(4, 6, 24),
+                  horizon = g2::makeColor(40, 30, 70);
+  for (int i = 0; i < BANDS; i++) {
+    int y0 = i * height / BANDS, y1 = (i + 1) * height / BANDS;
+    g.fillRect(0, y0, width, y1 - y0,
+               g2::lerpColor(top, horizon, i * 256 / (BANDS - 1)));
+  }
+  for (int i = 0; i < 60; i++) {
+    uint32_t h = (uint32_t)i * 2654435761u;
+    int x = (int)(h % width), y = (int)((h >> 9) % (height * 2 / 3));
+    int tw = 140 + (int)(100.0f * std::sin(t * 2.0f + i));
+    g.setPixel(x, y, g2::makeColor(255, 255, 230, tw));
+  }
+  g.setFont(&g2::ShapoSansP_s12c09a01w02);
+  g.setTextColor(g2::makeColor(0, 0, 0, 160));
+  g.drawString(9, 9, "ShapoGFX demo3d");
+  g.setTextColor(g2::makeColor(220, 230, 255));
+  g.drawString(8, 8, "ShapoGFX demo3d");
+  g.setFont(&g2::ShapoSansP_s08c07);
+  g.setTextColor(g2::makeColor(160, 170, 200));
+  g.drawString(8, 30, "3D scene rendered over a 2D backdrop (clear disabled)");
 }
 
 }  // namespace demo3d

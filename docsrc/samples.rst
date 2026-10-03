@@ -31,12 +31,16 @@
 .. csv-table::
    :header: "パス", "内容"
 
-   "``example/wasm/demo2d/``", "``scene.cpp`` (描画)、``main.cpp`` (WASM エクスポートとネイティブ ``main()``)、``Makefile``、``CMakeLists.txt``"
-   "``example/wasm/demo3d/``", "同上。``model/`` に風車の生成スクリプト、``.glb``、生成ヘッダ"
+   "``example/wasm/demo2d/``", "``main.cpp`` (WASM エクスポートとネイティブ ``main()``)、``Makefile``、``CMakeLists.txt``"
+   "``example/wasm/demo3d/``", "同上"
+   "``example/common/demo2d/``", "demo2d のシーン (``scene.cpp``)。480x320 と 320x240 (コンパクト) の 2 つのレイアウトを持ち、帯単位で描画可能"
+   "``example/common/demo3d/``", "demo3d のシーンと 2D の背景 (``scene.cpp``)、タッチ端末向けのカメラ操作・ボタン・FPS 表示 (``demo3d.cpp``)。``model/`` に風車の生成スクリプト、``.glb``、生成ヘッダ"
    "``example/wasm/demorig/``", "``main.cpp`` (WASM エクスポートとネイティブ ``main()``)、``Makefile``、``CMakeLists.txt``"
    "``example/common/demorig/``", "demorig のシーン (``scene.cpp``) とビュー・ボタン・FPS 表示 (``demorig.cpp``)。ShapoGFX だけに依存し、WASM 版と M5Stack 版で共有。``model/rgb_chan.hpp`` と ``model/pop_star.hpp`` は ``make -C example/wasm/demorig model`` で ``assets/2d/`` から生成"
    "``example/m5cores3/demorig/`` ほか", "M5Stack 版 demorig の ESP-IDF プロジェクト (下記)"
    "``example/m5common/``", "M5Stack 版の共通コンポーネント (ShapoGFX、demorig の共通コード、M5Unified を使うフロントエンド)"
+   "``example/rp2350-touch-lcd-2/``", "Waveshare RP2350-Touch-LCD-2 版の demo2d / demo3d / demorig (Pico SDK のプロジェクト、下記)"
+   "``example/rp2common/``", "RP2350 版の共通部分 (ボード定義、クロック設定、パネル・タッチのドライバ、2 コアのフレームループ)"
    "``docs/example/``", "``viewer.js`` (共通ビューア)、``style.css``、各デモの ``index.html`` と ``.wasm``"
 
 ネイティブ版は 1 フレームを PPM ファイルに書き出します (ブラウザなしで動作確認するため)。
@@ -45,6 +49,8 @@
 
    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
    ./build/example/wasm/demo3d/demo3d frame.ppm 1.5    # 第 2 引数は経過秒
+   # demo2d: 経過秒、画面サイズ (320x240 以下はコンパクトなレイアウト)、バンド数
+   ./build/example/wasm/demo2d/demo2d frame.ppm 1.5 320x240 4
    # demorig: 経過秒、画面サイズ、倍率、画面中央に来るシーン上の点、バンド数、アンチエイリアス (1)
    ./build/example/wasm/demorig/demorig frame.ppm 1.5 320x240 16 160 120 5 1
 
@@ -100,6 +106,38 @@ CoreS3 27 fps / Tab5 56 fps になりましたが、縁の画質が落ちすぎ�
 Tab5 の伸びが大きいのは、パーツ全体が L2 キャッシュ (256 KB) に収まるかどうかで決まっているためです。
 オプションの効き方は :doc:`../tools/dbones2cpp` の「性能のためのオプションの選び方」を参照してください。キャラクタを拡大すると、重なったパーツの描画面積が増えるため描画が重くなります
 (320x240、x86-64 の実行命令数で、等倍の約 380 万に対して 2 倍以上では約 840 万)。
+
+RP2350 版 (Waveshare RP2350-Touch-LCD-2)
+================================================================================
+
+demo2d、demo3d、demorig は `Waveshare RP2350-Touch-LCD-2 <https://www.waveshare.com/wiki/RP2350-Touch-LCD-2>`__
+(カメラ付きの -C も同じ) でも動きます。Pico SDK のプロジェクトで、2 インチ 240x320 のパネル (ST7789T3、SPI) を
+横に倒して 320x240 で使い、demo3d と demorig はタッチパネル (CST816D) で操作します。
+
+.. csv-table::
+   :header: "デモ", "プロジェクト", "操作"
+
+   "demo2d", "``example/rp2350-touch-lcd-2/demo2d/``", "なし (320x240 用のレイアウト、左下に FPS)"
+   "demo3d", "``example/rp2350-touch-lcd-2/demo3d/``", "ドラッグでカメラを回転、(+) / (-) で距離"
+   "demorig", "``example/rp2350-touch-lcd-2/demorig/``", "ボタンとスワイプ (M5Stack 版と同じ)"
+
+.. code-block:: sh
+
+   cd example/rp2350-touch-lcd-2
+   ./build.sh               # 3 つともビルド (<demo>/build/<demo>.uf2)
+   ./flash.sh demorig       # picotool で書き込み (.uf2 を RP2350 ドライブにコピーしても可)
+
+Pico SDK は ``PICO_SDK_PATH`` (既定 ``~/pico/pico-sdk``) を使います。CPU は ARM (Cortex-M33) で、
+250 MHz (1.20 V) にオーバークロックし、パネルの SPI を 62.5 MHz で駆動します。フラッシュのクロックは
+クロックを上げる前に clk_sys / 3 (83 MHz) に設定します。SDK はシステムクロックの変更時に clk_peri を 48 MHz の
+USB PLL に切り替えるため、clk_peri を clk_sys / 2 (125 MHz) に設定し直しています。
+HardFault やハングでリブートした場合、次の起動時にその内容 (PC、各コアの位置) をシリアルに出します。フレームの描画は M5Stack 版と同じく 60 行のストリップ単位で、
+上半分をコア 0、下半分をコア 1 が同時に描き、前のストリップを DMA で送る間に次のストリップを描きます。
+demo3d はコアごとにレンダーコンテキストを使い (``Config::renderContexts = 2``)、スパンのラスタライザを RAM に置きます。
+USB のシリアルには起動時にクロック設定、その後 2 秒ごとにフレームレートと各処理の時間が出ます。
+オプション (補間器パスの無効化、1 コア描画、画面の 180 度回転、demorig のアトラス版モデルなど) は
+``example/rp2350-touch-lcd-2/README.md`` を参照してください。
+1 フレームの転送に 19.7 ms かかるため、フレームレートの上限は約 50 fps です。
 
 新しいデモを作る
 ================================================================================

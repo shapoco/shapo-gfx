@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate windmill.glb, the small model shown in demo3d, and its C++ header:
 
-  python3 example/wasm/demo3d/model/make_windmill.py
-  bin/gltf2cpp --namespace windmill example/wasm/demo3d/model/windmill.glb example/wasm/demo3d/model/windmill.hpp
+  python3 example/common/demo3d/model/make_windmill.py
+  bin/gltf2cpp --namespace windmill example/common/demo3d/model/windmill.glb example/common/demo3d/model/windmill.hpp
 
 The model is a tapered tower (vertex-colored), a roof and a hub node named
 "Blades" with four blades; demo3d rotates the "Blades" node with a NodeVisitor.

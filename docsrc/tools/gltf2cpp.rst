@@ -89,9 +89,9 @@ demo3d の風車は次の手順で作られています。
 
 .. code-block:: sh
 
-   python3 example/wasm/demo3d/model/make_windmill.py                 # windmill.glb を生成 (Blender 等の出力でも同じ)
-   bin/gltf2cpp --namespace windmill example/wasm/demo3d/model/windmill.glb \
-                example/wasm/demo3d/model/windmill.hpp
+   python3 example/common/demo3d/model/make_windmill.py                 # windmill.glb を生成 (Blender 等の出力でも同じ)
+   bin/gltf2cpp --namespace windmill example/common/demo3d/model/windmill.glb \
+                example/common/demo3d/model/windmill.hpp
 
 Blender からエクスポートする場合は「glTF Binary (.glb)」で、テクスチャは埋め込み、
 +Y up (既定) のままにしてください。

@@ -73,8 +73,10 @@ namespace shapoco::gfx2d::arch::rp2 {
 // Affine texel walk through interp0: lane 0 turns u (16.16 texels) into the
 // byte offset of the texel in its row, lane 1 turns v into the byte offset
 // of the row, and POP_FULL returns the address of the texel and steps both
-// (ADD_RAW). u and v stay within the image (the caller clips every row), so
-// the masks only drop the fraction bits.
+// (ADD_RAW). u and v stay within the image (the caller clips every row).
+// The lanes' SHIFT is a right rotation, not a shift: the fraction bits come
+// back at the top, so each mask ends where the integer part does (bit 16 of
+// u >> 15, bit 15 + log2s of v >> (16 - log2s)).
 struct InterpAffine {
   static bool usable(const Texture &img) {
     const uint32_t s = img.stride;
@@ -88,10 +90,10 @@ struct InterpAffine {
     interp_config c = interp_default_config();
     interp_config_set_add_raw(&c, true);
     interp_config_set_shift(&c, 15);  // texel index x 2 bytes
-    interp_config_set_mask(&c, 1, 31);
+    interp_config_set_mask(&c, 1, 16);
     interp_set_config(interp0, 0, &c);
     interp_config_set_shift(&c, 16 - log2s);  // row index x stride
-    interp_config_set_mask(&c, log2s, 31);
+    interp_config_set_mask(&c, log2s, 15 + log2s);
     interp_set_config(interp0, 1, &c);
     interp0->base[0] = (uint32_t)du;
     interp0->base[1] = (uint32_t)dv;

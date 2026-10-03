@@ -154,9 +154,11 @@ src/                     implementation
 bin/                     img2cpp, gltf2cpp, dbones2cpp, svg2cpp and their requirements
 library.json             PlatformIO manifest
 example/wasm/            demo2d, demo3d, demorig (WASM and native entry points)
-example/common/demorig/  demorig's scene, view and overlay (shared by the WASM and M5Stack builds)
+example/common/          the demos' scenes (demo2d, demo3d, demorig), shared by the WASM and device builds
 example/m5*/demorig/     demorig on M5Stack CoreS3 / Tab5 (ESP-IDF projects)
 example/m5common/        their shared ESP-IDF components (see its README)
+example/rp2350-touch-lcd-2/  demo2d, demo3d, demorig on the Waveshare RP2350-Touch-LCD-2 (Pico SDK, see its README)
+example/rp2common/       their shared RP2350 front end (panel, touch, dual-core frame loop)
 docs/                    published site: demo pages and their WASM builds
 docsrc/                  Sphinx sources of the manual, deployed to /ref/ by CI
                          (`make -C docsrc preview` to read it locally)
