@@ -2062,8 +2062,10 @@ served as a static site.
   panel's SPI at 62.5 MHz), post-mortem diagnostics (fault record and watchdog), the panel and touch drivers and the frame loop of the
   M5Stack builds (strips of 60 rows split between the cores, two strip buffers, DMA
   to the panel with one window per frame). demo2d uses the compact layout and shows
-  the frame rate; demo3d renders with two render contexts (one per core) and its
-  rasterizer in RAM (`SHAPOGFX3D_HOT_ATTR`); demorig draws from the atlas
+  the frame rate; demo3d renders with two render contexts (one per core) and runs the
+  3D renderer's code from RAM (`SHAPOGFX3D_HOT_ATTR` for the rasterizer, and a
+  linker script for the rest: the scene's build took 12.3 ms from flash through the
+  16 KB XIP cache, 5.4 ms from RAM; 31 fps became 41); demorig draws from the atlas
   (`rgb_chan.hpp`), whose power-of-two stride lets the turned parts take the
   interpolator path (a little faster than the per-image textures there, 28.6
   against 28.0 fps). The SIO interpolator paths of ShapoGFX are on (`RP2COMMON_INTERP=OFF`

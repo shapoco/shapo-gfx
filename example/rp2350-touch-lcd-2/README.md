@@ -9,7 +9,7 @@ on SPI, CST816D touch on I2C, 16 MB flash.
 | Project | Frame | Input |
 |---|---|---|
 | `demo2d/` | 320x240, the compact layout of the scene, frame rate at the bottom left | none |
-| `demo3d/` | 320x240, two render contexts (one per core), the rasterizer in RAM | drag to turn the camera, (+) / (-) to move it closer / farther |
+| `demo3d/` | 320x240, two render contexts (one per core), the 3D renderer's code in RAM | drag to turn the camera, (+) / (-) to move it closer / farther |
 | `demorig/` | 320x240, the atlas model (`rgb_chan.hpp`) | zoom and (AA) buttons, swipe to scroll |
 
 The screen is used in landscape. `-DRP2COMMON_LCD_FLIP=ON` turns it by 180
@@ -66,6 +66,8 @@ Options (`./build.sh <demo> -- -D...`):
 | `RP2COMMON_LCD_FLIP` | OFF | turn the screen by 180 degrees |
 | `RP2COMMON_STDIO_UART` | OFF | log to UART0 (GP0 / GP1) instead of USB |
 | `DEMO3D_HOT` (demo3d) | ON | the span rasterizer in RAM (`SHAPOGFX3D_HOT_ATTR`) |
+| `DEMO3D_GFX3D_IN_RAM` (demo3d) | ON | all the code of `src/gfx3d/` and of the scene in RAM (a linker script derived from the SDK's, which leaves those files out of flash): building the scene from flash through the 16 KB XIP cache took 12.3 ms instead of 5.4, 31 fps instead of 41; costs about 62 KB of RAM |
+| `DEMO3D_PROFILE` (demo3d) | OFF | every 2 seconds: the time of each part of the scene's build, the sort, the backdrop / 3D / overlay of each core, the XIP cache hit rates and the scene's size |
 | `DEMORIG_ATLAS` (demorig) | ON | the atlas model (`rgb_chan.hpp`): a power-of-two stride, so the turned parts take the interpolator path, though more bytes are read from flash per frame; OFF for one texture per image (`rgb_chan_sep.hpp`, as on the M5Stack). The atlas was a little faster: 28.6 against 28.0 fps at zoom 1 |
 
 The clocks are set by cache variables of the same names as the macros of

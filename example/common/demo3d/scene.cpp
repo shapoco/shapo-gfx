@@ -19,6 +19,16 @@ using g3::vec3f;
 
 static constexpr float PI = 3.14159265358979f;
 
+// Profiling hook: a build that defines DEMO3D_PROFILE=1 provides
+// demo3dProfileMark(), called after each part of sceneBuild() with its name
+// (the RP2350 build times the parts with it). Nothing otherwise.
+#if DEMO3D_PROFILE
+void demo3dProfileMark(const char *part);
+#define DEMO3D_MARK(part) demo3dProfileMark(part)
+#else
+#define DEMO3D_MARK(part)
+#endif
+
 // ---------------------------------------------------------------------------
 // Textures (on a real target these would be const data in flash;
 // here they are generated at startup). RGB565_SWAPPED: byte-swapped in memory.
@@ -177,12 +187,14 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   // Lights (specified in world space)
   r.enableParallelLight({-0.5f, -1.0f, -0.6f}, {1.0f, 0.98f, 0.9f, 1.0f});
   r.enableEnvironmentLight({0.25f, 0.28f, 0.38f, 1.0f});
+  DEMO3D_MARK("setup");
 
   // Floor: one large quad per face. With the default vertical perspective
   // correction (SHAPOGFX3D_CORRECT_PERSPECTIVE=1) the texture stays straight
   // without subdividing; with level 0 you would want divs=4 or so.
   r.setMaterial(matFloor);
   r.putCube({0, -1.35f, 0}, {7.0f, 0.3f, 7.0f});
+  DEMO3D_MARK("floor");
 
   // Chrome torus
   r.pushState();
@@ -192,6 +204,7 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   r.setMaterial(matChrome);
   r.putTorus({0, 0, 0}, 1.0f, 0.35f, 24, 12);
   r.popState();
+  DEMO3D_MARK("torus");
 
   // Red cube
   r.pushState();
@@ -200,6 +213,7 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   r.setMaterial(matRed);
   r.putCube({0, 0, 0}, {1.0f, 1.0f, 1.0f});
   r.popState();
+  DEMO3D_MARK("red cube");
 
   // Translucent cube (orbiting)
   r.pushState();
@@ -214,6 +228,7 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   r.putWireCube({0, 0, 0}, {1.2f, 1.2f, 1.2f});
   r.setDepthBias(0.0f);
   r.popState();
+  DEMO3D_MARK("glass cube");
 
   // Windmill: a glTF model drawn with putScene(); the blades rotate through the
   // visitor
@@ -225,6 +240,7 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   r.scale(0.75f, 0.75f, 0.75f);
   r.putScene(windmill::scene, &spinner);
   r.popState();
+  DEMO3D_MARK("windmill");
 
   // Additive glowing cube (orbiting the other way)
   r.pushState();
@@ -234,8 +250,10 @@ void sceneBuild(g3::Graphics3D &r, float t, float yaw, float pitch, float dist,
   r.setMaterial(matGlow);
   r.putCube({0, 0, 0}, {0.5f, 0.5f, 0.5f});
   r.popState();
+  DEMO3D_MARK("glow cube");
 
   r.endScene();
+  DEMO3D_MARK("endScene");
 }
 
 void drawBackdrop(g2::Graphics2D &g, int width, int height, float t) {
