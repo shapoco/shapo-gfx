@@ -17,6 +17,9 @@ html_theme = "sphinx_rtd_theme"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_title = "ShapoGFX Reference Manual"
+# Published URL of the manual: gives every page a canonical link and the
+# og:url of the OGP tags in _templates/layout.html
+html_baseurl = "https://shapoco.github.io/shapo-gfx/ref/"
 html_short_title = "ShapoGFX"
 html_show_sourcelink = False
 html_copy_source = False
