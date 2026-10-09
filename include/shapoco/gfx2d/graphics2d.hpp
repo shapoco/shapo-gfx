@@ -371,6 +371,32 @@ class Graphics2D {
   void drawBitmap(const Texture &bitmap, int dx, int dy, const Rect &src,
                   Color fg, Color bg = Colors::TRANSPARENT);
 
+  // --- Silhouettes -----------------------------------------------------------
+  // Fill the shape of an image with a color: each target pixel is painted c
+  // with c's alpha scaled by the opacity of the image pixel under it (the
+  // alpha of an ARGB4444 pixel; 0 for a pixel of the color key; opaque
+  // otherwise), under the transform, blend mode and opacity like
+  // drawImage(), and antialiased like it when antialiasing is on. Nothing
+  // is drawn where the image is transparent, whatever the blend mode. For a
+  // sprite that flashes white when hit, or its shadow. The overloads are
+  // those of drawImage(); the polygon one clips the shape to the polygon.
+  void drawSilhouette(const Texture &img, int dx, int dy, Color c) {
+    drawSilhouette(img, dx, dy, Rect{0, 0, img.width, img.height}, c);
+  }
+  void drawSilhouette(const Texture &img, int dx, int dy, const Rect &src,
+                      Color c);
+  void drawSilhouette(const Texture &img, int dx, int dy, const Rect &src,
+                      const int16_t *polygon, int count, Color c);
+  void drawSilhouette(const Texture &img, const Rect &dst, const Rect &src,
+                      Color c);
+  void drawSilhouette(const Texture &img, const Rect &dst, Color c) {
+    drawSilhouette(img, dst, Rect{0, 0, img.width, img.height}, c);
+  }
+  void drawSilhouette(const Texture &img, int dx, int dy, int dw, int dh,
+                      int sx, int sy, int sw, int sh, Color c) {
+    drawSilhouette(img, Rect{dx, dy, dw, dh}, Rect{sx, sy, sw, sh}, c);
+  }
+
   // --- Text ------------------------------------------------------------------
   // The cursor is the top-left corner of the line box; the baseline is
   // `ascent` below it. '\n' moves the cursor to the next line. To enlarge or

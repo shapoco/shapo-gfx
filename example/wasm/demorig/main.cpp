@@ -70,10 +70,13 @@ DEMORIG_EXPORT void demorig_frame(float t) {
   demo.draw(gfx, 0);
 }
 
-// Pointer (mouse or touch) in frame buffer pixels
+// Pointer (mouse or touch) in frame buffer pixels; hover: a mouse moving
+// with no button down, leave: it left the canvas
 DEMORIG_EXPORT void demorig_pointer_down(int x, int y) { demo.pointerDown(x, y); }
 DEMORIG_EXPORT void demorig_pointer_move(int x, int y) { demo.pointerMove(x, y); }
 DEMORIG_EXPORT void demorig_pointer_up() { demo.pointerUp(); }
+DEMORIG_EXPORT void demorig_pointer_hover(int x, int y) { demo.pointerHover(x, y); }
+DEMORIG_EXPORT void demorig_pointer_leave() { demo.pointerLeave(); }
 
 }  // extern "C"
 
@@ -81,11 +84,14 @@ DEMORIG_EXPORT void demorig_pointer_up() { demo.pointerUp(); }
 // Native entry point: render one frame and write it as a binary PPM
 //
 //   demorig [out.ppm] [seconds] [WxH] [zoom [centerX centerY]] [bands] [aa]
+//           [pointerX pointerY]
 //
 // zoom is the factor (0.25 to 16 or beyond), the center the scene point at
 // the middle of the screen (default: the middle of the scene), bands the
 // number of bands the frame is drawn in (default 1, the way the M5Stack
-// builds draw it when greater) and aa 1 to draw with antialiasing.
+// builds draw it when greater), aa 1 to draw with antialiasing and the
+// pointer a screen pixel the mouse hovers (the part of the character under
+// it lights up).
 
 #ifndef __EMSCRIPTEN__
 
@@ -112,6 +118,7 @@ int main(int argc, char **argv) {
   }
   const int bands = (argc > 7) ? std::atoi(argv[7]) : 1;
   if (argc > 8) demo.setAntialias(std::atoi(argv[8]) != 0);
+  if (argc > 10) demo.pointerHover(std::atoi(argv[9]), std::atoi(argv[10]));
   demo.update(t);
   if (bands <= 1) {
     demo.draw(gfx, 0);

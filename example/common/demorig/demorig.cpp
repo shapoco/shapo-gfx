@@ -65,11 +65,19 @@ void Demo::pointerDown(int x, int y) {
     dragging_ = true;
     lastX_ = x;
     lastY_ = y;
+    pointerHover(x, y);
   }
+}
+
+void Demo::pointerHover(int x, int y) {
+  hover_ = true;
+  hoverX_ = x;
+  hoverY_ = y;
 }
 
 void Demo::pointerMove(int x, int y) {
   if (!dragging_) return;
+  pointerHover(x, y);
   // The scene follows the finger
   const float z = zoom();
   centerX_ -= (x - lastX_) / z;
@@ -82,6 +90,8 @@ void Demo::pointerMove(int x, int y) {
 void Demo::pointerUp() {
   pressed_ = Button::NONE;
   dragging_ = false;
+  // (a mouse points again with its next move)
+  hover_ = false;
 }
 
 void Demo::setView(float zoom, float centerX, float centerY) {
@@ -129,6 +139,14 @@ void Demo::update(float t) {
                   fps10 % 10, 1 << -zoomTarget_);
   }
 
+  // The pointer to world coordinates: the view of draw() undone
+  if (hover_) {
+    const float z = zoom();
+    scene_.setPointer((hoverX_ + 0.5f - width_ / 2.0f) / z + centerX_,
+                      (hoverY_ + 0.5f - height_ / 2.0f) / z + centerY_);
+  } else {
+    scene_.clearPointer();
+  }
   scene_.update(t);
 }
 

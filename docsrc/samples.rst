@@ -20,6 +20,10 @@
   の順に描くので、左腕だけがリングの手前に出ます。背景では、demo2d と同じ線と塗りつぶしのカラフルな星が
   回転しながら斜めに降ります。右端の (+) / (-) ボタンで 2 倍ずつズームイン / ズームアウト (1/4 〜 16 倍、滑らかに変化)、
   それ以外の部分をドラッグ (タッチパネルならスワイプ) するとスクロールします。左上にフレームレートと倍率を表示します。
+  マウスカーソル (またはタッチしている指) の下にあるキャラクタのパーツはピンク色に光ります。毎フレーム、ポインタの位置を
+  アーマチュア座標に戻し、描画順の最後のスロットから順に各スロットの画像の座標に変換して (``armatureToAttachment()``)
+  不透明なピクセルに当たった最初のスロット (つまり最前面のパーツ) を求め、そのスロットだけカスタム描画を有効にして
+  (``setCustomPaint()``)、``rig::SlotPainter`` が画像の代わりに ``drawSilhouette()`` でシルエットを描きます。
   URL に ``?screen=WxH`` を付けると画面サイズを変えられます (例: `320x240 <../example/demorig/?screen=320x240>`__、
   既定は 480x320)。
 
@@ -51,8 +55,9 @@
    ./build/example/wasm/demo3d/demo3d frame.ppm 1.5    # 第 2 引数は経過秒
    # demo2d: 経過秒、画面サイズ (320x240 以下はコンパクトなレイアウト)、バンド数
    ./build/example/wasm/demo2d/demo2d frame.ppm 1.5 320x240 4
-   # demorig: 経過秒、画面サイズ、倍率、画面中央に来るシーン上の点、バンド数、アンチエイリアス (1)
-   ./build/example/wasm/demorig/demorig frame.ppm 1.5 320x240 16 160 120 5 1
+   # demorig: 経過秒、画面サイズ、倍率、画面中央に来るシーン上の点、バンド数、アンチエイリアス (1)、
+   # ポインタの画面座標 (その下のパーツが光る)
+   ./build/example/wasm/demorig/demorig frame.ppm 1.5 320x240 16 160 120 5 1 200 100
 
 WASM のビルド
 ================================================================================
@@ -149,4 +154,5 @@ USB のシリアルには起動時にクロック設定、その後 2 秒ごと�
 ``startDemoViewer({wasm, prefix, camera})`` を呼ぶだけです。
 ``startDemoViewer`` に ``screenQuery: true`` を渡すと URL の ``?screen=WxH`` を ``<name>_set_screen(w, h)`` に、
 ``pointer: true`` を渡すとマウス / タッチを ``<name>_pointer_down(x, y)``, ``<name>_pointer_move(x, y)``,
-``<name>_pointer_up()`` に渡します (demorig が使っています)。
+``<name>_pointer_up()`` に渡します (demorig が使っています)。モジュールが ``<name>_pointer_hover(x, y)`` と
+``<name>_pointer_leave()`` もエクスポートしていれば、ボタンを押していないマウスの移動とキャンバスからの退出も渡します。

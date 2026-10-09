@@ -10,7 +10,7 @@ on SPI, CST816D touch on I2C, 16 MB flash.
 |---|---|---|
 | `demo2d/` | 320x240, the compact layout of the scene, frame rate at the bottom left | none |
 | `demo3d/` | 320x240, two render contexts (one per core), the 3D renderer's code in RAM | drag to turn the camera, (+) / (-) to move it closer / farther |
-| `demorig/` | 320x240, the atlas model (`rgb_chan.hpp`) | zoom and (AA) buttons, swipe to scroll |
+| `demorig/` | 320x240, the atlas model (`rgb_chan.hpp`) | zoom and (AA) buttons, swipe to scroll, the touched part of the character lights up |
 
 The screen is used in landscape. `-DRP2COMMON_LCD_FLIP=ON` turns it by 180
 degrees.

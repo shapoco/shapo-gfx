@@ -13,7 +13,9 @@
 // screenQuery: take the frame buffer size from ?screen=WxH in the URL and pass it to
 //   <prefix>_set_screen(w, h) (returns 0 if rejected) before <prefix>_init().
 // pointer: pass the mouse / touch (one pointer) in frame buffer pixels to
-//   <prefix>_pointer_down(x, y), <prefix>_pointer_move(x, y) and <prefix>_pointer_up().
+//   <prefix>_pointer_down(x, y), <prefix>_pointer_move(x, y) and <prefix>_pointer_up();
+//   a mouse moving with no button down goes to <prefix>_pointer_hover(x, y) and
+//   leaving the canvas to <prefix>_pointer_leave(), when the module exports them.
 
 'use strict';
 
@@ -130,10 +132,12 @@ function parseScreenSize(params) {
   return m ? { w: parseInt(m[1], 10), h: parseInt(m[2], 10) } : null;
 }
 
-// One pointer (the first one down) in frame buffer pixels. style.css sets
-// touch-action: none on the canvas, so touches do not scroll the page.
+// One pointer (the first one down) in frame buffer pixels, plus the mouse
+// hovering when the module takes it. style.css sets touch-action: none on
+// the canvas, so touches do not scroll the page.
 function setupPointerInput(canvas, W, H, fn) {
   const down = fn('pointer_down'), move = fn('pointer_move'), up = fn('pointer_up');
+  const hover = fn('pointer_hover'), leave = fn('pointer_leave');
   let active = null;
   // offsetX / offsetY are relative to the padding box, which is the canvas
   // area scaled to clientWidth x clientHeight
@@ -149,7 +153,11 @@ function setupPointerInput(canvas, W, H, fn) {
     e.preventDefault();
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (e.pointerId === active) move(...pos(e));
+    if (e.pointerId === active) {
+      move(...pos(e));
+    } else if (active === null && hover && e.pointerType === 'mouse') {
+      hover(...pos(e));
+    }
   });
   const release = (e) => {
     if (e.pointerId !== active) return;
@@ -158,6 +166,11 @@ function setupPointerInput(canvas, W, H, fn) {
   };
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', release);
+  if (leave) {
+    canvas.addEventListener('pointerleave', (e) => {
+      if (active === null && e.pointerType === 'mouse') leave();
+    });
+  }
 }
 
 function setupCameraInput(canvas, cam, clampCam) {

@@ -31,8 +31,19 @@ void Scene::init(int width, int height) {
     pops_[k] = Pop();
   }
   lastBurst_ = -1;
+  pointer_ = false;
+  hitSlot_ = -1;
   update(0.0f);
 }
+
+void Scene::setPointer(float worldX, float worldY) {
+  pointer_ = true;
+  pointerX_ = worldX;
+  pointerY_ = worldY;
+}
+
+// The character bobs up and down
+float Scene::bob() const { return sinf(t_ * 2.0f) * 10; }
 
 void Scene::update(float t) {
   t_ = t;
@@ -40,10 +51,64 @@ void Scene::update(float t) {
   // 24 fps data, interpolated at any rate
   float t2 = ((int)(t * 1000) % 4000) / 1000.0f + 1.0f;
   rig_.pose(anim, rig::frameAt(anim, t2));
+  updateHit();
   updateStars(t);
   updateRing();
   updatePops(t);
 }
+
+// The slot of `inst` under the point p of the armature's space: the one
+// drawn last (the front-most) whose image has an opaque pixel there (the
+// color key counts as transparent), or -1
+static int hitTest(const rig::Instance &inst, const g2::vec2f &p) {
+  const rig::Armature &arm = *inst.armature();
+  for (int i = arm.slotCount - 1; i >= 0; i--) {
+    const int slot = inst.slotAt(i);
+    const int ai = inst.attachmentOf(slot);
+    if (ai < 0 || inst.alphaOf(slot) == 0) continue;
+    const rig::Attachment &at = arm.slots[slot].attachments[ai];
+    if (at.kind != rig::AttachmentKind::IMAGE || !at.texture) continue;
+    // Into the pixels of the attachment's part of its texture
+    g2::vec2f q;
+    if (!inst.armatureToAttachment(slot, ai, p, q)) continue;
+    const int x = (int)std::floor(q.x), y = (int)std::floor(q.y);
+    if (x < 0 || y < 0 || x >= at.src.width || y >= at.src.height) continue;
+    const int tx = at.src.x + x, ty = at.src.y + y;
+    const g2::Color c = arm.colorKeyEnabled
+                            ? g2::texturePixel(*at.texture, tx, ty, arm.colorKey)
+                            : g2::texturePixel(*at.texture, tx, ty);
+    if (g2::colorA(c) != 0) return slot;
+  }
+  return -1;
+}
+
+// The slot under the pointer gets custom paint (the painter of draw()), the
+// one before it loses it. The flags stay through pose(), so only a change
+// touches them.
+void Scene::updateHit() {
+  int hit = -1;
+  if (pointer_) {
+    // World to the armature's space: the placement of draw() undone
+    const g2::vec2f p = {(pointerX_ - (float)(width_ / 2)) / scale_,
+                         (pointerY_ - (float)(height_ / 2)) / scale_ - bob()};
+    hit = hitTest(rig_, p);
+  }
+  if (hit == hitSlot_) return;
+  if (hitSlot_ >= 0) rig_.setCustomPaint(hitSlot_, false);
+  if (hit >= 0) rig_.setCustomPaint(hit, true);
+  hitSlot_ = hit;
+}
+
+// Draws the highlighted slot: its image as a pink silhouette, with the
+// opacity, clip and color key draw() set for the image
+class HighlightPainter : public rig::SlotPainter {
+ public:
+  void paintSlot(g2::Graphics2D &g, const rig::SlotPaint &p) override {
+    if (p.at.kind != rig::AttachmentKind::IMAGE || !p.at.texture) return;
+    g.drawSilhouette(*p.at.texture, 0, 0, p.at.src, p.at.hull, p.at.hullCount,
+                     g2::makeColor(255, 96, 176));
+  }
+};
 
 // Bounding box of points in world coordinates
 template <typename F>
@@ -284,18 +349,17 @@ void Scene::draw(g2::Graphics2D &g) const {
 
   drawCircle(g, view, false);
 
-  const float bob = sinf(t_ * 2.0f) * 10;
-
+  HighlightPainter painter;
   g.pushState();
-  g.translate(0, bob);
-  rig_.draw(g, 0, handDrawIndex_);
+  g.translate(0, bob());
+  rig_.draw(g, 0, handDrawIndex_, &painter);
   g.popState();
 
   drawCircle(g, view, true);
 
   g.pushState();
-  g.translate(0, bob);
-  rig_.draw(g, handDrawIndex_, rgb_chan::armature.slotCount);
+  g.translate(0, bob());
+  rig_.draw(g, handDrawIndex_, rgb_chan::armature.slotCount, &painter);
   g.popState();
 
   g.popState();

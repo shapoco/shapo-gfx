@@ -292,6 +292,40 @@ Graphics2D
 GRAY1 の画像を 2 色のマスクとして描きます。1 のビットを ``fg``、0 のビットを ``bg`` で塗ります。
 ``bg`` が ``TRANSPARENT`` なら 0 のビットは触りません。変換行列とブレンドが効きます。
 
+シルエット
+--------------------------------------------------------------------------------
+
+.. code-block:: cpp
+
+   void drawSilhouette(const Texture &img, int dx, int dy, Color c);
+   void drawSilhouette(const Texture &img, int dx, int dy, const Rect &src, Color c);
+   void drawSilhouette(const Texture &img, int dx, int dy, const Rect &src,
+                       const int16_t *polygon, int count, Color c);          // 凸多角形の内側だけ
+   void drawSilhouette(const Texture &img, const Rect &dst, const Rect &src, Color c);  // 拡大縮小
+   void drawSilhouette(const Texture &img, const Rect &dst, Color c);
+   void drawSilhouette(const Texture &img, int dx, int dy, int dw, int dh,
+                       int sx, int sy, int sw, int sh, Color c);
+
+画像の形を色 ``c`` で塗ります。描画先の各ピクセルには、その下にある画像ピクセルの不透明度を ``c`` の α に掛けた色が
+置かれます。不透明度は ARGB4444 なら α (16 段階)、カラーキーと一致するピクセルなら 0、それ以外のフォーマットのピクセルは
+不透明です。画像が透明な場所には、ブレンドモードによらず何も書きません。
+ダメージを受けたキャラクターを白く光らせる、影を落とす、といった用途向けです。
+
+オーバーロードは ``drawImage()`` と同じで (多角形版を含む)、変換行列、ブレンドモード、不透明度、カラーキー、
+クリップ、アンチエイリアスもすべて ``drawImage()`` と同じように効きます。コードパスも共有しており、
+色を不透明度の段階ごとに 1 回だけブレンドの形に変換してから、ピクセルごとにはその段階を引くだけなので、
+ARGB4444 スプライトの ``drawImage()`` と同程度の速さです (透明なピクセルはシフトと分岐 1 回ずつ)。
+
+.. code-block:: cpp
+
+   // 被弾したスプライトを白く光らせる (白の α で光り方を調節)
+   g.drawImage(sprite, x, y);
+   if (hitTimer > 0) g.drawSilhouette(sprite, x, y, g2::makeColor(255, 255, 255, 180));
+
+   // 右下に落ちる半透明の影
+   g.drawSilhouette(sprite, x + 2, y + 2, g2::makeColor(0, 0, 0, 96));
+   g.drawImage(sprite, x, y);
+
 文字
 ================================================================================
 

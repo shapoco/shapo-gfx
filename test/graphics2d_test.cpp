@@ -599,10 +599,12 @@ static void testScaledImage() {
 // The transformed drawImage() against the texel under each pixel center,
 // computed in double; pixels whose center falls within 1/500 texel of a
 // texel edge may go either way and are not compared. A color key, if set on
-// `ga`'s side, is applied to the reference by hand.
+// `ga`'s side, is applied to the reference by hand. With `sil` the same for
+// drawSilhouette() in that color (the reference: the plain path, 1 x 1).
 static void checkAffine(const Texture &img, const affine2f &m, const Rect &src,
                         PixelFormat df, int blend, uint32_t fill, int &failures,
-                        const char *what, const Color *key = nullptr) {
+                        const char *what, const Color *key = nullptr,
+                        const Color *sil = nullptr) {
   OwnedSurface a = createSurface(df, 40, 32), b = createSurface(df, 40, 32);
   fillRandom(a, fill);
   std::memcpy(b.pixels(), a.pixels(), a.bytes());
@@ -613,7 +615,10 @@ static void checkAffine(const Texture &img, const affine2f &m, const Rect &src,
   setBlendCase(ga, blend);
   setBlendCase(gb, blend);
   if (key) ga.setColorKey(*key);
-  ga.drawImage(img, 0, 0, src);
+  if (sil)
+    ga.drawSilhouette(img, 0, 0, src, *sil);
+  else
+    ga.drawImage(img, 0, 0, src);
   const double det = (double)m.a * m.d - (double)m.b * m.c;
   const double ia = m.d / det, ib = -m.b / det, ic = -m.c / det, id = m.a / det;
   const Rect in = src.normalized().intersect({0, 0, img.width, img.height});
@@ -629,7 +634,10 @@ static void checkAffine(const Texture &img, const affine2f &m, const Rect &src,
       if (key && colorToNative(img.format, gi.getPixel(tu, tv)) ==
                      colorToNative(img.format, *key))
         continue;
-      gb.drawImage(img, x, y, Rect{tu, tv, 1, 1});
+      if (sil)
+        gb.drawSilhouette(img, x, y, Rect{tu, tv, 1, 1}, *sil);
+      else
+        gb.drawImage(img, x, y, Rect{tu, tv, 1, 1});
     }
   }
   int bad = 0;
@@ -746,7 +754,8 @@ static void testAffineImage() {
 static void checkPolygonImage(const Texture &img, const affine2f &m,
                               const Rect &src, const int16_t *poly, int n,
                               PixelFormat df, int blend, uint32_t fill,
-                              int &failures, const char *what) {
+                              int &failures, const char *what,
+                              const Color *sil = nullptr) {
   OwnedSurface a = createSurface(df, 40, 32), b = createSurface(df, 40, 32);
   fillRandom(a, fill);
   std::memcpy(b.pixels(), a.pixels(), a.bytes());
@@ -754,7 +763,10 @@ static void checkPolygonImage(const Texture &img, const affine2f &m,
   ga.setTransform(m);
   setBlendCase(ga, blend);
   setBlendCase(gb, blend);
-  ga.drawImage(img, 0, 0, src, poly, n);
+  if (sil)
+    ga.drawSilhouette(img, 0, 0, src, poly, n, *sil);
+  else
+    ga.drawImage(img, 0, 0, src, poly, n);
   const double det = (double)m.a * m.d - (double)m.b * m.c;
   const double ia = m.d / det, ib = -m.b / det, ic = -m.c / det, id = m.a / det;
   const Rect s = src.normalized();
@@ -788,7 +800,10 @@ static void checkPolygonImage(const Texture &img, const affine2f &m,
       sure[y][x] = ok;
       const int tu = (int)std::floor(u), tv = (int)std::floor(v);
       if (!ok || !inside || !in.contains(tu, tv)) continue;
-      gb.drawImage(img, x, y, Rect{tu, tv, 1, 1});
+      if (sil)
+        gb.drawSilhouette(img, x, y, Rect{tu, tv, 1, 1}, *sil);
+      else
+        gb.drawImage(img, x, y, Rect{tu, tv, 1, 1});
     }
   }
   int bad = 0;
@@ -1013,6 +1028,197 @@ static void testColorKey() {
   CHECK_EQ(countColor(g, Colors::RED), 16);
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// Silhouettes
+
+// The opacity level (0..15) drawSilhouette() takes from a pixel of `img`:
+// the alpha nibble of ARGB4444, 0 for the color key, else 15
+static int silhouetteLevel(const Texture &img, int x, int y,
+                           const Color *key) {
+  return colorA(key ? texturePixel(img, x, y, *key) : texturePixel(img, x, y)) /
+         17;
+}
+
+// Write a pixel of a 16-bit surface as it is (no blend, whatever the build)
+static void putRaw(OwnedSurface &s, int x, int y, Color c) {
+  const Surface sf = s.surface();
+  ((uint16_t *)sf.linePtr(y))[x] = (uint16_t)colorToNative(sf.format, c);
+}
+
+// |a - b| per channel of two Colors within `tol`
+static bool nearColor(Color a, Color b, int tol) {
+  return std::abs(colorR(a) - colorR(b)) <= tol &&
+         std::abs(colorG(a) - colorG(b)) <= tol &&
+         std::abs(colorB(a) - colorB(b)) <= tol &&
+         std::abs(colorA(a) - colorA(b)) <= tol;
+}
+
+// drawSilhouette() against a fillRect() of the color with its alpha scaled
+// by the level of the source pixel under each target pixel: the plain,
+// scaled (runs and steps, mirrored), keyed and transformed paths of every
+// format pair under every blend
+static void testSilhouette() {
+  uint32_t seed = 9001;
+  int failures = 0;
+  const Color colors[] = {Colors::WHITE, makeColor(255, 64, 0, 160),
+                          makeColor(0, 200, 255, 40)};
+  for (PixelFormat sf : kFormats) {
+    OwnedSurface img = createSurface(sf, 11, 7);
+    fillRandom(img, nextRand(seed));
+    Graphics2D gi(img);
+    const Color key = gi.getPixel(0, 0);
+    gi.setBlend(BlendMode::NONE);
+    for (int i = 0; i < 20; i++)
+      gi.setPixel(randInt(seed, 0, 10), randInt(seed, 0, 6), key);
+    for (PixelFormat df : kFormats) {
+      for (int n = 0; n < 12; n++) {
+        const bool useKey = SHAPOGFX2D_COLOR_KEY && (n & 1);
+        const Color *k = useKey ? &key : nullptr;
+        const Color c = colors[n % 3];
+        OwnedSurface a = createSurface(df, 36, 24),
+                     b = createSurface(df, 36, 24);
+        fillRandom(a, n);
+        std::memcpy(b.pixels(), a.pixels(), a.bytes());
+        Graphics2D ga(a), gb(b);
+        setBlendCase(ga, n);
+        setBlendCase(gb, n);
+        if (useKey) ga.setColorKey(key);
+        const Rect src = {1, 0, 9, 7};
+        Rect dst = {3, 2, 9, 7};
+        if (n % 3 == 1) dst = {2, 1, 25, 16};   // enlarged (runs)
+        if (n % 3 == 2) dst = {30, 20, -7, -5};  // reduced, mirrored
+        ga.drawSilhouette(img, dst, src, c);
+        const Rect d = dst.normalized();
+        for (int j = 0; j < d.height; j++) {
+          const int q = (2 * j + 1) * src.height / (2 * d.height);
+          const int sy = dst.height < 0 ? src.bottom() - 1 - q : src.y + q;
+          for (int i = 0; i < d.width; i++) {
+            const int r = (2 * i + 1) * src.width / (2 * d.width);
+            const int sx = dst.width < 0 ? src.right() - 1 - r : src.x + r;
+            const int l = silhouetteLevel(img, sx, sy, k);
+            if (l > 0)
+              gb.fillRect(d.x + i, d.y + j, 1, 1,
+                          colorWithAlpha(c, (colorA(c) * l + 7) / 15));
+          }
+        }
+        if (!sameSurface(a, b) && failures++ < 5) {
+          std::printf("  silhouette: src fmt %d dst fmt %d case %d\n",
+                      (int)sf, (int)df, n);
+          CHECK(false);
+        }
+#if SHAPOGFX2D_TRANSFORM
+        checkAffine(img.surface(),
+                    affine2f::placement(18, 12, 0.4f + n, 1.7f, 1.3f, 5, 3),
+                    src, df, n, n, failures, "silhouette", k, &c);
+        static const int16_t tri[] = {0, 0, 9, 1, 3, 7};
+        checkPolygonImage(img.surface(),
+                          affine2f::placement(20, 14, 0.3f * n, 2.2f, 1.9f, 4,
+                                              3),
+                          src, tri, 3, df, n, n, failures, "silhouette", &c);
+#endif
+      }
+    }
+  }
+
+  // Nothing is drawn where the image is transparent, whatever the blend
+  // mode, and nothing at all from a transparent color under ALPHA
+#if SHAPOGFX_FORMAT_ARGB4444
+  {
+    OwnedSurface img = createSurface(PixelFormat::ARGB4444, 8, 8);
+    for (int y = 0; y < 8; y++) {
+      for (int x = 0; x < 8; x++) {
+        const bool in = x >= 2 && x < 6 && y >= 2 && y < 6;
+        const bool core = x >= 3 && x < 5 && y >= 3 && y < 5;
+        putRaw(img, x, y, core ? Colors::BLUE
+                          : in ? makeColor(10, 20, 30, 128)
+                               : Colors::TRANSPARENT);
+      }
+    }
+    OwnedSurface t = createSurface(PixelFormat::RGB565_SWAPPED, 8, 8);
+    Graphics2D g(t);
+    g.clear(Colors::RED);
+    g.drawSilhouette(img, 0, 0, makeColor(255, 255, 255, 0));
+    CHECK_EQ(countColor(g, Colors::RED), 64);
+#if SHAPOGFX2D_BLEND
+    g.setBlend(BlendMode::NONE);
+    g.drawSilhouette(img, 0, 0, Colors::WHITE);
+    CHECK_EQ(countColor(g, Colors::RED), 48);
+    CHECK_EQ(countColor(g, Colors::WHITE), 16);
+    g.setBlend(BlendMode::ALPHA);
+#endif
+    g.clear(Colors::BLACK);
+    g.drawSilhouette(img, 0, 0, Colors::WHITE);
+    CHECK_EQ(countColor(g, Colors::BLACK), 48);
+    CHECK_EQ(countColor(g, Colors::WHITE), 4);
+    // The 8-bit alpha 128 of the texel is the ARGB4444 nibble 8: 8/15 white
+    // (gray within the 5/6-bit quantization of the target)
+    const Color half = g.getPixel(2, 2);
+    CHECK(colorR(half) > 120 && colorR(half) < 150);
+    CHECK(nearColor(half, makeColor(colorR(half), colorR(half), colorR(half)), 8));
+  }
+#endif
+
+  // With antialiasing on under a rotation: the same as drawImage() of the
+  // image with every pixel's color replaced by the (opaque) color and its
+  // opacity kept, which samples the same alpha (the colors of that image
+  // go through the premultiplied mix, so a little tolerance)
+#if SHAPOGFX2D_ANTIALIAS && SHAPOGFX2D_TRANSFORM && SHAPOGFX_FORMAT_ARGB4444
+  {
+    const Color c = makeColor(255, 255, 0);
+    // An ARGB4444 image with transparent pixels, and (with the color key)
+    // an RGB565 one with keyed pixels
+    for (int kind = 0; kind < (SHAPOGFX2D_COLOR_KEY ? 2 : 1); kind++) {
+      const PixelFormat sf =
+          kind == 0 ? PixelFormat::ARGB4444 : PixelFormat::RGB565_SWAPPED;
+      OwnedSurface img = createSurface(sf, 12, 9);
+      fillRandom(img, 55 + kind);
+      const Color key = Graphics2D(img).getPixel(1, 1);
+      for (int i = 0; i < 30; i++)
+        putRaw(img, randInt(seed, 0, 11), randInt(seed, 0, 8),
+               kind == 0 ? Colors::TRANSPARENT : key);
+      OwnedSurface flat = createSurface(PixelFormat::ARGB4444, 12, 9);
+      for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 12; x++) {
+          const int l = silhouetteLevel(img, x, y, kind == 0 ? nullptr : &key);
+          putRaw(flat, x, y, colorWithAlpha(c, l * 17));
+        }
+      }
+      for (int n = 0; n < 6; n++) {
+        const PixelFormat df =
+            n & 1 ? PixelFormat::RGB565_SWAPPED : PixelFormat::ARGB4444;
+        OwnedSurface a = createSurface(df, 40, 32), b = createSurface(df, 40, 32);
+        fillRandom(a, n);
+        std::memcpy(b.pixels(), a.pixels(), a.bytes());
+        Graphics2D ga(a), gb(b);
+        const affine2f m = affine2f::placement(20, 16, 0.5f + 0.9f * n, 1.6f,
+                                               1.4f, 6, 4);
+        ga.setTransform(m);
+        gb.setTransform(m);
+        ga.setAntialias(true);
+        gb.setAntialias(true);
+        setBlendCase(ga, 1 + (n % 3));
+        setBlendCase(gb, 1 + (n % 3));
+        if (kind == 1) ga.setColorKey(key);
+        ga.drawSilhouette(img, 0, 0, c);
+        gb.drawImage(flat, 0, 0);
+        int bad = 0;
+        for (int y = 0; y < 32; y++) {
+          for (int x = 0; x < 40; x++) {
+            if (!nearColor(ga.getPixel(x, y, false), gb.getPixel(x, y, false), 12))
+              bad++;
+          }
+        }
+        if (bad && failures++ < 5) {
+          std::printf("  silhouette AA: %d pixels differ, kind %d case %d\n",
+                      bad, kind, n);
+          CHECK(false);
+        }
+      }
+    }
+  }
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Transforms of shapes
@@ -1573,6 +1779,7 @@ void testGraphics2D() {
 #if SHAPOGFX2D_COLOR_KEY
   testColorKey();
 #endif
+  testSilhouette();
   testPolygons();
   testFloatApi();
   testArcs();

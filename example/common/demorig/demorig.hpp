@@ -10,6 +10,7 @@
 //   demo.init(w, h, true);
 //   every frame:
 //     demo.pointerDown / pointerMove / pointerUp as the input arrives
+//     (demo.pointerHover / pointerLeave for a mouse without a button)
 //     demo.update(seconds);
 //     demo.draw(g, 0);                // the whole screen, or
 //     demo.draw(gBand, bandY);        // one band of it per call
@@ -18,7 +19,9 @@
 // (1/4 to 16 times, animated), the (AA) button at the left edge toggles
 // antialiasing (of everything Graphics2D antialiases: the vector pictures
 // and the area fills), and a drag elsewhere scrolls. The view center stays
-// within the scene; the space around it may be seen.
+// within the scene; the space around it may be seen. The part of the
+// character under the pointer (the finger, or the mouse hovering) lights up
+// in pink (Scene).
 
 #include "scene.hpp"
 #include "shapoco/gfx2d/graphics2d.hpp"
@@ -39,6 +42,10 @@ class Demo {
   void pointerDown(int x, int y);
   void pointerMove(int x, int y);
   void pointerUp();
+  // A mouse moving without a button down (points the character without
+  // scrolling), and leaving the screen
+  void pointerHover(int x, int y);
+  void pointerLeave() { hover_ = false; }
 
   // Jump to a view at once: zoom factor and the scene point at the center
   // of the screen (for checks from the command line)
@@ -77,6 +84,9 @@ class Demo {
   Button pressed_ = Button::NONE;
   bool dragging_ = false;
   int lastX_ = 0, lastY_ = 0;
+  // Where it points the scene (a finger down, or a mouse hovering)
+  bool hover_ = false;
+  int hoverX_ = 0, hoverY_ = 0;
 
   // Buttons: centers and radius in screen pixels
   int buttonR_ = 0;

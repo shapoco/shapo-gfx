@@ -395,6 +395,14 @@ class Graphics2D {
   void drawImage(const Texture &, int dx, int dy, int dw, int dh, int sx, int sy, int sw, int sh);
   void drawBitmap(const Texture &gray1, int dx, int dy, Color fg, Color bg = TRANSPARENT);
   void drawBitmap(const Texture &gray1, int dx, int dy, const Rect &src, Color fg, Color bg = TRANSPARENT);
+  // silhouettes: the shape of an image filled with a color (the overloads of drawImage())
+  void drawSilhouette(const Texture &, int dx, int dy, Color);
+  void drawSilhouette(const Texture &, int dx, int dy, const Rect &src, Color);
+  void drawSilhouette(const Texture &, int dx, int dy, const Rect &src,
+                      const int16_t *polygon, int count, Color);
+  void drawSilhouette(const Texture &, const Rect &dst, const Rect &src, Color);
+  void drawSilhouette(const Texture &, const Rect &dst, Color);
+  void drawSilhouette(const Texture &, int dx, int dy, int dw, int dh, int sx, int sy, int sw, int sh, Color);
 
   // text
   void setFont(const GFXfont *); const GFXfont *font() const;
@@ -653,6 +661,25 @@ Semantics:
   transforms that shrink by at most 4096 are drawn (the limits keep the fixed
   point within 32 bits). On a core without an FPU the per-row setup is a few
   software float operations; the pixels are integer only.
+- **drawSilhouette** fills the shape of an image with a color, for a sprite that
+  flashes when hit or its shadow: each target pixel gets the color with its alpha
+  scaled by the opacity of the image pixel under it (the alpha nibble of ARGB4444, so
+  one of 16 levels; 0 for a pixel of the color key; 15/15 for every pixel of the
+  other formats), under the transform, blend mode and opacity exactly like
+  `drawImage()`, which it shares its paths with: the same overloads (the polygon one
+  included), the same plain, scaled and transformed walkers and the same clipping.
+  The color is turned into a `Paint` per level once per call (the alpha
+  `a * level / 15` rounded, through `makePaint()` like a `fillRect()` of that
+  color), and a per-pixel op of the 16-bit sources reads the level from the stored
+  pixel (a shift; equality with the key makes it 0) and applies that level's paint,
+  skipping the levels that draw nothing (so a transparent pixel costs a shift and a
+  branch, and an opaque run of a magnified image is a `fill()`). GRAY1 and RGB444
+  sources go through `Color` in chunks like the other pairs of `drawImage()` and
+  take the level from the alpha. Nothing is written where the image is transparent,
+  whatever the blend mode (`NONE` writes the color, with the scaled alpha into an
+  ARGB4444 target, where it is not). With antialiasing on under a scale or rotation
+  the image path's bilinear sampling computes the alpha only and gives every pixel
+  the color with that alpha (times the outline's coverage).
 - **drawBitmap and text** draw a 1-bit mask (a GRAY1 image, or a glyph of a GFXfont,
   addressed in bits) with the walkers of the images: runs of equal bits become spans
   in the mask's colors, so the blend and the transform apply. Without a transform, a
@@ -691,7 +718,9 @@ LovyanGFX / M5GFX). The layout is that of Adafruit. The bundled fonts (generated
 ShapoFont) are `const GFXfont` objects in `shapoco::gfx2d`; each `font/*.h` can be
 included alone:
 `ShapoSansMono_s08c07`, `ShapoSansP_s05`, `ShapoSansP_s07c05a01`, `ShapoSansP_s08c07`,
-`ShapoSansP_s12c09a01w02`, `ShapoSansP_s21c16a01w03`, `ShapoSansP_s27c22a01w04` and
+`ShapoSansP_s12c09a01w02`, `ShapoSansP_s21c16a01w03`, `ShapoSansP_s27c22a01w04`,
+`ShapoSquareRoundP_s12c09a01w02`, `ShapoSquareRoundP_s21c16a01w03`,
+`ShapoSquareRoundP_s27c22a01w04`, `MameSansP_s15c12`, `MameSansP_s15c12w02` and
 `MameSeg7_s40c38w06` (7-segment; `.`, `0`-`9` and `A`-`F` only). Any GFXfont from the
 Adafruit ecosystem can be used, by including its header inside the namespace so that it
 is built from `gfx2d::GFXfont` (`namespace shapoco { namespace gfx2d {` /
@@ -2053,7 +2082,15 @@ served as a static site.
   `k = drawIndexOf(slotIndex("l_arm"))`), the ring's front half, and the rest of
   the character, so the arm reaches out in front of the ring. Behind it, colorful
   stars (outlined and filled polygons, like those of demo2d) turn and fall
-  diagonally over a scrolling checkerboard.
+  diagonally over a scrolling checkerboard. The part of the character under the
+  pointer (a finger down, or the mouse hovering) lights up: every frame the scene
+  maps the pointer into the armature's space and, from the last drawn slot
+  backwards, into each image attachment's pixels (`armatureToAttachment()`), and
+  the first slot with an opaque pixel there (`texturePixel()`, the color key
+  transparent) is the one hit, so only the front-most part lights up; that slot
+  gets custom paint (`setCustomPaint()`, the previous one loses it) and a
+  `rig::SlotPainter` draws it as a pink silhouette with `drawSilhouette()` (the
+  polygon overload, with the attachment's hull) in place of its image.
 
   The scene, the view and the overlay are `example/common/demorig/` (ShapoGFX
   only), shared with the M5Stack builds. The scene is laid out in world pixels of
@@ -2069,8 +2106,10 @@ served as a static site.
   checkerboard) is skipped by boxes computed once per frame, which keeps the cost
   of drawing a 320 x 240 frame in 8 bands 6% above drawing it at once. The browser
   page takes the screen size from `?screen=WxH` (default 480 x 320) and the mouse or
-  touch through `viewer.js`; the native build takes the time, the size, the zoom,
-  the view center and a band count on the command line.
+  touch through `viewer.js` (a mouse hovering, with no button down, through the
+  optional `pointer_hover` / `pointer_leave` exports); the native build takes the
+  time, the size, the zoom, the view center, a band count, antialiasing and a
+  pointer position on the command line.
 - `example/m5cores3/demorig/`, `example/m5tab5/demorig/`: demorig on M5Stack
   CoreS3 (320 x 240, touch) and Tab5 (a 640 x 360 frame scaled twice by the PPA,
   touch), ESP-IDF 5.5 projects sharing the components of

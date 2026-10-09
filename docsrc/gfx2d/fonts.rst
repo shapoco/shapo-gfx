@@ -36,7 +36,7 @@ GFXfont 形式
 同梱フォント
 ================================================================================
 
-ShapoFont で生成した ShapoSans ファミリと MameSeg7 を ``include/shapoco/gfx2d/font/`` に同梱しています。
+ShapoFont で生成した ShapoSans / ShapoSquareRound / MameSans ファミリと MameSeg7 を ``include/shapoco/gfx2d/font/`` に同梱しています。
 フォントオブジェクトは ``shapoco::gfx2d`` 名前空間の ``const GFXfont`` です。
 各フォントのヘッダは単独でもインクルードできます。
 
@@ -50,9 +50,14 @@ ShapoFont で生成した ShapoSans ファミリと MameSeg7 を ``include/shapo
    "``ShapoSansP_s12c09a01w02``", "プロポーショナル", "12 px", "行送り 14"
    "``ShapoSansP_s21c16a01w03``", "プロポーショナル", "21 px", "行送り 24"
    "``ShapoSansP_s27c22a01w04``", "プロポーショナル", "27 px", "行送り 32"
+   "``ShapoSquareRoundP_s12c09a01w02``", "プロポーショナル (角丸の角ゴシック)", "12 px", "行送り 14"
+   "``ShapoSquareRoundP_s21c16a01w03``", "プロポーショナル (角丸の角ゴシック)", "21 px", "行送り 24"
+   "``ShapoSquareRoundP_s27c22a01w04``", "プロポーショナル (角丸の角ゴシック)", "27 px", "行送り 32"
+   "``MameSansP_s15c12``", "プロポーショナル", "15 px", "行送り 18"
+   "``MameSansP_s15c12w02``", "プロポーショナル (太字)", "15 px", "行送り 18"
    "``MameSeg7_s40c38w06``", "7 セグメント", "40 px", "行送り 48"
 
-ShapoSans はいずれも ASCII (0x20〜0x7E) を収録しています。
+ShapoSans、ShapoSquareRound、MameSans はいずれも ASCII (0x20〜0x7E) を収録しています。
 MameSeg7 は ``.``、``0``〜``9``、``A``〜``F`` のみを収録しています (``.`` は送り幅 0 で直前の文字に重ねて描かれます)。
 
 使い方

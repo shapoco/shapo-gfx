@@ -4,7 +4,10 @@
 // demorig scene: a DragonBones character (converted by bin/dbones2cpp) posed
 // by shapoco::gfx2d::rig in a turning ring of additive rectangles, with
 // falling stars over a scrolling checkerboard, and pop stars (an animated
-// SVG converted by bin/svg2cpp) bursting behind the character.
+// SVG converted by bin/svg2cpp) bursting behind the character. The part of
+// the character under the pointer (setPointer()) lights up: the front-most
+// slot whose image has an opaque pixel there is left to a rig::SlotPainter,
+// which draws it as a pink silhouette (Graphics2D::drawSilhouette()).
 //
 // The scene is laid out in world coordinates of width x height pixels (the
 // screen size, so that at zoom 1 a world pixel is a screen pixel) and scaled
@@ -22,9 +25,16 @@ class Scene {
   // Set up the rig instance for a world of width x height pixels
   void init(int width, int height);
 
-  // Pose the character and move the stars to time t (seconds). Call once per
-  // frame, before draw().
+  // Pose the character and move the stars to time t (seconds), and find the
+  // slot under the pointer. Call once per frame, before draw().
   void update(float t);
+
+  // The pointer, in world coordinates: the slot of the character under it
+  // is highlighted from the next update() on. clearPointer(): none.
+  void setPointer(float worldX, float worldY);
+  void clearPointer() { pointer_ = false; }
+  // The slot under the pointer as of the last update(), -1 for none
+  int hitSlot() const { return hitSlot_; }
 
   // Draw the scene with g's transform as the view (world -> target, scale
   // and translation only). The background color fills g's clip rectangle;
@@ -58,6 +68,9 @@ class Scene {
   alignas(4) uint8_t rigMemory_[2048];
   shapoco::gfx2d::rig::Instance rig_;
   int handDrawIndex_ = 0;
+  bool pointer_ = false;
+  float pointerX_ = 0.0f, pointerY_ = 0.0f;
+  int hitSlot_ = -1;
 
   shapoco::gfx2d::vec2f stars_[NUM_STARS][STAR_VERTS];
   shapoco::gfx2d::Color starColors_[NUM_STARS];
@@ -80,6 +93,8 @@ class Scene {
   Pop pops_[NUM_POPS];
   int lastBurst_ = -1;
 
+  float bob() const;
+  void updateHit();
   void updateStars(float t);
   void updateRing();
   void updatePops(float t);

@@ -309,10 +309,11 @@ struct G2Impl {
                          int dx, int dy, Color fg, Color bg);
   // An image under the transform `m` (points relative to the top-left
   // corner of src to target pixels), its outline (the rectangle, or the
-  // polygon in image pixels relative to src) antialiased (images.cpp)
+  // polygon in image pixels relative to src) antialiased (images.cpp);
+  // `silhouette`, if given, is the color of drawSilhouette()
   static void drawImageAA(Graphics2D &g, const Texture &img, const Rect &src,
                           const affine2f &m, const int16_t *polygon,
-                          int count);
+                          int count, const Color *silhouette = nullptr);
 };
 
 }  // namespace shapoco::gfx2d::detail

@@ -1,5 +1,6 @@
 // Graphics2D: images (plain, scaled and transformed, with the blend and the
-// color key of the state) and 1-bit masks (bitmaps and glyphs).
+// color key of the state), their silhouettes and 1-bit masks (bitmaps and
+// glyphs).
 
 #include "arch.hpp"
 #include <climits>
@@ -288,6 +289,52 @@ struct OpBlendSame {
   }
 };
 
+// drawSilhouette() from a 16-bit source: the opacity level of the stored
+// pixel (0..15: the alpha nibble of ARGB4444, 15 for the other formats, 0
+// for the color key) picks the Paint of the color at that level, made once
+// per call (ImageBlit::level); a level that draws nothing is skipped
+// (ImageBlit::drawn), so the transparent pixels cost a shift and a branch
+template <PixelFormat D>
+struct OpSilhouette {
+  static constexpr PixelFormat SRC = PixelFormat::RGB565;  // any 16-bit one
+  typename FormatTraits<D>::Cursor cur;
+  const Paint *level;
+  uint32_t drawn, key;  // the key as stored; ImageBlit::NO_KEY for none
+  uint32_t aMask, aOr;  // level = ((raw & aMask) >> 12) | aOr
+  uint32_t levelOf(uint32_t raw) const {
+    return raw == key ? 0u : (((raw & aMask) >> 12) | aOr);
+  }
+  static uint32_t paint(uint32_t dst, const Paint &p) {
+    if (p.op == PaintOp::FILL) return p.native;
+    if (BLEND && p.op == PaintOp::ADD) return addNative<D>(dst, p.native);
+    return blendNative<D>(dst, p.native, p.alpha64);
+  }
+  void put(uint32_t raw) {
+    const uint32_t l = levelOf(raw);
+    if ((drawn >> l) & 1u) {
+      const Paint &p = level[l];
+      cur.write(p.op == PaintOp::FILL ? p.native : paint(cur.read(), p));
+    }
+    cur.next();
+  }
+  void run(uint32_t raw, int n) {
+    const uint32_t l = levelOf(raw);
+    if (!((drawn >> l) & 1u)) {
+      cur.skip(n);
+      return;
+    }
+    const Paint &p = level[l];
+    if (p.op == PaintOp::FILL) {
+      cur.fill(n, p.native);
+      return;
+    }
+    for (; n > 0; n--) {
+      cur.write(paint(cur.read(), p));
+      cur.next();
+    }
+  }
+};
+
 // Anything else: into Colors, written by writeColorsFmt(). A keyed pixel
 // becomes the Color 0, which a keyed copy skips (and an opaque pixel of a
 // copy is made opaque, so that it cannot be 0) and a blend draws with alpha 0.
@@ -315,10 +362,21 @@ enum class BlitPath : uint8_t {
   COPY_KEY,
   BLEND_ARGB,
   BLEND_SAME,
+  SILHOUETTE,
   COLOR
 };
 
-// What a drawImage() does per pixel
+struct ImageBlit;
+// The COLOR path's writers of a chunk of Colors: the image's (writeColorsFmt
+// with the write mode) and the silhouette's (paintLevels)
+using ColorWriter = void (*)(const ImageBlit &b, uint8_t *dl, int x, int n,
+                             const Color *src);
+void writeColorsImage(const ImageBlit &b, uint8_t *dl, int x, int n,
+                      const Color *src);
+void paintLevels(const ImageBlit &b, uint8_t *dl, int x, int n,
+                 const Color *src);
+
+// What a drawImage() or drawSilhouette() does per pixel
 struct ImageBlit {
   PixelFormat dst, src;
   BlendMode mode;
@@ -334,11 +392,24 @@ struct ImageBlit {
   // place of a table). 1093 = ceil(65536 * 16 / (15 * 64)): 15 * 1093 * 4096
   // >> 16 is exactly 1024.
   uint32_t alphaMul;
+  // drawSilhouette(): the Paint of the color at each opacity level of an
+  // image pixel (level l of 15: the alpha nibble of ARGB4444, 15 for the
+  // other formats, 0 for the color key), bit l of `drawn` set where that
+  // level draws anything (never bit 0)
+  bool silhouette;
+  Color color;
+  uint32_t drawn;
+  uint32_t aMask, aOr;  // OpSilhouette: level = ((raw & aMask) >> 12) | aOr
+  Paint level[16];
+  ColorWriter writeColors;
 
   static constexpr uint32_t NO_KEY = 0xFFFFFFFFu;
 
-  // false if nothing is drawn
-  bool init(const Graphics2D &g, PixelFormat s) {
+  // false if nothing is drawn. SIL: a drawSilhouette() in the color `sil`
+  // (the silhouette code is referenced from the SIL instantiations only, so
+  // a program without silhouettes does not link it)
+  template <bool SIL>
+  bool init(const Graphics2D &g, PixelFormat s, const Color *sil) {
     dst = g.format(), src = s;
     mode = BLEND ? g.blendMode() : BlendMode::ALPHA;
     op64 = alpha255To64((uint32_t)(BLEND ? g.opacity() : 255));
@@ -352,6 +423,29 @@ struct ImageBlit {
     }
     const bool srcAlpha = (s == PixelFormat::ARGB4444);
     alphaMul = (op64 * 1093u + 32u) >> 6;
+    silhouette = SIL;
+    writeColors = writeColorsImage;
+    if constexpr (SIL) {
+      // The color at each level under the blend of the state, like a
+      // fillRect() of it; the 16-bit sources are read as they are, the
+      // others through Color (the COLOR path turns the alpha into a level)
+      color = *sil;
+      drawn = 0;
+      level[0] = {0, 0, PaintOp::BLEND};
+      for (int l = 1; l < 16; l++) {
+        const Color cl = colorWithAlpha(color, (colorA(color) * l + 7) / 15);
+        if (G2Impl::makePaint(g, cl, level[l])) drawn |= 1u << l;
+      }
+      if (drawn == 0) return false;
+      aMask = srcAlpha ? 0xF000u : 0u;
+      aOr = srcAlpha ? 0u : 15u;
+      write = WriteMode::ALPHA;  // (not used: paintLevels writes)
+      writeColors = paintLevels;
+      path = bitsPerPixel(s) == 16 ? BlitPath::SILHOUETTE : BlitPath::COLOR;
+      return true;
+    } else {
+      (void)sil;
+    }
     // A format without alpha drawn with ALPHA at full opacity is a copy
     if (mode == BlendMode::ALPHA && !srcAlpha && op64 >= 64)
       mode = BlendMode::NONE;
@@ -376,11 +470,64 @@ struct ImageBlit {
   bool takesRuns() const {
     return path == BlitPath::COPY16 || path == BlitPath::COPY ||
            path == BlitPath::COPY_KEY16 || path == BlitPath::COPY_KEY ||
-           path == BlitPath::BLEND_ARGB;
+           path == BlitPath::BLEND_ARGB || path == BlitPath::SILHOUETTE;
+  }
+};
+
+// The levels of a silhouette already extracted (the COLOR path), as the
+// alpha nibble of 16-bit values
+struct LevelWalk {
+  const uint16_t *p;
+  template <typename Op>
+  void operator()(Op &op, int n) {
+    for (; n > 0; n--) op.put(*p++);
   }
 };
 
 constexpr int IMAGE_CHUNK = 64;
+
+void writeColorsImage(const ImageBlit &b, uint8_t *dl, int x, int n,
+                      const Color *src) {
+  writeColorsFmt(b.dst, dl, x, n, src, b.write, b.op64);
+}
+
+// The SILHOUETTE path of a row (out of line, so that blitRow() stays the
+// size it has without it: the inlining of the image ops depends on it)
+template <typename Walk>
+__attribute__((noinline)) void blitRowSilhouette(const ImageBlit &b,
+                                                 uint8_t *dl, int x, int n,
+                                                 Walk &walk) {
+  withFormat(b.dst, [&](auto tag) {
+    OpSilhouette<decltype(tag)::value> op;
+    op.cur.init(dl, x);
+    op.level = b.level;
+    op.drawn = b.drawn;
+    op.key = b.key;
+    op.aMask = b.aMask;
+    op.aOr = b.aOr;
+    walk(op, n);
+  });
+}
+
+// The silhouette of n Colors (the COLOR path): the alpha of each (0 for a
+// keyed pixel) as a level, painted by the op of the 16-bit sources. One
+// function for every source format and walker.
+void paintLevels(const ImageBlit &b, uint8_t *dl, int x, int n,
+                 const Color *src) {
+  uint16_t lv[IMAGE_CHUNK];
+  for (int i = 0; i < n; i++) lv[i] = (uint16_t)((colorA(src[i]) >> 4) << 12);
+  LevelWalk walk{lv};
+  withFormat(b.dst, [&](auto tag) {
+    OpSilhouette<decltype(tag)::value> op;
+    op.cur.init(dl, x);
+    op.level = b.level;
+    op.drawn = b.drawn;
+    op.key = ImageBlit::NO_KEY;
+    op.aMask = 0xF000u;
+    op.aOr = 0;
+    walk(op, n);
+  });
+}
 
 // Draw n pixels of the target row `dl` from x, fetched by `walk`. A walker
 // with SRC16_ONLY reads 16-bit sources only (the caller guarantees one); one
@@ -446,6 +593,8 @@ __attribute__((noinline)) void blitRow(const ImageBlit &b, uint8_t *dl, int x,
         });
       }
       break;
+    case BlitPath::SILHOUETTE:  // (blitRowOf takes it before this)
+      break;
     case BlitPath::COLOR:
       if constexpr (!Walk::RUNS) {
         withFormat(b.src, [&](auto tag) {
@@ -458,7 +607,7 @@ __attribute__((noinline)) void blitRow(const ImageBlit &b, uint8_t *dl, int x,
               const int k = std::min(IMAGE_CHUNK, n - i);
               OpColor<S> op{tmp, b.key, opaque};
               walk(op, k);
-              writeColorsFmt(b.dst, dl, x + i, k, tmp, b.write, b.op64);
+              b.writeColors(b, dl, x + i, k, tmp);
             }
           }
         });
@@ -467,8 +616,34 @@ __attribute__((noinline)) void blitRow(const ImageBlit &b, uint8_t *dl, int x,
   }
 }
 
+// A row of an image, or of a silhouette (SIL): the SILHOUETTE path has a
+// row function of its own, the others are blitRow()
+template <bool SIL, typename Walk>
+inline void blitRowOf(const ImageBlit &b, uint8_t *dl, int x, int n,
+                      Walk &walk) {
+  if constexpr (SIL) {
+    if (b.path == BlitPath::SILHOUETTE) {
+      blitRowSilhouette(b, dl, x, n, walk);
+      return;
+    }
+  }
+  blitRow(b, dl, x, n, walk);
+}
+
 // Walkers. They keep their position between calls, so that the Color path
 // can take a row in chunks.
+
+// Untransformed: the source pixels in order (the 16-bit silhouettes; the
+// images have row loops of their own). Used with blitRowSilhouette() only,
+// so it has no SRC16_ONLY / RUNS.
+struct PlainWalk {
+  const uint8_t *line;
+  int pos;
+  template <typename Op>
+  void operator()(Op &op, int n) {
+    for (; n > 0; n--) op.put(loadRaw<Op::SRC>(line, pos++));
+  }
+};
 
 // Minification: one source pixel per target pixel, pos advancing by step,
 // plus dir whenever the remainder reaches den
@@ -855,9 +1030,11 @@ struct AffineRows {
 // ---------------------------------------------------------------------------
 // Image paths, in target pixels
 
-// Plain: `s` (normalized) with its top-left corner at (x, y), no color key
+// Plain: `s` (normalized) with its top-left corner at (x, y), no color key.
+// SIL: the silhouette in the color `sil` (see ImageBlit::init)
+template <bool SIL>
 void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
-               const Rect &s) {
+               const Rect &s, const Color *sil) {
   const Surface &target = g.target();
   const Rect clip = g.clipRect();
   // The part of the source inside the image, where it lands, clipped
@@ -868,7 +1045,24 @@ void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
   src.x += dst.x - dx;
   src.y += dst.y - dy;
   ImageBlit b;
-  if (!b.init(g, img.format)) return;
+  if (!b.init<SIL>(g, img.format, sil)) return;
+
+  if constexpr (SIL) {
+    for (int j = 0; j < dst.height; j++) {
+      uint8_t *dl = target.linePtr(dst.y + j);
+      const uint8_t *sl = img.linePtr(src.y + j);
+      if (b.path == BlitPath::SILHOUETTE) {
+        PlainWalk w{sl, src.x};
+        blitRowSilhouette(b, dl, dst.x, dst.width, w);
+      } else {
+        // (through Color: a unit step of the scaled walker, so that no
+        // path is compiled for this walker alone)
+        StepWalk w{sl, src.x, 1, 0, 0, 0, 1};
+        blitRow(b, dl, dst.x, dst.width, w);
+      }
+    }
+    return;
+  }
 
   // Fast path: plain copy of 16-bit formats
   if (b.path == BlitPath::COPY16) {
@@ -921,12 +1115,13 @@ void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
 // instead, each covering a run of q or q + 1 destination pixels, so that
 // copies and ARGB4444 sprites write runs with fill() and convert every
 // source pixel once.
+template <bool SIL>
 void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
-                const Rect &s) {
+                const Rect &s, const Color *sil) {
   ImageBlit b;
-  if (!b.init(g, img.format)) return;
+  if (!b.init<SIL>(g, img.format, sil)) return;
   if (dst.width == s.width && dst.height == s.height && !b.keyed) {
-    blitPlain(g, img, dst.x, dst.y, s);
+    blitPlain<SIL>(g, img, dst.x, dst.y, s, sil);
     return;
   }
   ScaleAxis ax, ay;
@@ -935,7 +1130,7 @@ void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
 
   const bool runs = ax.runs && b.takesRuns();
   // A plain copy repeats the previous target row for the same source row
-  const bool repeat = b.write == WriteMode::COPY &&
+  const bool repeat = !SIL && b.write == WriteMode::COPY &&
                       bitsPerPixel(target.format) == 16;
   const size_t xOff = (size_t)ax.start * 2, bytes = (size_t)ax.count * 2;
   int row = ay.pos, prevRow = -1;
@@ -949,10 +1144,10 @@ void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
       const uint8_t *sl = img.linePtr(row);
       if (runs) {
         RunWalk w{sl, ax.pos, ax.dir, ax.run0, ax.e, ax.q, ax.r, ax.rden};
-        blitRow(b, dl, ax.start, ax.count, w);
+        blitRowOf<SIL>(b, dl, ax.start, ax.count, w);
       } else {
         StepWalk w{sl, ax.pos, ax.step, ax.dir, ax.rem, ax.rStep, ax.den};
-        blitRow(b, dl, ax.start, ax.count, w);
+        blitRowOf<SIL>(b, dl, ax.start, ax.count, w);
       }
     }
     prevRow = row;
@@ -969,15 +1164,16 @@ void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
 // Transformed: `m` maps coordinates relative to the top-left corner of `s`
 // (normalized) to the target; `polygon`, if any, clips the source further
 // (see Graphics2D::drawImage)
+template <bool SIL>
 void blitAffine(const Graphics2D &g, const Texture &img, const affine2f &m,
-                const Rect &s, const int16_t *polygon = nullptr,
-                int count = 0) {
+                const Rect &s, const int16_t *polygon, int count,
+                const Color *sil) {
   AffineRows ar;
   if (!ar.init(m, s, s.intersect(Rect{0, 0, img.width, img.height}),
                g.clipRect(), polygon, count))
     return;
   ImageBlit b;
-  if (!b.init(g, img.format)) return;
+  if (!b.init<SIL>(g, img.format, sil)) return;
   const Surface &target = g.target();
 #if SHAPOGFX2D_RP2_INTERP
   arch::rp2::InterpAffine interp;
@@ -990,97 +1186,136 @@ void blitAffine(const Graphics2D &g, const Texture &img, const affine2f &m,
     if (useInterp) {
       interp.row(u, v);
       InterpWalk w;
-      blitRow(b, dl, x, n, w);
+      blitRowOf<SIL>(b, dl, x, n, w);
       return;
     }
 #endif
     AffineWalk w{(const uint8_t *)img.pixels, img.stride, u, v, ar.du, ar.dv};
-    blitRow(b, dl, x, n, w);
+    blitRowOf<SIL>(b, dl, x, n, w);
   });
 #if SHAPOGFX2D_RP2_INTERP
   if (useInterp) interp.end();
 #endif
 }
 
+// The bodies of drawImage() (SIL false, `sil` null) and drawSilhouette()
+// (SIL true, `sil` its color)
+template <bool SIL>
+void imageAt(Graphics2D &g, const Texture &img, int dx, int dy,
+             const Rect &srcRect, const Color *sil) {
+  if (!g.hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
+  const Rect s = srcRect.normalized();
+  if (s.isEmpty()) return;
+  const TransformKind kind = G2Impl::kind(g);
+  const int ox = G2Impl::offsetX(g), oy = G2Impl::offsetY(g);
+  if (!TRANSFORM || kind <= TransformKind::TRANSLATE) {
+    if (COLOR_KEY && g.hasColorKey())
+      blitScaled<SIL>(g, img, Rect{dx + ox, dy + oy, s.width, s.height}, s,
+                      sil);
+    else
+      blitPlain<SIL>(g, img, dx + ox, dy + oy, s, sil);
+  } else if (G2Impl::wantsAntialias(g)) {
+    G2Impl::drawImageAA(
+        g, img, s,
+        G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy),
+        nullptr, 0, sil);
+  } else if (kind == TransformKind::SCALE) {
+    blitScaled<SIL>(g, img,
+                    G2Impl::mapRectSigned(g, RectF{(float)dx, (float)dy,
+                                                   (float)s.width,
+                                                   (float)s.height}),
+                    s, sil);
+  } else {
+    blitAffine<SIL>(
+        g, img, G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy),
+        s, nullptr, 0, sil);
+  }
+}
+
+template <bool SIL>
+void imageInPolygon(Graphics2D &g, const Texture &img, int dx, int dy,
+                    const Rect &srcRect, const int16_t *polygon, int count,
+                    const Color *sil) {
+  if (!polygon || count < 3) {
+    imageAt<SIL>(g, img, dx, dy, srcRect, sil);
+    return;
+  }
+  if (!g.hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
+  const Rect s = srcRect.normalized();
+  if (s.isEmpty()) return;
+  // The transformed path whatever the transform: the plain and scaled paths
+  // have no polygon (and TRANSLATE snaps the offset, which this does not)
+  const affine2f m =
+      G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy);
+  if (G2Impl::wantsAntialias(g)) {
+    G2Impl::drawImageAA(g, img, s, m, polygon, count, sil);
+    return;
+  }
+  blitAffine<SIL>(g, img, m, s, polygon, count, sil);
+}
+
+template <bool SIL>
+void imageScaled(Graphics2D &g, const Texture &img, const Rect &dst,
+                 const Rect &srcRect, const Color *sil) {
+  if (!g.hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
+  const Rect s = srcRect.normalized();
+  if (s.isEmpty() || dst.width == 0 || dst.height == 0) return;
+  const TransformKind kind = G2Impl::kind(g);
+  if (G2Impl::wantsAntialias(g) && kind > TransformKind::TRANSLATE) {
+    // (a destination rectangle of whole pixels has no edge to smooth)
+    affine2f m = G2Impl::matrix(g);
+    m.translate((float)dst.x, (float)dst.y)
+        .scale((float)dst.width / (float)s.width,
+               (float)dst.height / (float)s.height);
+    G2Impl::drawImageAA(g, img, s, m, nullptr, 0, sil);
+    return;
+  }
+  if (!TRANSFORM || kind <= TransformKind::TRANSLATE) {
+    blitScaled<SIL>(g, img,
+                    dst.offset(G2Impl::offsetX(g), G2Impl::offsetY(g)), s, sil);
+  } else if (kind == TransformKind::SCALE) {
+    blitScaled<SIL>(g, img, G2Impl::mapRectSigned(g, RectF(dst)), s, sil);
+  } else {
+    affine2f m = G2Impl::matrix(g);
+    m.translate((float)dst.x, (float)dst.y)
+        .scale((float)dst.width / (float)s.width,
+               (float)dst.height / (float)s.height);
+    blitAffine<SIL>(g, img, m, s, nullptr, 0, sil);
+  }
+}
+
 }  // namespace
 
 void Graphics2D::drawImage(const Texture &img, int dx, int dy,
                            const Rect &srcRect) {
-  if (!hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
-  const Rect s = srcRect.normalized();
-  if (s.isEmpty()) return;
-  if (!TRANSFORM || kind_ <= TransformKind::TRANSLATE) {
-    if (COLOR_KEY && hasColorKey())
-      blitScaled(*this, img, Rect{dx + ox_, dy + oy_, s.width, s.height}, s);
-    else
-      blitPlain(*this, img, dx + ox_, dy + oy_, s);
-  } else if (G2Impl::wantsAntialias(*this)) {
-    G2Impl::drawImageAA(
-        *this, img, s,
-        state_.transform * affine2f::translation((float)dx, (float)dy), nullptr,
-        0);
-  } else if (kind_ == TransformKind::SCALE) {
-    blitScaled(*this, img,
-               G2Impl::mapRectSigned(*this, RectF{(float)dx, (float)dy,
-                                                  (float)s.width,
-                                                  (float)s.height}),
-               s);
-  } else {
-    blitAffine(*this, img,
-               state_.transform * affine2f::translation((float)dx, (float)dy),
-               s);
-  }
+  imageAt<false>(*this, img, dx, dy, srcRect, nullptr);
 }
 
 void Graphics2D::drawImage(const Texture &img, int dx, int dy,
                            const Rect &srcRect, const int16_t *polygon,
                            int count) {
-  if (!polygon || count < 3) {
-    drawImage(img, dx, dy, srcRect);
-    return;
-  }
-  if (!hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
-  const Rect s = srcRect.normalized();
-  if (s.isEmpty()) return;
-  // The transformed path whatever the transform: the plain and scaled paths
-  // have no polygon (and TRANSLATE snaps the offset, which this does not)
-  if (G2Impl::wantsAntialias(*this)) {
-    G2Impl::drawImageAA(
-        *this, img, s,
-        state_.transform * affine2f::translation((float)dx, (float)dy), polygon,
-        count);
-    return;
-  }
-  blitAffine(*this, img,
-             state_.transform * affine2f::translation((float)dx, (float)dy), s,
-             polygon, count);
+  imageInPolygon<false>(*this, img, dx, dy, srcRect, polygon, count, nullptr);
 }
 
 void Graphics2D::drawImage(const Texture &img, const Rect &dst,
                            const Rect &srcRect) {
-  if (!hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
-  const Rect s = srcRect.normalized();
-  if (s.isEmpty() || dst.width == 0 || dst.height == 0) return;
-  if (G2Impl::wantsAntialias(*this) && kind_ > TransformKind::TRANSLATE) {
-    // (a destination rectangle of whole pixels has no edge to smooth)
-    affine2f m = state_.transform;
-    m.translate((float)dst.x, (float)dst.y)
-        .scale((float)dst.width / (float)s.width,
-               (float)dst.height / (float)s.height);
-    G2Impl::drawImageAA(*this, img, s, m, nullptr, 0);
-    return;
-  }
-  if (!TRANSFORM || kind_ <= TransformKind::TRANSLATE) {
-    blitScaled(*this, img, dst.offset(ox_, oy_), s);
-  } else if (kind_ == TransformKind::SCALE) {
-    blitScaled(*this, img, G2Impl::mapRectSigned(*this, RectF(dst)), s);
-  } else {
-    affine2f m = state_.transform;
-    m.translate((float)dst.x, (float)dst.y)
-        .scale((float)dst.width / (float)s.width,
-               (float)dst.height / (float)s.height);
-    blitAffine(*this, img, m, s);
-  }
+  imageScaled<false>(*this, img, dst, srcRect, nullptr);
+}
+
+void Graphics2D::drawSilhouette(const Texture &img, int dx, int dy,
+                                const Rect &srcRect, Color c) {
+  imageAt<true>(*this, img, dx, dy, srcRect, &c);
+}
+
+void Graphics2D::drawSilhouette(const Texture &img, int dx, int dy,
+                                const Rect &srcRect, const int16_t *polygon,
+                                int count, Color c) {
+  imageInPolygon<true>(*this, img, dx, dy, srcRect, polygon, count, &c);
+}
+
+void Graphics2D::drawSilhouette(const Texture &img, const Rect &dst,
+                                const Rect &srcRect, Color c) {
+  imageScaled<true>(*this, img, dst, srcRect, &c);
 }
 
 // ---------------------------------------------------------------------------
@@ -1119,6 +1354,8 @@ struct ImageAA {
   uint32_t keyNative;
   WriteMode mode;
   uint32_t opacity64;
+  bool silhouette;  // drawSilhouette(): the alpha only, into `color`
+  Color color;
   // The outline on the target as its edges, inside is nx x + ny y >= c, in
   // 16.16 (the unit normals, so d below is a distance in pixels); and, for
   // the spans, the bound each edge puts on x along a row, x >= (or <=)
@@ -1286,19 +1523,28 @@ struct ImageAA {
       const uint32_t wx = ((uint32_t)u >> 8) & 255u, wy = ((uint32_t)v >> 8) & 255u;
       const uint32_t w00 = (256 - wx) * (256 - wy), w10 = wx * (256 - wy),
                      w01 = (256 - wx) * wy, w11 = wx * wy;  // sum 65536
-      uint32_t r, gg, b, a;
+      uint32_t r = 0, gg = 0, b = 0, a;
       if (opaque) {
-        // The channels are premultiplied by 255: mix and divide by it
         a = 255;
-        r = (r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11) / (65536u * 255u);
-        gg = (g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11) / (65536u * 255u);
-        b = (b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11) / (65536u * 255u);
       } else {
         a = (a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11) >> 16;
         if (a == 0) {
           out[i] = 0;
           continue;
         }
+      }
+      const uint32_t ac = cov >= 64 ? a : (a * cov + 32u) >> 6;
+      if (silhouette) {
+        // The color with its alpha scaled by the image's
+        out[i] = colorWithAlpha(color, (int)((ac * (uint32_t)colorA(color) + 127u) / 255u));
+        continue;
+      }
+      if (opaque) {
+        // The channels are premultiplied by 255: mix and divide by it
+        r = (r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11) / (65536u * 255u);
+        gg = (g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11) / (65536u * 255u);
+        b = (b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11) / (65536u * 255u);
+      } else {
         // The premultiplied sums are 65536 * 255 * 255 at most: fit 32 bits;
         // the division by the alpha through the reciprocal table
         const uint32_t rcp = RCP.v[a];
@@ -1306,7 +1552,6 @@ struct ImageAA {
         gg = std::min<uint32_t>((((g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11) >> 16) * rcp) >> 16, 255u);
         b = std::min<uint32_t>((((b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11) >> 16) * rcp) >> 16, 255u);
       }
-      const uint32_t ac = cov >= 64 ? a : (a * cov + 32u) >> 6;
       out[i] = makeColor((int)r, (int)gg, (int)b, (int)ac);
     }
   }
@@ -1350,12 +1595,18 @@ struct ImageAA {
 
 void detail::G2Impl::drawImageAA(Graphics2D &g, const Texture &img,
                                  const Rect &src, const affine2f &mSrc,
-                                 const int16_t *polygon, int count) {
+                                 const int16_t *polygon, int count,
+                                 const Color *silhouette) {
   if (!g.hasTarget()) return;
   ImageAA ctx;
   ctx.g = &g;
   ctx.img = &img;
   ctx.src = src;
+  ctx.silhouette = silhouette != nullptr;
+  ctx.color = silhouette ? *silhouette : 0;
+  if (ctx.silhouette && colorA(ctx.color) == 0 &&
+      g.blendMode() != BlendMode::NONE)
+    return;
   // mSrc maps points relative to the top-left corner of src (as the polygon
   // is given); m maps image pixels
   const affine2f m =

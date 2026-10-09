@@ -21,6 +21,7 @@ CXXFLAGS := -O2 -std=c++17 -Wall -Wextra -I $(REPO_ROOT)/include -I $(COMMON)
 
 EXPORTS := _demorig_init,_demorig_frame,_demorig_get_fb,_demorig_get_width,_demorig_get_height
 EXPORTS := $(EXPORTS),_demorig_set_screen,_demorig_pointer_down,_demorig_pointer_move,_demorig_pointer_up
+EXPORTS := $(EXPORTS),_demorig_pointer_hover,_demorig_pointer_leave
 
 # The character (checked in; `make model` regenerates it from the assets):
 # one atlas for this build (a power-of-two stride, which the RP2 interpolator
