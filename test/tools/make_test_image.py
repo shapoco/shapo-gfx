@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate test/data/test_image.png (13x7, procedural RGBA) and its headers in
-every pixel format with bin/img2cpp. test/tools_test.cpp recomputes the same
+every pixel format with bin/img2cpp, plus the keyed (--out-key) ones. test/tools_test.cpp recomputes the same
 pixels and compares them with the generated textures.
 
   python3 test/tools/make_test_image.py
@@ -33,6 +33,11 @@ def main():
         out = os.path.join(DATA, f"test_image_{fmt}.hpp")
         subprocess.check_call([sys.executable, BIN, "-f", fmt, "--namespace", f"test_image_{fmt}",
                                "--name", "texture", png, out])
+    # The key is what pixel(1, 1) quantizes to in each format: escaped there
+    for fmt in ("rgb565_swapped", "rgb565", "rgb444"):
+        out = os.path.join(DATA, f"test_image_{fmt}_keyed.hpp")
+        subprocess.check_call([sys.executable, BIN, "-f", fmt, "--out-key", "#102408",
+                               "--namespace", f"test_image_{fmt}_keyed", "--name", "texture", png, out])
 
 
 if __name__ == "__main__":

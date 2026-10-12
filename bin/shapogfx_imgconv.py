@@ -46,11 +46,13 @@ def apply_key_color(image, key_color):
     return Image.fromarray(arr, "RGBA")
 
 
-def quantize(channels, bits, dither):
+def quantize(channels, bits, dither, mask=None):
     """Quantize float channels (h, w, c) in 0..255 to integers with `bits[c]` bits.
 
     dither: "none" (rounding), "diffusion" (Floyd-Steinberg, sequential),
-    "pattern" (4x4 Bayer).
+    "pattern" (4x4 Bayer). mask: (h, w) bools, the pixels that take part in
+    the error diffusion (the others neither spread nor receive any error);
+    None for all.
     """
     h, w, c = channels.shape
     maxq = np.array([(1 << b) - 1 for b in bits], dtype=np.float64)
@@ -69,6 +71,8 @@ def quantize(channels, bits, dither):
         out = np.zeros((h, w, c), dtype=np.int32)
         for y in range(h):
             for x in range(w):
+                if mask is not None and not mask[y, x]:
+                    continue
                 v = np.clip(buf[y, x], 0.0, 255.0)
                 q = np.clip(np.floor(v * maxq / 255.0 + 0.5), 0, maxq)
                 out[y, x] = q
@@ -85,14 +89,34 @@ def quantize(channels, bits, dither):
     raise ValueError(f"unknown dither mode: {dither}")
 
 
+KEYABLE_FORMATS = ("rgb565_swapped", "rgb565", "rgb444")
+_RGB_BITS = {"rgb565_swapped": (5, 6, 5), "rgb565": (5, 6, 5), "rgb444": (4, 4, 4)}
+
+
 def convert(image, fmt, dither="none", key_color=None):
     """Convert a PIL image. Returns (width, height, stride, data, elem_type).
 
     data is the pixel memory as a list of integers of `elem_type`
     ("uint8_t" or "uint16_t"), row-major with `stride` bytes per row.
+    key_color: pixels of this color become transparent before converting
+    (which only argb4444 keeps).
     """
+    w, h, stride, data, elem, _ = convert_keyed(image, fmt, dither, key_color)
+    return w, h, stride, data, elem
+
+
+def convert_keyed(image, fmt, dither="none", key_color=None, out_key=None, threshold=128):
+    """convert() that can also turn the alpha into a color key: with out_key
+    (an (R, G, B) tuple; only for KEYABLE_FORMATS), pixels whose alpha is
+    below `threshold` get the key color, as the library converts it to the
+    format, and opaque pixels that would equal it get the LSB of their blue
+    flipped. The transparent pixels take no part in the dithering.
+    Returns (width, height, stride, data, elem_type, escaped), escaped being
+    the number of pixels flipped."""
     if fmt not in FORMATS:
         raise ValueError(f"unknown format: {fmt}")
+    if out_key is not None and fmt not in KEYABLE_FORMATS:
+        raise ValueError(f"{fmt} cannot have a key color")
     if key_color is not None:
         image = apply_key_color(image, key_color)
     w, h = image.size
@@ -106,17 +130,31 @@ def convert(image, fmt, dither="none", key_color=None):
             row = np.zeros(stride * 8, dtype=np.uint8)
             row[:w] = q[y]
             data.extend(int(v) for v in np.packbits(row))  # MSB first
-        return w, h, stride, data, "uint8_t"
+        return w, h, stride, data, "uint8_t", 0
 
     if fmt == "argb4444":
         arr = np.array(image.convert("RGBA"), dtype=np.float64)
         q = quantize(arr, [4, 4, 4, 4], dither)
         px = (q[:, :, 3] << 12) | (q[:, :, 0] << 8) | (q[:, :, 1] << 4) | q[:, :, 2]
-        return w, h, w * 2, [int(v) for v in px.flatten()], "uint16_t"
+        return w, h, w * 2, [int(v) for v in px.flatten()], "uint16_t", 0
+
+    bits = _RGB_BITS[fmt]
+    escaped = 0
+    if out_key is None:
+        arr = np.array(image.convert("RGB"), dtype=np.float64)
+        q = quantize(arr, bits, dither)
+    else:
+        rgba = np.array(image.convert("RGBA"))
+        opaque = rgba[:, :, 3] >= threshold
+        q = quantize(rgba[:, :, :3].astype(np.float64), bits, dither, opaque)
+        # Truncated, as colorToRgb565() / colorToRgb444() do
+        kq = np.array([c >> (8 - b) for c, b in zip(out_key, bits)], dtype=np.int32)
+        clash = opaque & np.all(q == kq, axis=2)
+        q[clash, 2] ^= 1
+        q[~opaque] = kq
+        escaped = int(clash.sum())
 
     if fmt == "rgb444":
-        arr = np.array(image.convert("RGB"), dtype=np.float64)
-        q = quantize(arr, [4, 4, 4], dither)
         stride = (w * 3 + 1) // 2
         data = []
         for y in range(h):
@@ -131,23 +169,16 @@ def convert(image, fmt, dither="none", key_color=None):
                     row[i + 1] = (row[i + 1] & 0xF0) | r
                     row[i + 2] = (g << 4) | b
             data.extend(row)
-        return w, h, stride, data, "uint8_t"
+        return w, h, stride, data, "uint8_t", escaped
 
-    if fmt == "rgb565":
-        # Native byte order: emitted as uint16_t values, which the compiler
-        # lays out for the target
-        arr = np.array(image.convert("RGB"), dtype=np.float64)
-        q = quantize(arr, [5, 6, 5], dither)
-        val = (q[:, :, 0] << 11) | (q[:, :, 1] << 5) | q[:, :, 2]
-        return w, h, w * 2, [int(v) for v in val.flatten()], "uint16_t"
-
-    # rgb565_swapped: the uint16_t value with its bytes swapped (relative to
-    # the CPU's order, whatever the target's: emitted as uint16_t values)
-    arr = np.array(image.convert("RGB"), dtype=np.float64)
-    q = quantize(arr, [5, 6, 5], dither)
     val = (q[:, :, 0] << 11) | (q[:, :, 1] << 5) | q[:, :, 2]
-    val = ((val & 0xFF) << 8) | ((val >> 8) & 0xFF)
-    return w, h, w * 2, [int(v) for v in val.flatten()], "uint16_t"
+    if fmt == "rgb565_swapped":
+        # The uint16_t value with its bytes swapped (relative to the CPU's
+        # order, whatever the target's: emitted as uint16_t values)
+        val = ((val & 0xFF) << 8) | ((val >> 8) & 0xFF)
+    # rgb565: native byte order, emitted as uint16_t values, which the
+    # compiler lays out for the target
+    return w, h, w * 2, [int(v) for v in val.flatten()], "uint16_t", escaped
 
 
 def is_power_of_two(n):

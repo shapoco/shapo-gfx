@@ -1831,10 +1831,16 @@ Python 3 scripts (dependencies in `bin/requirements.txt`; also runnable with `uv
 thanks to inline metadata). `shapogfx_imgconv.py` is the shared image conversion
 module.
 
-- **img2cpp** `[-f FORMAT] [-d DITHER] [-k COLOR] [--name N] [--namespace NS] [--resize WxH] [--pot] input output.hpp`
+- **img2cpp** `[-f FORMAT] [-d DITHER] [--in-key COLOR] [--out-key COLOR] [--alpha-threshold N] [--name N] [--namespace NS] [--resize WxH] [--pot] input output.hpp`
   emits an aligned `static const` pixel array and a `static const gfx2d::Texture`.
   Formats rgb565_swapped (default), rgb565, argb4444, rgb444, gray1; dithering none / diffusion /
-  pattern; `-k` makes a key color transparent; `--pot` resizes to a power of two.
+  pattern; `--in-key` (alias `-k` / `--key-color`) makes a key color of the input transparent;
+  `--pot` resizes to a power of two. `--out-key` (rgb565_swapped, rgb565 and rgb444 only) turns
+  the alpha into a color key: pixels with alpha below `--alpha-threshold` (default 128) get the
+  key color, opaque pixels that would equal it once quantized get the LSB of their blue flipped,
+  the transparent pixels take no part in the dithering, and the header also defines
+  `static constexpr gfx2d::Color <name>KeyColor` (0xFFRRGGBB) for `Graphics2D::setColorKey()`.
+  Without it the alpha is dropped by the formats that have none.
   Pixels are quantized with rounding; the memory layout matches `pixel.hpp`
   (RGB444 is emitted as bytes; RGB565, ARGB4444 and RGB565_SWAPPED as `uint16_t` values,
   the last with their bytes already swapped, which the compiler lays out in the

@@ -11,8 +11,11 @@
 #include "data/test_image_argb4444.hpp"
 #include "data/test_image_gray1.hpp"
 #include "data/test_image_rgb444.hpp"
+#include "data/test_image_rgb444_keyed.hpp"
 #include "data/test_image_rgb565.hpp"
+#include "data/test_image_rgb565_keyed.hpp"
 #include "data/test_image_rgb565_swapped.hpp"
+#include "data/test_image_rgb565_swapped_keyed.hpp"
 #include "data/test_model.hpp"
 #include "data/test_model_packed.hpp"
 #include "data/test_rig.hpp"
@@ -63,6 +66,43 @@ static void checkTexture(const g2::Texture &t, int stepR, int stepG, int stepB,
   }
 }
 
+// A texture made with --out-key: the transparent pixels hold the key, which
+// drawImage() with that color key skips, and the opaque ones the source
+// within the quantization step (pixel (1, 1), of the key color, escaped).
+static void checkKeyedTexture(const g2::Texture &t, g2::Color key, int stepR,
+                              int stepG, int stepB) {
+  CHECK_EQ(key, (g2::Color)0xFF102408u);
+  CHECK(g2::texturePixel(t, 1, 1, key) != g2::Colors::TRANSPARENT);
+  const g2::Color bg = 0xFF00FFFFu;
+  g2::OwnedSurface s(t.format, t.width, t.height);
+  g2::Graphics2D g;
+  g.setTarget(s.surface());
+  g.clear(bg);
+  const g2::Color bgGot = g.getPixel(0, 0);
+  g.setColorKey(key);
+  g.drawImage(t, 0, 0);
+  for (int y = 0; y < 7; y++) {
+    for (int x = 0; x < 13; x++) {
+      const g2::Color want = testImagePixel(x, y);
+      const bool opaque = g2::colorA(want) != 0;
+      CHECK_EQ(g2::texturePixel(t, x, y, key) == g2::Colors::TRANSPARENT,
+               !opaque);
+#if SHAPOGFX2D_COLOR_KEY
+      const g2::Color got = g.getPixel(x, y);
+      if (!opaque) {
+        CHECK_EQ(got, bgGot);
+        continue;
+      }
+      CHECK(absDiff(g2::colorR(got), g2::colorR(want)) <= stepR);
+      CHECK(absDiff(g2::colorG(got), g2::colorG(want)) <= stepG);
+      CHECK(absDiff(g2::colorB(got), g2::colorB(want)) <= stepB);
+#else
+      (void)bgGot, (void)stepR, (void)stepG, (void)stepB;
+#endif
+    }
+  }
+}
+
 static void testImg2cpp() {
   CHECK_EQ((int)test_image_rgb565_swapped::texture.format,
            (int)g2::PixelFormat::RGB565_SWAPPED);
@@ -80,6 +120,14 @@ static void testImg2cpp() {
   checkTexture(test_image_argb4444::texture, 17, 17, 17, true, false);
   checkTexture(test_image_rgb444::texture, 17, 17, 17, false, false);
   checkTexture(test_image_gray1::texture, 0, 0, 0, false, true);
+  checkKeyedTexture(test_image_rgb565_swapped_keyed::texture,
+                    test_image_rgb565_swapped_keyed::textureKeyColor, 9, 5, 9);
+#if SHAPOGFX_FORMAT_RGB565
+  checkKeyedTexture(test_image_rgb565_keyed::texture,
+                    test_image_rgb565_keyed::textureKeyColor, 9, 5, 9);
+#endif
+  checkKeyedTexture(test_image_rgb444_keyed::texture,
+                    test_image_rgb444_keyed::textureKeyColor, 17, 17, 17);
 }
 
 static uint8_t arena[128 * 1024];
