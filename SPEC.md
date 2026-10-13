@@ -636,11 +636,15 @@ Semantics:
   keeps every product of the mapping within 32 bits; the mapping is exact, without
   floating point. Per axis the call finds the visible range and the walker state
   with a few divisions; rows then step a DDA (source row = integer step plus a
-  remainder that carries). Horizontally a reduction steps the same way per
-  destination pixel; an enlargement walks the source pixels instead, each covering
-  a run of `q` or `q + 1` destination pixels (Bresenham's run-slice), so that copies
-  (with or without a color key) and ARGB4444 sprites write runs with `fill()` (or
-  skip keyed runs) and convert every source pixel once. A plain copy into a 16-bit
+  remainder that carries, without a branch per pixel). Horizontally a reduction
+  steps the same way per destination pixel, and so does a small enlargement; from
+  the run length `q = floor(dw / sw)` where it pays, an enlargement walks the
+  source pixels instead, each covering a run of `q` or `q + 1` destination pixels
+  (Bresenham's run-slice), so that ARGB4444 sprites and silhouettes (from `q` = 2),
+  keyed copies (from 3) and copies (from 4) write runs with `fill()` (or skip
+  keyed runs) and convert every source pixel once. Below that the runs are one or
+  two pixels long and cost more per pixel than the step (x86-64, a keyed RGB565
+  part enlarged 1.5 times: 24 instructions per pixel with runs, 14 with the step). A plain copy into a 16-bit
   target `memcpy`s the previous row wherever consecutive rows show the same source
   row (with a polygon, the same span too). A polygon's row that starts at another
   column than the previous one seeks the walker there (one division, two for

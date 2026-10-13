@@ -1011,8 +1011,9 @@ static void testColorKey() {
         ga.setColorKey(key);
         const Rect src = {1, 0, 9, 7};
         Rect dst = {3, 2, 9, 7};
-        if (n % 3 == 1) dst = {2, 1, 25, 16};   // enlarged (runs)
+        if (n % 3 == 1) dst = {2, 1, 25, 16};   // enlarged
         if (n % 3 == 2) dst = {30, 20, -7, -5};  // reduced, mirrored
+        if (n % 4 == 3) dst = {1, 1, 34, 22};    // keyed copies take runs
         ga.drawImage(img, dst, src);
         const Rect d = dst.normalized();
         for (int j = 0; j < d.height; j++) {

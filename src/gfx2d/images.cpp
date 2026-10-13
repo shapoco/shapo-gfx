@@ -466,11 +466,25 @@ struct ImageBlit {
     return true;
   }
 
-  // The ops that write runs at once (the others gain little from runs)
-  bool takesRuns() const {
-    return path == BlitPath::COPY16 || path == BlitPath::COPY ||
-           path == BlitPath::COPY_KEY16 || path == BlitPath::COPY_KEY ||
-           path == BlitPath::BLEND_ARGB || path == BlitPath::SILHOUETTE;
+  // The ops that write runs at once take them from this run length on (q =
+  // floor(dn / sn), the magnification); below, the per-pixel walk is
+  // cheaper: a blend converts and tests every source pixel once in a run,
+  // a copy only stores, so a run pays later. 0: never (the others gain
+  // little from runs).
+  uint32_t runsFrom() const {
+    switch (path) {
+      case BlitPath::BLEND_ARGB:
+      case BlitPath::SILHOUETTE:
+        return 2;
+      case BlitPath::COPY_KEY16:
+      case BlitPath::COPY_KEY:
+        return 3;
+      case BlitPath::COPY16:
+      case BlitPath::COPY:
+        return 4;
+      default:
+        return 0;
+    }
   }
 };
 
@@ -531,7 +545,7 @@ void paintLevels(const ImageBlit &b, uint8_t *dl, int x, int n,
 
 // Draw n pixels of the target row `dl` from x, fetched by `walk`. A walker
 // with SRC16_ONLY reads 16-bit sources only (the caller guarantees one); one
-// with RUNS takes only the paths of takesRuns() (the caller walks the others
+// with RUNS takes only the paths of runsFrom() (the caller walks the others
 // pixel by pixel instead).
 template <typename Walk>
 __attribute__((noinline)) void blitRow(const ImageBlit &b, uint8_t *dl, int x,
@@ -656,12 +670,12 @@ struct StepWalk {
   void operator()(Op &op, int n) {
     for (; n > 0; n--) {
       op.put(loadRaw<Op::SRC>(line, pos));
-      pos += step;
+      // (without a branch: under magnification the carry comes every other
+      // pixel or so, which no predictor guesses)
       rem += rStep;
-      if (rem >= den) {
-        rem -= den;
-        pos += dir;
-      }
+      const bool carry = rem >= den;
+      rem -= carry ? den : 0u;
+      pos += step + (carry ? dir : 0);
     }
   }
 };
@@ -1272,7 +1286,11 @@ void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
   if (!mapAxes(dst, s, img.width, img.height, g.clipRect(), ax, ay)) return;
   const Surface &target = g.target();
 
-  const bool takesRuns = b.takesRuns();
+  // Runs only from the magnification on where they pay (q is that of every
+  // row)
+  const uint32_t runsFrom = b.runsFrom();
+  const bool runs = ax.runs && runsFrom != 0 && ax.q >= runsFrom;
+  ax.runs = runs;  // (so that seek() skips the run state otherwise)
   // A plain copy repeats the previous target row for the same source row
   // (and the same span)
   const bool repeat = !SIL && b.write == WriteMode::COPY &&
@@ -1304,7 +1322,7 @@ void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
                     prevLine + (size_t)cx->start * 2, (size_t)cx->count * 2);
       } else {
         const uint8_t *sl = img.linePtr(row);
-        if (cx->runs && takesRuns) {
+        if (runs) {
           RunWalk w{sl,     cx->pos, cx->dir, cx->run0, cx->e,
                     cx->q, cx->r,   cx->rden};
           blitRowOf<SIL>(b, dl, cx->start, cx->count, w);
