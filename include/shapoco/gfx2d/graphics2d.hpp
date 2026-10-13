@@ -343,10 +343,11 @@ class Graphics2D {
   // vertices as x, y pairs in image pixels relative to the top-left corner
   // of `src` (texel corners, either winding), 3 to IMAGE_POLYGON_MAX. A
   // target pixel is drawn when the source point under its center lies in
-  // `src` and in the polygon (edges included). Always drawn by the
-  // transformed path, whatever the transform (so with SHAPOGFX2D_TRANSFORM=0
-  // too); a sprite whose transparent margin the polygon cuts off costs its
-  // area only. Fewer than 3 vertices draw the whole rectangle like the call
+  // `src` and in the polygon (edges included). Drawn by the path the
+  // transform picks without a polygon (translation and scale by the plain
+  // and scaled ones, the corners snapped alike); a sprite whose transparent
+  // margin the polygon cuts off costs its area only. Fewer than 3 vertices
+  // draw the whole rectangle like the call
   // above; more than IMAGE_POLYGON_MAX, or a degenerate polygon, draw
   // nothing.
   static constexpr int IMAGE_POLYGON_MAX = 16;

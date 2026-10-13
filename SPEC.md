@@ -618,12 +618,15 @@ Semantics:
   with a convex polygon (`count` vertices as x, y pairs in image pixels relative to
   the top-left corner of `src`, texel corners, either winding, 3 to
   `IMAGE_POLYGON_MAX`) draws only the pixels whose source point lies in `src` and in
-  the polygon (edges included), always through the transformed path whatever the
-  transform is (with `SHAPOGFX2D_TRANSFORM=0` too, so the offset is not snapped the
-  way `TRANSLATE` snaps it); fewer than 3 vertices mean no polygon, more than the
-  maximum or a degenerate polygon draw nothing. It is what `rig` draws sprites with:
-  the pixels of a sprite's transparent margin cost the walk and the alpha test
-  whether or not they show, and a polygon around the opaque ones takes that off.
+  the polygon (edges included), through the path the transform picks without a
+  polygon: translation only and a scale go to the scaled path (the plain row loops
+  for an unscaled image without a color key), which narrows each row to the polygon
+  the way the transformed path does (below), with the source point of the scaled
+  mapping; a rotation or shear to the transformed path. Fewer than 3 vertices mean
+  no polygon, more than the maximum or a degenerate polygon draw nothing. It is what
+  `rig` draws sprites with: the pixels of a sprite's transparent margin cost the walk
+  and the alpha test whether or not they show, and a polygon around the opaque ones
+  takes that off.
 - **Scaled drawImage** stretches the source rectangle over the destination
   rectangle with nearest-neighbor sampling at pixel centers: destination pixel
   `t` of `dw` shows source pixel `floor((2t + 1) sw / 2dw)`. A negative
@@ -639,7 +642,9 @@ Semantics:
   (with or without a color key) and ARGB4444 sprites write runs with `fill()` (or
   skip keyed runs) and convert every source pixel once. A plain copy into a 16-bit
   target `memcpy`s the previous row wherever consecutive rows show the same source
-  row. The per-pixel ops are: a copy within a format, a keyed copy within a format,
+  row (with a polygon, the same span too). A polygon's row that starts at another
+  column than the previous one seeks the walker there (one division, two for
+  runs). The per-pixel ops are: a copy within a format, a keyed copy within a format,
   ARGB4444 sprites, a format onto itself with an opacity, and for everything else the
   `Color` conversion in chunks of 64 pixels (a keyed pixel becomes the Color 0, which
   a keyed copy skips and a blend draws with alpha 0).
@@ -655,8 +660,10 @@ Semantics:
   on the column that moves linearly with the row, so the setup turns the edges
   into (column at the first row, change per row) pairs -- lower bounds and upper
   bounds by the sign of the edge normal's component along the row, the edges
-  perpendicular to it narrowing the row range once -- and a row costs one
-  multiply-add per edge and two roundings, in float (the exact rectangle keeps
+  perpendicular to it narrowing the row range once. Of each kind only the bounds
+  that are the tightest on some row are kept (their envelope, ordered by slope),
+  so the rows, taken from top to bottom, step through them: a row costs two
+  multiply-adds per kind and two roundings, in float (the exact rectangle keeps
   the walk safe whatever this rounds to). Images up to 16384 pixels and
   transforms that shrink by at most 4096 are drawn (the limits keep the fixed
   point within 32 bits). On a core without an FPU the per-row setup is a few
@@ -1043,9 +1050,9 @@ void drawBind(Graphics2D &, const Armature &);   // the bind pose, without an In
   draw positions `[first, end)` (clamped)
   with `g`'s transform as the placement of the armature: per visible slot with a
   non-zero alpha, `setTransform(placement * world[bone] * local)` and
-  `drawImage(texture, 0, 0, src, hull, hullCount)` (the transformed path; the hull
-  cuts only pixels that would not have shown, so the picture is that of the whole
-  rectangles) or `drawPicture(picture, color, strokeWidth)`, with the clip rectangle of `g`
+  `drawImage(texture, 0, 0, src, hull, hullCount)` (the path of the transform, the
+  scaled one for a part neither turned nor sheared; the hull cuts only pixels that
+  would not have shown, so the picture is that of the whole rectangles) or `drawPicture(picture, color, strokeWidth)`, with the clip rectangle of `g`
   narrowed to the slot's `clip` (through `placement * world[clipBone]`) while it is
   drawn. The slot's alpha scales
   `g`'s opacity, ADD slots draw additively unless `g`'s blend mode is NONE, and a

@@ -903,6 +903,30 @@ static void testPolygonImage() {
                  Graphics2D::IMAGE_POLYGON_MAX + 1);
     CHECK_EQ(countColor(ga, Colors::BLACK), 32 * 20);
   }
+
+  // The order of the vertices does not matter: an edge across the rows
+  // (here the top one) narrows the rows without moving the other edges'
+  // bounds, wherever it comes in the list
+  OwnedSurface sq = createSurface(PixelFormat::ARGB4444, 16, 16);
+  fillRandom(sq, 7);
+  const affine2f mo[] = {affine2f::translation(3, 2),
+                         affine2f::translation(3, 2).scale(1.5f, 2.0f),
+                         affine2f::placement(18, 16, 0.3f, 1.2f, 1.2f, 8, 8)};
+  for (const affine2f &m : mo) {
+    OwnedSurface a = createSurface(PixelFormat::RGB565_SWAPPED, 40, 36);
+    OwnedSurface b = createSurface(PixelFormat::RGB565_SWAPPED, 40, 36);
+    Graphics2D ga(a), gb(b);
+    ga.setTransform(m);
+    gb.setTransform(m);
+    ga.drawImage(sq, 0, 0, Rect{0, 0, 16, 16}, hexa, 6);
+    for (int r = 1; r < 6; r++) {
+      int16_t turned[12];
+      for (int i = 0; i < 12; i++) turned[i] = hexa[(i + 2 * r) % 12];
+      gb.clear(Colors::BLACK);
+      gb.drawImage(sq, 0, 0, Rect{0, 0, 16, 16}, turned, 6);
+      CHECK(sameSurface(a, b));
+    }
+  }
 }
 #endif  // SHAPOGFX2D_TRANSFORM
 
@@ -1113,9 +1137,18 @@ static void testSilhouette() {
                     src, df, n, n, failures, "silhouette", k, &c);
         static const int16_t tri[] = {0, 0, 9, 1, 3, 7};
         checkPolygonImage(img.surface(),
-                          affine2f::placement(20, 14, 0.3f * n, 2.2f, 1.9f, 4,
-                                              3),
+                          affine2f::placement(20, 14, 0.3f * n + 0.1f, 2.2f,
+                                              1.9f, 4, 3),
                           src, tri, 3, df, n, n, failures, "silhouette", &c);
+        // Scaled (the scaled path, the corners on whole pixels), mirrored
+        // on either axis
+        const affine2f ms = n % 3 == 0   ? affine2f{2, 0, 0, 3, 4, 2}
+                            : n % 3 == 1 ? affine2f{-2, 0, 0, 1, 30, 5}
+                                         : affine2f{1, 0, 0, -2, 6, 20};
+        checkPolygonImage(img.surface(), ms, src, tri, 3, df, n, n, failures,
+                          "scaled silhouette", &c);
+        checkPolygonImage(img.surface(), ms, src, tri, 3, df, n, n, failures,
+                          "scaled");
 #endif
       }
     }

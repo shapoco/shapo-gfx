@@ -749,6 +749,27 @@ struct ScaleAxis {
   bool runs;
   int run0;
   uint32_t e, q, r, rden;
+  // target pixel 0 and the source pixel of k = 0, for seek()
+  int origin, base;
+  uint32_t sn;
+
+  // Start at target pixel `x` instead (one division, two with runs)
+  void seek(int x) {
+    const int t0 = x - origin;
+    const uint32_t n0 = (2u * t0 + 1u) * sn;
+    const int k0 = (int)(n0 / den);
+    rem = n0 % den;
+    pos = base + dir * k0;
+    if (runs) {
+      // Run k starts at s(k) = ceil(a(k) / 2sn), a(k) = 2k dn - sn; e(k) =
+      // s(k) 2sn - a(k) decides whether run k is q or q + 1 long
+      const uint32_t a = (uint32_t)(k0 + 1) * den - sn;
+      const uint32_t s1 = (a + rden - 1u) / rden;
+      run0 = (int)s1 - t0;
+      e = s1 * rden - a;
+    }
+    start = x;
+  }
 };
 
 constexpr int SCALE_MAX = 32767;
@@ -777,28 +798,21 @@ bool mapAxis(int srcPos, int sn, int size, int dstPos, int dn, int clip0,
   const int t0 = std::max(firstOf(kLo), clip0 - dstPos);
   const int t1 = std::min(firstOf(kHi + 1), clip1 - dstPos);
   if (t0 >= t1) return false;
-  m.start = dstPos + t0;
   m.count = t1 - t0;
   m.dir = mirror ? -1 : 1;
-  const uint32_t n0 = (2u * t0 + 1u) * (uint32_t)sn;
   m.den = 2u * dn;
-  const int k0 = (int)(n0 / m.den);
-  m.rem = n0 % m.den;
-  m.pos = (mirror ? srcPos + sn - 1 : srcPos) + m.dir * k0;
   m.step = m.dir * (sn / dn);
   m.rStep = 2u * (uint32_t)(sn % dn);
   m.runs = sn < dn;
   if (m.runs) {
-    // Run k starts at s(k) = ceil(a(k) / 2sn), a(k) = 2k dn - sn; e(k) =
-    // s(k) 2sn - a(k) decides whether run k is q or q + 1 long
-    const uint32_t a = 2u * (uint32_t)(k0 + 1) * dn - sn;
-    const uint32_t s1 = (a + 2u * sn - 1u) / (2u * sn);
-    m.run0 = (int)s1 - t0;
-    m.e = s1 * 2u * sn - a;
     m.q = (uint32_t)(dn / sn);
     m.r = 2u * (uint32_t)(dn % sn);
     m.rden = 2u * sn;
   }
+  m.origin = dstPos;
+  m.base = mirror ? srcPos + sn - 1 : srcPos;
+  m.sn = (uint32_t)sn;
+  m.seek(dstPos + t0);
   return true;
 }
 
@@ -852,6 +866,177 @@ bool estimateSpan(float c, float g, float ig, float lo, float hi, float &x0,
 constexpr int AFFINE_SIZE_MAX = 16384;
 constexpr float AFFINE_STEP_MAX = 4096.0f;
 
+// A convex polygon of the source as bounds on the target column x per target
+// row, for a mapping whose source point (absolute) of the center of target
+// pixel (x, y) is u = A x + C y + E, v = B x + D y + F: an edge whose inward
+// normal has a component along the row is x >= (or <=) a bound that changes
+// linearly with the row (x0 at row yRef, dx per row); one across the rows
+// only narrows the row range once. The column is at least the highest lower
+// bound and at most the lowest upper bound: init() keeps of each kind the
+// bounds that are the tightest on some row (their envelope), ordered by the
+// rows where they are, so that rows taken from top to bottom step through
+// them and a row costs two of them.
+struct PolygonRows {
+  struct Bound {
+    float x0, dx;
+  };
+  Bound lo[Graphics2D::IMAGE_POLYGON_MAX], hi[Graphics2D::IMAGE_POLYGON_MAX];
+  int loCount = 0, hiCount = 0;
+  int yRef = 0;
+  int top = 0, bottom = -1;  // the rows left by init()
+  int loAt = 0, hiAt = 0, lastY = 0;  // the tightest bounds on row lastY
+
+  // Reduce the n bounds of `b` to their envelope: for s = 1 the highest
+  // (lower bounds), for s = -1 the lowest (upper bounds), ordered by s dx.
+  // Returns how many are left.
+  static int envelope(Bound *b, int n, float s) {
+    // By s dx ascending, then by s x0 descending (insertion sort: n is at
+    // most IMAGE_POLYGON_MAX)
+    for (int i = 1; i < n; i++) {
+      const Bound v = b[i];
+      int j = i;
+      for (; j > 0; j--) {
+        const Bound &u = b[j - 1];
+        if (s * u.dx < s * v.dx || (u.dx == v.dx && s * u.x0 >= s * v.x0))
+          break;
+        b[j] = u;
+      }
+      b[j] = v;
+    }
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+      // A parallel one behind the previous never is the tightest
+      if (m > 0 && b[i].dx == b[m - 1].dx) continue;
+      // The last one is not either if the new one overtakes the one before
+      // it no later than the last one does: with c the s x0 and k the s dx
+      // of the three, (c1 - c3) / (k3 - k1) <= (c1 - c2) / (k2 - k1)
+      while (m >= 2) {
+        const float c1 = s * b[m - 2].x0, k1 = s * b[m - 2].dx;
+        const float c2 = s * b[m - 1].x0, k2 = s * b[m - 1].dx;
+        const float c3 = s * b[i].x0, k3 = s * b[i].dx;
+        if ((c1 - c3) * (k2 - k1) > (c1 - c2) * (k3 - k1)) break;
+        m--;
+      }
+      b[m++] = b[i];
+    }
+    return m;
+  }
+
+  // `polygon`: `count` (3 or more) vertices relative to the top-left corner
+  // of `s`; [y0, y1] the rows to narrow. False for a degenerate polygon or
+  // too many vertices, or if no row is left (nothing is drawn).
+  bool init(const int16_t *polygon, int count, const Rect &s, float A,
+            float B, float C, float D, float E, float F, int &y0, int &y1) {
+    loCount = hiCount = 0;
+    yRef = y0;
+    if (count > Graphics2D::IMAGE_POLYGON_MAX) return false;
+    vec2f poly[Graphics2D::IMAGE_POLYGON_MAX];
+    for (int i = 0; i < count; i++)
+      poly[i] = {(float)polygon[2 * i], (float)polygon[2 * i + 1]};
+    // The winding, from the doubled signed area
+    float area2 = 0.0f;
+    for (int i = 0; i < count; i++) {
+      const int j = (i + 1) % count;
+      area2 += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
+    }
+    if (!(area2 != 0.0f)) return false;
+    const float sign = area2 > 0 ? 1.0f : -1.0f;
+    const float lim = 1e6f;
+    for (int i = 0; i < count; i++) {
+      const int j = (i + 1) % count;
+      const float ex = poly[j].x - poly[i].x;
+      const float ey = poly[j].y - poly[i].y;
+      if (ex == 0.0f && ey == 0.0f) continue;  // a repeated vertex
+      // An inward normal of the edge (for a positive area, its left side):
+      // inside is nx u + ny v >= c, in absolute source coordinates (the
+      // bounds below do not depend on its length)
+      const float nx = -ey * sign, ny = ex * sign;
+      const float c = nx * (poly[i].x + (float)s.x) +
+                      ny * (poly[i].y + (float)s.y);
+      // With u = A x + C y + E, v = B x + D y + F that is
+      // g x >= h0 + hy y
+      const float g = nx * A + ny * B;
+      const float h0 = c - nx * E - ny * F, hy = -(nx * C + ny * D);
+      if (g == 0.0f) {
+        // Across the rows: hy y <= -h0
+        if (hy > 0.0f) {
+          y1 = std::min(y1, (int)std::floor(std::clamp(-h0 / hy, -lim, lim)));
+        } else if (hy < 0.0f) {
+          y0 = std::max(y0, (int)std::ceil(std::clamp(-h0 / hy, -lim, lim)));
+        } else if (h0 > 0.0f) {
+          return false;
+        }
+        continue;
+      }
+      // (clamped far beyond any target, so that envelope() multiplies finite
+      // numbers)
+      const float ig = 1.0f / g, big = 1e12f;
+      const Bound b = {std::clamp((h0 + hy * (float)yRef) * ig, -big, big),
+                       std::clamp(hy * ig, -big, big)};
+      if (g > 0.0f) {
+        lo[loCount++] = b;
+      } else {
+        hi[hiCount++] = b;
+      }
+    }
+    top = y0, bottom = y1;
+    loCount = envelope(lo, loCount, 1.0f);
+    hiCount = envelope(hi, hiCount, -1.0f);
+    loAt = hiAt = 0;
+    lastY = yRef;
+    return y0 <= y1;
+  }
+
+  // Narrow [k0, k1] (columns relative to xr) to those inside the polygon on
+  // row y: the tightest of the lower and of the upper bounds, stepping to
+  // the next of the envelope where it overtakes (rows from top to bottom;
+  // a row above the previous one starts over). In float; the callers keep
+  // the walks within the image whatever this rounds to.
+  bool narrow(int y, int xr, int &k0, int &k1) {
+    if (y < lastY) loAt = hiAt = 0;
+    lastY = y;
+    const float dy = (float)(y - yRef);
+    float xlo = -1e9f, xhi = 1e9f;
+    if (loCount > 0) {
+      xlo = lo[loAt].x0 + lo[loAt].dx * dy;
+      while (loAt + 1 < loCount) {
+        const float v = lo[loAt + 1].x0 + lo[loAt + 1].dx * dy;
+        if (v < xlo) break;
+        xlo = v;
+        loAt++;
+      }
+    }
+    if (hiCount > 0) {
+      xhi = hi[hiAt].x0 + hi[hiAt].dx * dy;
+      while (hiAt + 1 < hiCount) {
+        const float v = hi[hiAt + 1].x0 + hi[hiAt + 1].dx * dy;
+        if (v > xhi) break;
+        xhi = v;
+        hiAt++;
+      }
+    }
+    // (ceil and floor by truncation: no library calls on a row)
+    const float lim = 1e6f;
+    const float fl = std::clamp(xlo - (float)xr, -lim, lim);
+    const float fh = std::clamp(xhi - (float)xr, -lim, lim);
+    const int il = (int)fl, ih = (int)fh;
+    k0 = std::max(k0, il + (fl > (float)il));
+    k1 = std::min(k1, ih - (fh < (float)ih));
+    return k0 <= k1;
+  }
+
+  // The n columns of row y from x narrowed to the polygon (and false for a
+  // row outside it)
+  bool span(int y, int &x, int &n) {
+    if (y < top || y > bottom) return false;
+    int k0 = x, k1 = x + n - 1;
+    if (!narrow(y, 0, k0, k1)) return false;
+    x = k0;
+    n = k1 - k0 + 1;
+    return true;
+  }
+};
+
 // The rows of a transformed image: `m` maps source coordinates relative to
 // the top-left corner of `s` to the target, `in` is the part of the source
 // that may be read. The inverse transform is computed once in float; per
@@ -864,15 +1049,8 @@ struct AffineRows {
   int bx0, bx1, by0, by1;
   int32_t uLo, uHi, vLo, vHi;
   Rect in;
-  // The convex polygon, if any, as bounds on the column x per row: an edge
-  // whose inward normal has a component along the row is x >= (or <=) a
-  // bound that changes linearly with the row (x0 at row by0, dx per row);
-  // one across the rows only narrows [by0, by1] once.
-  struct Bound {
-    float x0, dx;
-  };
-  Bound lo[Graphics2D::IMAGE_POLYGON_MAX], hi[Graphics2D::IMAGE_POLYGON_MAX];
-  int loCount = 0, hiCount = 0;
+  // The convex polygon, if any (see PolygonRows)
+  PolygonRows poly;
   bool hasPolygon = false;
 
   bool init(const affine2f &m, const Rect &s, const Rect &readable,
@@ -917,88 +1095,13 @@ struct AffineRows {
     uLo = in.x << 16, uHi = (in.right() << 16) - 1;
     vLo = in.y << 16, vHi = (in.bottom() << 16) - 1;
     if (!polygon || count < 3) return true;
-    if (count > Graphics2D::IMAGE_POLYGON_MAX) return false;
-    vec2f pf[Graphics2D::IMAGE_POLYGON_MAX];
-    for (int i = 0; i < count; i++)
-      pf[i] = {(float)polygon[2 * i], (float)polygon[2 * i + 1]};
-    return initPolygonF(pf, count, s);
-  }
-
-  // `poly`: `count` vertices relative to the top-left corner of `s`. False
-  // for a degenerate polygon or too many vertices (nothing is drawn); fewer
-  // than 3 vertices mean no polygon.
-  bool initPolygonF(const vec2f *poly, int count, const Rect &s) {
-    loCount = hiCount = 0;
-    hasPolygon = false;
-    if (!poly || count < 3) return true;
-    if (count > Graphics2D::IMAGE_POLYGON_MAX) return false;
-    // The winding, from the doubled signed area
-    float area2 = 0.0f;
-    for (int i = 0; i < count; i++) {
-      const int j = (i + 1) % count;
-      area2 += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
-    }
-    if (!(area2 != 0.0f)) return false;
-    const float sign = area2 > 0 ? 1.0f : -1.0f;
-    const float lim = 1e6f;
     hasPolygon = true;
-    for (int i = 0; i < count; i++) {
-      const int j = (i + 1) % count;
-      const float ex = poly[j].x - poly[i].x;
-      const float ey = poly[j].y - poly[i].y;
-      if (ex == 0.0f && ey == 0.0f) continue;  // a repeated vertex
-      // The inward unit normal of the edge (for a positive area, its left
-      // side): inside is nx u + ny v >= c, in absolute source coordinates
-      const float len = std::sqrt(ex * ex + ey * ey);
-      const float nx = -ey * sign / len, ny = ex * sign / len;
-      const float c = nx * (poly[i].x + (float)s.x) +
-                      ny * (poly[i].y + (float)s.y);
-      // With u = A x + C y + E, v = B x + D y + F that is
-      // g x >= h0 + hy y
-      const float g = nx * A + ny * B;
-      const float h0 = c - nx * E - ny * F, hy = -(nx * C + ny * D);
-      if (g == 0.0f) {
-        // Across the rows: hy y <= -h0
-        if (hy > 0.0f) {
-          by1 = std::min(by1, (int)std::floor(std::clamp(-h0 / hy, -lim, lim)));
-        } else if (hy < 0.0f) {
-          by0 = std::max(by0, (int)std::ceil(std::clamp(-h0 / hy, -lim, lim)));
-        } else if (h0 > 0.0f) {
-          return false;
-        }
-        continue;
-      }
-      const float ig = 1.0f / g;
-      const Bound b = {(h0 + hy * (float)by0) * ig, hy * ig};
-      if (g > 0.0f) {
-        lo[loCount++] = b;
-      } else {
-        hi[hiCount++] = b;
-      }
-    }
-    return by0 <= by1;
-  }
-
-  // Narrow [k0, k1] (columns relative to xr) to those inside the polygon on
-  // row y: the tightest of the lower and of the upper bounds, one multiply
-  // and add per edge. In float; the rectangle above keeps the walk within
-  // the image whatever this rounds to.
-  bool narrowToPolygon(int y, int xr, int &k0, int &k1) const {
-    const float dy = (float)(y - by0);
-    float xlo = -1e9f, xhi = 1e9f;
-    for (int i = 0; i < loCount; i++)
-      xlo = std::max(xlo, lo[i].x0 + lo[i].dx * dy);
-    for (int i = 0; i < hiCount; i++)
-      xhi = std::min(xhi, hi[i].x0 + hi[i].dx * dy);
-    const float lim = 1e6f;
-    k0 = std::max(k0, (int)std::ceil(std::clamp(xlo - (float)xr, -lim, lim)));
-    k1 = std::min(k1, (int)std::floor(std::clamp(xhi - (float)xr, -lim, lim)));
-    return k0 <= k1;
+    return poly.init(polygon, count, s, A, B, C, D, E, F, by0, by1);
   }
 
   // fn(y, x, n, u, v): n pixels of row y from x, (u, v) at the first one
   template <typename Fn>
-  void forEach(Fn &&fn) const {
+  void forEach(Fn &&fn) {
     const float margin = AFFINE_STEP_MAX * 2.0f;
     for (int y = by0; y <= by1; y++) {
       const float uc = C * (float)y + E, vc = D * (float)y + F;
@@ -1017,7 +1120,7 @@ struct AffineRows {
       if (!narrowSpan(u, du, uLo, uHi, k0, k1) ||
           !narrowSpan(v, dv, vLo, vHi, k0, k1))
         continue;
-      if (hasPolygon && !narrowToPolygon(y, xr, k0, k1)) continue;
+      if (hasPolygon && !poly.narrow(y, xr, k0, k1)) continue;
       // The 16.16 offsets are formed in uint32 so that an intermediate wraps
       // instead of overflowing (the sums lie within the image)
       fn(y, xr + k0, k1 - k0 + 1,
@@ -1031,10 +1134,13 @@ struct AffineRows {
 // Image paths, in target pixels
 
 // Plain: `s` (normalized) with its top-left corner at (x, y), no color key.
-// SIL: the silhouette in the color `sil` (see ImageBlit::init)
-template <bool SIL>
+// SIL: the silhouette in the color `sil` (see ImageBlit::init). POLY: `poly`
+// narrows each row to the pixels of a polygon (a separate instance, so that
+// the rows without one stay as they are).
+template <bool SIL, bool POLY = false>
 void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
-               const Rect &s, const Color *sil) {
+               const Rect &s, const Color *sil,
+               PolygonRows *poly = nullptr) {
   const Surface &target = g.target();
   const Rect clip = g.clipRect();
   // The part of the source inside the image, where it lands, clipped
@@ -1046,19 +1152,31 @@ void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
   src.y += dst.y - dy;
   ImageBlit b;
   if (!b.init<SIL>(g, img.format, sil)) return;
+  // Row j: n pixels from target column x0, source column sx
+  int x0, sx, n;
+  auto row = [&](int j) {
+    x0 = dst.x;
+    n = dst.width;
+    if constexpr (POLY) {
+      if (!poly->span(dst.y + j, x0, n)) return false;
+    }
+    sx = src.x + (x0 - dst.x);
+    return true;
+  };
 
   if constexpr (SIL) {
     for (int j = 0; j < dst.height; j++) {
+      if (!row(j)) continue;
       uint8_t *dl = target.linePtr(dst.y + j);
       const uint8_t *sl = img.linePtr(src.y + j);
       if (b.path == BlitPath::SILHOUETTE) {
-        PlainWalk w{sl, src.x};
-        blitRowSilhouette(b, dl, dst.x, dst.width, w);
+        PlainWalk w{sl, sx};
+        blitRowSilhouette(b, dl, x0, n, w);
       } else {
         // (through Color: a unit step of the scaled walker, so that no
         // path is compiled for this walker alone)
-        StepWalk w{sl, src.x, 1, 0, 0, 0, 1};
-        blitRow(b, dl, dst.x, dst.width, w);
+        StepWalk w{sl, sx, 1, 0, 0, 0, 1};
+        blitRow(b, dl, x0, n, w);
       }
     }
     return;
@@ -1067,28 +1185,30 @@ void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
   // Fast path: plain copy of 16-bit formats
   if (b.path == BlitPath::COPY16) {
     for (int j = 0; j < dst.height; j++) {
-      std::memcpy(target.linePtr(dst.y + j) + (size_t)dst.x * 2,
-                  img.linePtr(src.y + j) + (size_t)src.x * 2,
-                  (size_t)dst.width * 2);
+      if (!row(j)) continue;
+      std::memcpy(target.linePtr(dst.y + j) + (size_t)x0 * 2,
+                  img.linePtr(src.y + j) + (size_t)sx * 2, (size_t)n * 2);
     }
     return;
   }
   if (b.mode == BlendMode::NONE) {
     for (int j = 0; j < dst.height; j++) {
-      copyRowFmt(target.format, img.format, target.linePtr(dst.y + j), dst.x,
-                 img.linePtr(src.y + j), src.x, dst.width);
+      if (!row(j)) continue;
+      copyRowFmt(target.format, img.format, target.linePtr(dst.y + j), x0,
+                 img.linePtr(src.y + j), sx, n);
     }
     return;
   }
+  // (blendRowFmt() tells whether it takes the pair by drawing a row; with
+  // nothing to draw, an empty row asks)
   if (b.mode == BlendMode::ALPHA &&
       (!b.keyed || img.format == PixelFormat::ARGB4444) &&
       blendRowFmt(target.format, img.format, target.linePtr(dst.y), dst.x,
-                  img.linePtr(src.y), src.x, dst.width, b.op64, b.alphaMul,
-                  b.key)) {
-    for (int j = 1; j < dst.height; j++) {
-      blendRowFmt(target.format, img.format, target.linePtr(dst.y + j), dst.x,
-                  img.linePtr(src.y + j), src.x, dst.width, b.op64, b.alphaMul,
-                  b.key);
+                  img.linePtr(src.y), src.x, 0, b.op64, b.alphaMul, b.key)) {
+    for (int j = 0; j < dst.height; j++) {
+      if (!row(j)) continue;
+      blendRowFmt(target.format, img.format, target.linePtr(dst.y + j), x0,
+                  img.linePtr(src.y + j), sx, n, b.op64, b.alphaMul, b.key);
     }
     return;
   }
@@ -1097,12 +1217,13 @@ void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
   // in chunks
   Color tmp[IMAGE_CHUNK];
   for (int j = 0; j < dst.height; j++) {
+    if (!row(j)) continue;
     const uint8_t *sl = img.linePtr(src.y + j);
     uint8_t *dl = target.linePtr(dst.y + j);
-    for (int i = 0; i < dst.width; i += IMAGE_CHUNK) {
-      const int n = std::min(IMAGE_CHUNK, dst.width - i);
-      readColorsFmt(img.format, sl, src.x + i, n, tmp);
-      writeColorsFmt(target.format, dl, dst.x + i, n, tmp, b.write, b.op64);
+    for (int i = 0; i < n; i += IMAGE_CHUNK) {
+      const int c = std::min(IMAGE_CHUNK, n - i);
+      readColorsFmt(img.format, sl, sx + i, c, tmp);
+      writeColorsFmt(target.format, dl, x0 + i, c, tmp, b.write, b.op64);
     }
   }
 }
@@ -1114,44 +1235,90 @@ void blitPlain(const Graphics2D &g, const Texture &img, int x, int y,
 // way per destination pixel; an enlargement walks the source pixels
 // instead, each covering a run of q or q + 1 destination pixels, so that
 // copies and ARGB4444 sprites write runs with fill() and convert every
-// source pixel once.
+// source pixel once. `polygon`, if any, keeps the pixels whose source point
+// ((2t + 1) sw / 2dw on either axis) lies in it; a row whose span starts
+// elsewhere than the previous one's seeks the walker there.
 template <bool SIL>
 void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
-                const Rect &s, const Color *sil) {
+                const Rect &s, const Color *sil,
+                const int16_t *polygon = nullptr, int count = 0) {
+  PolygonRows pr;
+  PolygonRows *poly = nullptr;
+  const Rect d = dst.normalized();
+  if (polygon && count >= 3) {
+    if (d.isEmpty()) return;
+    // The source point of the center of target pixel (x, y)
+    const float A = (float)s.width / (float)dst.width;
+    const float D = (float)s.height / (float)dst.height;
+    const float E =
+        (float)(s.x + (dst.width < 0 ? s.width : 0)) + (0.5f - (float)d.x) * A;
+    const float F = (float)(s.y + (dst.height < 0 ? s.height : 0)) +
+                    (0.5f - (float)d.y) * D;
+    const Rect clip = g.clipRect();
+    int y0 = clip.y, y1 = clip.bottom() - 1;
+    if (!pr.init(polygon, count, s, A, 0.0f, 0.0f, D, E, F, y0, y1)) return;
+    poly = &pr;
+  }
   ImageBlit b;
   if (!b.init<SIL>(g, img.format, sil)) return;
   if (dst.width == s.width && dst.height == s.height && !b.keyed) {
-    blitPlain<SIL>(g, img, dst.x, dst.y, s, sil);
+    if (poly)
+      blitPlain<SIL, true>(g, img, dst.x, dst.y, s, sil, poly);
+    else
+      blitPlain<SIL>(g, img, dst.x, dst.y, s, sil);
     return;
   }
   ScaleAxis ax, ay;
   if (!mapAxes(dst, s, img.width, img.height, g.clipRect(), ax, ay)) return;
   const Surface &target = g.target();
 
-  const bool runs = ax.runs && b.takesRuns();
+  const bool takesRuns = b.takesRuns();
   // A plain copy repeats the previous target row for the same source row
+  // (and the same span)
   const bool repeat = !SIL && b.write == WriteMode::COPY &&
                       bitsPerPixel(target.format) == 16;
-  const size_t xOff = (size_t)ax.start * 2, bytes = (size_t)ax.count * 2;
+  // The span of the row and its walker state: ax, or with a polygon rx
+  // (within ax, whose walker seeks anywhere in it)
+  ScaleAxis rx = ax;
+  const ScaleAxis *cx = poly ? &rx : &ax;
   int row = ay.pos, prevRow = -1;
   uint32_t rem = ay.rem;
   const uint8_t *prevLine = nullptr;
   for (int j = 0; j < ay.count; j++) {
-    uint8_t *dl = target.linePtr(ay.start + j);
-    if (repeat && row == prevRow) {
-      std::memcpy(dl + xOff, prevLine + xOff, bytes);
-    } else {
-      const uint8_t *sl = img.linePtr(row);
-      if (runs) {
-        RunWalk w{sl, ax.pos, ax.dir, ax.run0, ax.e, ax.q, ax.r, ax.rden};
-        blitRowOf<SIL>(b, dl, ax.start, ax.count, w);
-      } else {
-        StepWalk w{sl, ax.pos, ax.step, ax.dir, ax.rem, ax.rStep, ax.den};
-        blitRowOf<SIL>(b, dl, ax.start, ax.count, w);
+    const int y = ay.start + j;
+    bool draw = true;
+    if (poly) {
+      int x = ax.start, n = ax.count;
+      if (!poly->span(y, x, n)) {
+        draw = false;
+      } else if (x != rx.start || n != rx.count) {
+        if (x != rx.start) rx.seek(x);
+        rx.count = n;
+        prevRow = -1;
       }
     }
-    prevRow = row;
-    prevLine = dl;
+    if (draw) {
+      uint8_t *dl = target.linePtr(y);
+      if (repeat && row == prevRow) {
+        std::memcpy(dl + (size_t)cx->start * 2,
+                    prevLine + (size_t)cx->start * 2, (size_t)cx->count * 2);
+      } else {
+        const uint8_t *sl = img.linePtr(row);
+        if (cx->runs && takesRuns) {
+          RunWalk w{sl,     cx->pos, cx->dir, cx->run0, cx->e,
+                    cx->q, cx->r,   cx->rden};
+          blitRowOf<SIL>(b, dl, cx->start, cx->count, w);
+        } else {
+          StepWalk w{sl,       cx->pos, cx->step, cx->dir,
+                     cx->rem, cx->rStep, cx->den};
+          blitRowOf<SIL>(b, dl, cx->start, cx->count, w);
+        }
+      }
+      prevRow = row;
+      prevLine = dl;
+    } else {
+      prevRow = -1;
+    }
     row += ay.step;
     rem += ay.rStep;
     if (rem >= ay.den) {
@@ -1243,15 +1410,31 @@ void imageInPolygon(Graphics2D &g, const Texture &img, int dx, int dy,
   if (!g.hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
   const Rect s = srcRect.normalized();
   if (s.isEmpty()) return;
-  // The transformed path whatever the transform: the plain and scaled paths
-  // have no polygon (and TRANSLATE snaps the offset, which this does not)
-  const affine2f m =
-      G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy);
+  // The paths of imageAt(), the plain one through the scaled one (which
+  // takes it for an unscaled image); antialiasing smooths the polygon's
+  // edges whatever the transform
+  const TransformKind kind = G2Impl::kind(g);
   if (G2Impl::wantsAntialias(g)) {
-    G2Impl::drawImageAA(g, img, s, m, polygon, count, sil);
-    return;
+    G2Impl::drawImageAA(
+        g, img, s,
+        G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy),
+        polygon, count, sil);
+  } else if (!TRANSFORM || kind <= TransformKind::TRANSLATE) {
+    blitScaled<SIL>(g, img,
+                    Rect{dx + G2Impl::offsetX(g), dy + G2Impl::offsetY(g),
+                         s.width, s.height},
+                    s, sil, polygon, count);
+  } else if (kind == TransformKind::SCALE) {
+    blitScaled<SIL>(g, img,
+                    G2Impl::mapRectSigned(g, RectF{(float)dx, (float)dy,
+                                                   (float)s.width,
+                                                   (float)s.height}),
+                    s, sil, polygon, count);
+  } else {
+    blitAffine<SIL>(
+        g, img, G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy),
+        s, polygon, count, sil);
   }
-  blitAffine<SIL>(g, img, m, s, polygon, count, sil);
 }
 
 template <bool SIL>
