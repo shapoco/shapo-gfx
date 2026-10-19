@@ -31,6 +31,14 @@ enum class TransformKind : uint8_t {
   AFFINE,     // rotation or shear
 };
 
+// Bitwise operation of Graphics2D::bitOpPhysRect()
+enum class BitOp : uint8_t {
+  NOT,  // invert every bit (the operand is not used)
+  OR,
+  AND,
+  XOR,
+};
+
 // Size of a glyph or a text, in the coordinates of the drawing calls (not
 // scaled by the transform, so that they can be used to lay out text drawn
 // under it). Font metrics are whole pixels, so these are exact; computing
@@ -193,6 +201,32 @@ class Graphics2D {
   void setPixel(int x, int y, Color c, bool transformed = true);
   // TRANSPARENT outside the target
   Color getPixel(int x, int y, bool transformed = true) const;
+
+  // Raw pixel operations on a rectangle in target pixels, clipped to the
+  // clip rectangle; the transform, blend mode and opacity do not apply.
+  // Rows are processed 32 bits at a time between their ragged ends.
+  //
+  // bitOpPhysRect: each pixel becomes `pixel op operand`. The operand is a
+  // native pixel value (see pixel.hpp; its low bitsPerPixel() bits are used,
+  // not converted from a Color: for RGB565_SWAPPED the unswapped
+  // RRRRRGGGGGGBBBBB, for ARGB4444 the alpha bits included).
+  void bitOpPhysRect(const Rect &r, BitOp op, uint32_t operand = 0);
+  void bitOpPhysRect(int x, int y, int w, int h, BitOp op,
+                     uint32_t operand = 0) {
+    bitOpPhysRect(Rect{x, y, w, h}, op, operand);
+  }
+  // darkenPhysRect halves each color channel (v >> 1), lightenPhysRect
+  // halves its distance to the maximum ((v >> 1) | MSB). The alpha of
+  // ARGB4444 is kept. GRAY1 cannot halve a bit: there they clear (darken) or
+  // set (lighten) every other pixel in a checkerboard, (x + y) odd.
+  void darkenPhysRect(const Rect &r);
+  void darkenPhysRect(int x, int y, int w, int h) {
+    darkenPhysRect(Rect{x, y, w, h});
+  }
+  void lightenPhysRect(const Rect &r);
+  void lightenPhysRect(int x, int y, int w, int h) {
+    lightenPhysRect(Rect{x, y, w, h});
+  }
 
   void fillRect(const Rect &r, Color c);
   void fillRect(int x, int y, int w, int h, Color c) {

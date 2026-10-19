@@ -121,6 +121,7 @@ Graphics2D
    "``NONE``", "色で上書き。描画先が ARGB4444 なら色の α も書く", "コピー。ARGB4444 同士なら α もコピー"
 
 ``clear()`` はブレンドに関係なく上書きします。
+``bitOpPhysRect()`` / ``darkenPhysRect()`` / ``lightenPhysRect()`` も変換行列・ブレンド・不透明度を無視し、描画先のピクセル座標の矩形をクリップ矩形で切って処理します。
 
 カラーキーは ``drawImage()`` にだけ効きます。画像のピクセルのうちキーの色に一致するものは描かれません。
 比較は、キーを画像のフォーマットに変換した値で行います (ARGB4444 では α も比較)。
@@ -134,6 +135,9 @@ Graphics2D
    "``void clear(Color)``", "クリップ矩形全体を上書きする (変換行列とブレンドは効かない)"
    "``void setPixel(int x, int y, Color, bool transformed = true)``", "1 ピクセル描く。``transformed`` が false なら変換行列を通さない"
    "``Color getPixel(int x, int y, bool transformed = true) const``", "1 ピクセル読む (描画先の外は ``TRANSPARENT``)"
+   "``void bitOpPhysRect(const Rect &, BitOp op, uint32_t operand = 0)`` / ``bitOpPhysRect(x, y, w, h, op, operand)``", "矩形内の各ピクセルを ``pixel op operand`` にする (``BitOp``: ``NOT`` / ``OR`` / ``AND`` / ``XOR``。``NOT`` は operand を使わない)。operand は色変換しないネイティブのピクセル値で、下位 ``bitsPerPixel()`` ビットを使う (RGB565_SWAPPED ではスワップ前の RRRRRGGGGGGBBBBB)"
+   "``void darkenPhysRect(const Rect &)`` / ``darkenPhysRect(x, y, w, h)``", "矩形内を暗くする: 各チャンネルを半分に (``v >> 1``)。ARGB4444 の α はそのまま。GRAY1 は x + y が奇数のピクセルを消す (市松模様)"
+   "``void lightenPhysRect(const Rect &)`` / ``lightenPhysRect(x, y, w, h)``", "矩形内を明るくする: 各チャンネルの最大値との差を半分に (``(v >> 1) | MSB``)。ARGB4444 の α はそのまま。GRAY1 は x + y が奇数のピクセルを点ける"
    "``Color texturePixel(const Texture &, int x, int y)``", "(自由関数) テクスチャの 1 ピクセルを読む。範囲外と、ビルドから外したピクセル形式は ``TRANSPARENT``"
    "``Color texturePixel(const Texture &, int x, int y, Color key)``", "(自由関数) 加えて、``drawImage()`` と同じ比較でカラーキー ``key`` に一致するピクセルも ``TRANSPARENT``"
    "``void fillRect(const Rect &, Color)`` / ``fillRect(x, y, w, h, Color)`` / ``fillRect(const RectF &, Color)``", "塗りつぶし矩形"

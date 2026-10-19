@@ -1791,6 +1791,116 @@ static void testArcs() {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Raw pixel operations
+
+// The native value of pixel (x, y), read straight from memory
+static uint32_t rawPixel(const Surface &s, int x, int y) {
+  const uint8_t *line = s.linePtr(y);
+  switch (s.format) {
+    case PixelFormat::GRAY1: return (line[x >> 3] >> (7 - (x & 7))) & 1u;
+    case PixelFormat::RGB444: {
+      const uint8_t *p = line + x * 12 / 8;
+      const uint32_t v = ((uint32_t)p[0] << 8) | p[1];
+      return (x & 1) ? (v & 0xFFFu) : (v >> 4);
+    }
+    default: {
+      uint16_t v;
+      std::memcpy(&v, line + x * 2, 2);
+      return s.format == PixelFormat::RGB565_SWAPPED ? bswap16(v) : v;
+    }
+  }
+}
+
+// What darkenPhysRect() / lightenPhysRect() make of a native pixel
+static uint32_t refTone(PixelFormat fmt, uint32_t v, int x, int y,
+                        bool lighten) {
+  // Fields as (shift, bits)
+  static const int k444[][2] = {{8, 4}, {4, 4}, {0, 4}};
+  static const int k565[][2] = {{11, 5}, {5, 6}, {0, 5}};
+  if (fmt == PixelFormat::GRAY1) {
+    if (((x + y) & 1) == 0) return v;
+    return lighten ? 1u : 0u;
+  }
+  const int(*f)[2] = (fmt == PixelFormat::RGB444 || fmt == PixelFormat::ARGB4444)
+                         ? k444
+                         : k565;
+  uint32_t r = fmt == PixelFormat::ARGB4444 ? (v & 0xF000u) : 0u;
+  for (int i = 0; i < 3; i++) {
+    uint32_t c = (v >> f[i][0]) & ((1u << f[i][1]) - 1u);
+    c = (c >> 1) | (lighten ? 1u << (f[i][1] - 1) : 0u);
+    r |= c << f[i][0];
+  }
+  return r;
+}
+
+static void testRawOps() {
+  for (PixelFormat fmt : kFormats) {
+    const int bpp = bitsPerPixel(fmt);
+    const uint32_t all = bpp >= 32 ? 0xFFFFFFFFu : (1u << bpp) - 1u;
+    // Odd width and a padded stride, so that rows start at every alignment
+    // (16-bit pixels stay aligned to 2 bytes)
+    const uint32_t stride = minStride(fmt, 45) + (bpp == 16 ? 2 : 3);
+    const size_t bytes = (size_t)stride * 9;
+    uint32_t buf[2][256];  // 4-aligned
+    CHECK(bytes <= sizeof(buf[0]));
+    const Surface s = makeSurface(fmt, 45, 9, buf[0], stride);
+    const Surface before = makeSurface(fmt, 45, 9, buf[1], stride);
+    Graphics2D g(s);
+    // Ignored: the transform and the blend
+    g.translate(5, 3);
+    g.setBlend(BlendMode::ADD, 100);
+    uint32_t seed = 77u + (uint32_t)fmt;
+    for (int n = 0; n < 400; n++) {
+      uint32_t fill = seed + (uint32_t)n;
+      for (size_t i = 0; i < bytes; i++) {
+        ((uint8_t *)s.pixels)[i] = (uint8_t)nextRand(fill);
+      }
+      std::memcpy(before.pixels, s.pixels, bytes);
+      Rect r{randInt(seed, -4, 44), randInt(seed, -2, 8), randInt(seed, -6, 50),
+             randInt(seed, -3, 10)};
+      if (n % 5 == 0) r = {randInt(seed, 0, 44), 1, randInt(seed, 0, 3), 2};
+      const Rect clip = (n % 7 == 3) ? Rect{3, 1, 30, 6} : g.bounds();
+      g.setClipRect(clip);
+      const int kind = n % 6;  // 0..3: BitOp, 4: darken, 5: lighten
+      const uint32_t operand = nextRand(seed) ^ (nextRand(seed) << 16);
+      const BitOp op = (BitOp)(kind & 3);
+      if (kind < 4) {
+        g.bitOpPhysRect(r, op, operand);
+      } else if (kind == 4) {
+        g.darkenPhysRect(r);
+      } else {
+        g.lightenPhysRect(r);
+      }
+      const Rect nr = r.normalized();
+      bool ok = true;
+      for (int y = 0; y < 9 && ok; y++) {
+        for (int x = 0; x < 45 && ok; x++) {
+          const uint32_t v = rawPixel(before, x, y);
+          uint32_t want = v;
+          if (nr.contains(x, y) && clip.contains(x, y)) {
+            switch (kind) {
+              case 0: want = ~v & all; break;
+              case 1: want = (v | operand) & all; break;
+              case 2: want = v & operand & all; break;
+              case 3: want = (v ^ operand) & all; break;
+              default: want = refTone(fmt, v, x, y, kind == 5); break;
+            }
+          }
+          ok = rawPixel(s, x, y) == want;
+        }
+      }
+      CHECK(ok);
+      // Bytes outside the rows' pixels (the padding) are untouched
+      for (int y = 0; y < 9; y++) {
+        const uint32_t used = minStride(fmt, 45);
+        CHECK(std::memcmp(s.linePtr(y) + used, before.linePtr(y) + used,
+                          stride - used) == 0);
+      }
+    }
+  }
+}
+
 void testGraphics2D() {
   for (PixelFormat f : kFormats) testFillAndClip(f);
 #if SHAPOGFX_FORMAT_RGB565_SWAPPED
@@ -1817,6 +1927,7 @@ void testGraphics2D() {
   testPolygons();
   testFloatApi();
   testArcs();
+  testRawOps();
 #endif
   testOwnedSurface();
   testAffineHelpers();

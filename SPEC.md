@@ -309,6 +309,7 @@ draws nothing, 255 overwrites, anything else blends).
 ```c++
 struct Config {};                     // settings of init() (none yet)
 enum class TransformKind : uint8_t { IDENTITY, TRANSLATE, SCALE, AFFINE };
+enum class BitOp : uint8_t { NOT, OR, AND, XOR };       // bitOpPhysRect()
 struct TextMetrics { int width, height, ascent, lineAdvance; };   // integer only
 struct TextMetricsF { float width, height, ascent, lineAdvance; };  // on the target
 struct TextState {
@@ -355,6 +356,10 @@ class Graphics2D {
   void clear(Color);                          // overwrites the clip rectangle
   void setPixel(int x, int y, Color, bool transformed = true);
   Color getPixel(int x, int y, bool transformed = true) const;
+  // raw pixel operations in target pixels, clipped (no transform or blend)
+  void bitOpPhysRect(const Rect &, BitOp, uint32_t operand = 0); void bitOpPhysRect(int x, int y, int w, int h, BitOp, uint32_t operand = 0);
+  void darkenPhysRect(const Rect &); void darkenPhysRect(int x, int y, int w, int h);
+  void lightenPhysRect(const Rect &); void lightenPhysRect(int x, int y, int w, int h);
   // (free functions) a pixel of a texture: TRANSPARENT outside it, in a format
   // left out of the build, or (with `key`) where it is the color key as
   // drawImage() compares it
@@ -475,6 +480,22 @@ Semantics:
   blend and transform.
 - **Color key**: `drawImage()` skips the image pixels equal to the key converted to
   the image's format (alpha included for ARGB4444).
+- **Raw pixel operations**: `bitOpPhysRect()`, `darkenPhysRect()` and
+  `lightenPhysRect()` work on a rectangle in target pixels clipped to the clip
+  rectangle, without the transform, blend mode or opacity. `bitOpPhysRect()` puts
+  `pixel op operand` (`NOT` ignores the operand); the operand is a native pixel
+  value, its low `bitsPerPixel()` bits, not converted from a `Color`
+  (RGB565_SWAPPED: the unswapped value). `darkenPhysRect()` halves each color
+  channel (`v >> 1`), `lightenPhysRect()` halves its distance to the maximum
+  (`(v >> 1) | MSB`); ARGB4444 keeps its alpha. GRAY1, whose bit cannot be halved, clears
+  (darken) or sets (lighten) the pixels with `x + y` odd, a checkerboard. A row is
+  processed as the bytes it occupies in memory: the ragged ends (sub-byte for GRAY1
+  and RGB444, up to the first 4-byte boundary) separately, the rest 32 bits at a
+  time with the operation chosen once per call. `bitOpPhysRect()` repeats the
+  operand's byte pattern (1, 2 or 3 bytes long) over the words and narrows the
+  operand to the bits of a partial byte; darken and lighten are one shift-and-mask
+  expression per word, the same for a word, a pixel or a byte (RGB565_SWAPPED
+  rotates each 16-bit pixel right by one).
 - **Rectangles** are half-open (`[x, x + w)`); negative sizes are normalized.
   `drawRect` draws inside the rectangle. Under `SCALE` a rectangle is the rectangle
   between its snapped corners, under `AFFINE` a polygon (a frame is its outer and

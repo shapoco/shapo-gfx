@@ -369,6 +369,231 @@ Color Graphics2D::getPixel(int x, int y, bool transformed) const {
   return c;
 }
 
+// ---------------------------------------------------------------------------
+// Raw pixel operations. A row is taken as the bytes it occupies in memory
+// (the pixels of GRAY1 and RGB444 as a bit stream, MSB first): the ragged
+// ends byte by byte, the rest 32 bits at a time from an aligned address.
+
+// v op operand (NOT is XOR with all ones)
+template <BitOp OP>
+static inline uint32_t bitOpWord(uint32_t v, uint32_t operand) {
+  if constexpr (OP == BitOp::AND) {
+    return v & operand;
+  } else if constexpr (OP == BitOp::OR) {
+    return v | operand;
+  } else {
+    return v ^ operand;
+  }
+}
+
+// Bits [bit0, bit1) of `line` op the byte pattern `pat`: pat[i % 12] goes
+// with byte i of the row (the pattern repeats every 1, 2 or 3 bytes; 12 is a
+// multiple of the 4 of a word), and pat holds it twice so that 12 bytes from
+// any phase are contiguous.
+template <BitOp OP>
+static void bitOpRow(uint8_t *line, uint32_t bit0, uint32_t bit1,
+                     const uint8_t *pat) {
+  uint32_t b = bit0 >> 3, e = bit1 >> 3;
+  const uint32_t head = bit0 & 7u, tail = bit1 & 7u;
+  // A partial byte: the operand changes only the bits in `sel`
+  auto partial = [&](uint32_t i, uint32_t sel) {
+    const uint32_t o = pat[i % 12u];
+    line[i] = (uint8_t)bitOpWord<OP>(line[i], OP == BitOp::AND ? (o | ~sel)
+                                                                : (o & sel));
+  };
+  if (b == e) {
+    partial(b, (0xFFu >> head) & ~(0xFFu >> tail));
+    return;
+  }
+  if (head) partial(b++, 0xFFu >> head);
+  if (tail) partial(e, ~(0xFFu >> tail));
+  while (b < e && ((uintptr_t)(line + b) & 3u)) {
+    line[b] = (uint8_t)bitOpWord<OP>(line[b], pat[b % 12u]);
+    b++;
+  }
+  uint32_t n = (e - b) >> 2;
+  if (n) {
+    uint32_t w[3];
+    std::memcpy(w, pat + b % 12u, sizeof(w));
+    uint32_t *d = (uint32_t *)(line + b);
+    b += n * 4u;
+    for (; n >= 3; n -= 3) {
+      d[0] = bitOpWord<OP>(d[0], w[0]);
+      d[1] = bitOpWord<OP>(d[1], w[1]);
+      d[2] = bitOpWord<OP>(d[2], w[2]);
+      d += 3;
+    }
+    if (n > 0) d[0] = bitOpWord<OP>(d[0], w[0]);
+    if (n > 1) d[1] = bitOpWord<OP>(d[1], w[1]);
+  }
+  while (b < e) {
+    line[b] = (uint8_t)bitOpWord<OP>(line[b], pat[b % 12u]);
+    b++;
+  }
+}
+
+using BitOpRowFn = void (*)(uint8_t *, uint32_t, uint32_t, const uint8_t *);
+
+// The byte pattern of bitOpRow() for the native pixel value v
+static void bitOpPattern(PixelFormat fmt, uint32_t v, uint8_t pat[24]) {
+  uint8_t unit[3];
+  int period;
+  if (fmt == PixelFormat::GRAY1) {
+    unit[0] = (v & 1u) ? 0xFF : 0x00;
+    period = 1;
+  } else if (fmt == PixelFormat::RGB444) {
+    // Two pixels in three bytes: R1G1 B1R2 G2B2
+    v &= 0xFFFu;
+    unit[0] = (uint8_t)(v >> 4);
+    unit[1] = (uint8_t)((v << 4) | (v >> 8));
+    unit[2] = (uint8_t)v;
+    period = 3;
+  } else {
+    const uint16_t h = fmt == PixelFormat::RGB565_SWAPPED
+                           ? bswap16((uint16_t)v)
+                           : (uint16_t)v;
+    std::memcpy(unit, &h, 2);
+    period = 2;
+  }
+  for (int i = 0; i < 24; i++) pat[i] = unit[i % period];
+}
+
+// The rectangle r within the target and the clip rectangle; false if empty
+static bool rawRect(const Graphics2D &g, const Rect &r, int &x0, int &y0,
+                    int &x1, int &y1) {
+  if (!g.hasTarget() || !isFormatEnabled(g.format())) return false;
+  const Rect n = r.normalized(), c = g.clipRect();
+  x0 = std::max(n.x, c.x);
+  y0 = std::max(n.y, c.y);
+  x1 = std::min(n.right(), c.right());
+  y1 = std::min(n.bottom(), c.bottom());
+  return x0 < x1 && y0 < y1;
+}
+
+void Graphics2D::bitOpPhysRect(const Rect &r, BitOp op, uint32_t operand) {
+  int x0, y0, x1, y1;
+  if (!rawRect(*this, r, x0, y0, x1, y1)) return;
+  uint8_t pat[24];
+  bitOpPattern(target_.format, op == BitOp::NOT ? 0xFFFFFFFFu : operand, pat);
+  const BitOpRowFn row = op == BitOp::AND  ? bitOpRow<BitOp::AND>
+                         : op == BitOp::OR ? bitOpRow<BitOp::OR>
+                                           : bitOpRow<BitOp::XOR>;
+  const uint32_t bpp = (uint32_t)bitsPerPixel(target_.format);
+  for (int y = y0; y < y1; y++) {
+    row(target_.linePtr(y), (uint32_t)x0 * bpp, (uint32_t)x1 * bpp, pat);
+  }
+}
+
+// darkenPhysRect() and lightenPhysRect() as one bit expression on 32 bits of memory:
+//   ((w >> 1) & SHR) | ((w << 15) & ROT) | (w & KEEP) | (lighten ? MSB : 0)
+// Every term stays within a byte (RGB444) or a 16-bit pixel, so a word of
+// two pixels, a lone pixel or a byte goes through it alike, in either byte
+// order. RGB565_SWAPPED rotates each 16-bit pixel right by one (ROT brings
+// bit 0 to the top), which moves every field of the swapped value to its
+// halved place at once.
+template <PixelFormat F>
+struct ToneMasks;
+template <>
+struct ToneMasks<PixelFormat::RGB444> {
+  static constexpr uint32_t SHR = 0x77777777u, ROT = 0, KEEP = 0;
+  static constexpr uint32_t MSB = 0x88888888u;
+};
+template <>
+struct ToneMasks<PixelFormat::ARGB4444> {
+  static constexpr uint32_t SHR = 0x07770777u, ROT = 0, KEEP = 0xF000F000u;
+  static constexpr uint32_t MSB = 0x08880888u;
+};
+template <>
+struct ToneMasks<PixelFormat::RGB565_SWAPPED> {
+  // RRRRRGGG GGGBBBBB in memory: GGGBBBBB RRRRRGGG as a uint16_t
+  static constexpr uint32_t SHR = 0x6F7B6F7Bu, ROT = 0x80008000u, KEEP = 0;
+  static constexpr uint32_t MSB = 0x10841084u;
+};
+template <>
+struct ToneMasks<PixelFormat::RGB565> {
+  static constexpr uint32_t SHR = 0x7BEF7BEFu, ROT = 0, KEEP = 0;
+  static constexpr uint32_t MSB = 0x84108410u;
+};
+
+template <PixelFormat F>
+static inline uint32_t toneWord(uint32_t w, uint32_t msb) {
+  using M = ToneMasks<F>;
+  uint32_t r = ((w >> 1) & M::SHR) | msb;
+  if constexpr (M::ROT != 0) r |= (w << 15) & M::ROT;
+  if constexpr (M::KEEP != 0) r |= w & M::KEEP;
+  return r;
+}
+
+// Whole pixels (RGB444: whole bytes) [p, end)
+template <PixelFormat F>
+static void toneRow(uint8_t *p, uint8_t *end, uint32_t msb) {
+  using U = std::conditional_t<F == PixelFormat::RGB444, uint8_t, uint16_t>;
+  while (p < end && ((uintptr_t)p & 3u)) {
+    *(U *)p = (U)toneWord<F>(*(U *)p, msb);
+    p += sizeof(U);
+  }
+  uint32_t *d = (uint32_t *)p;
+  uint32_t n = (uint32_t)(end - p) >> 2;
+  p += n * 4u;
+  for (; n >= 4; n -= 4) {
+    d[0] = toneWord<F>(d[0], msb);
+    d[1] = toneWord<F>(d[1], msb);
+    d[2] = toneWord<F>(d[2], msb);
+    d[3] = toneWord<F>(d[3], msb);
+    d += 4;
+  }
+  while (n-- > 0) {
+    *d = toneWord<F>(*d, msb);
+    d++;
+  }
+  while (p < end) {
+    *(U *)p = (U)toneWord<F>(*(U *)p, msb);
+    p += sizeof(U);
+  }
+}
+
+static void toneRect(Graphics2D &g, const Rect &r, bool lighten) {
+  int x0, y0, x1, y1;
+  if (!rawRect(g, r, x0, y0, x1, y1)) return;
+  const Surface &t = g.target();
+  withFormat(t.format, [&](auto tag) {
+    constexpr PixelFormat F = decltype(tag)::value;
+    if constexpr (F == PixelFormat::GRAY1) {
+      // A checkerboard: darken keeps the pixels with (x + y) even, lighten
+      // sets those with (x + y) odd
+      const BitOpRowFn row =
+          lighten ? bitOpRow<BitOp::OR> : bitOpRow<BitOp::AND>;
+      for (int y = y0; y < y1; y++) {
+        uint8_t pat[24];
+        std::memset(pat, ((y & 1) != 0) == lighten ? 0xAA : 0x55, sizeof(pat));
+        row(t.linePtr(y), (uint32_t)x0, (uint32_t)x1, pat);
+      }
+    } else {
+      const uint32_t msb = lighten ? ToneMasks<F>::MSB : 0u;
+      const uint32_t bpp = (uint32_t)bitsPerPixel(F);
+      for (int y = y0; y < y1; y++) {
+        uint8_t *line = t.linePtr(y);
+        uint8_t *p = line + (uint32_t)x0 * bpp / 8u;
+        uint8_t *end = line + (uint32_t)x1 * bpp / 8u;
+        if constexpr (F == PixelFormat::RGB444) {
+          // An odd x0 starts, an odd x1 ends in the middle of a byte
+          if (x0 & 1) {
+            *p = (uint8_t)((*p & 0xF0u) | (toneWord<F>(*p, msb) & 0x0Fu));
+            p++;
+          }
+          if (x1 & 1) {
+            *end = (uint8_t)((*end & 0x0Fu) | (toneWord<F>(*end, msb) & 0xF0u));
+          }
+        }
+        toneRow<F>(p, end, msb);
+      }
+    }
+  });
+}
+
+void Graphics2D::darkenPhysRect(const Rect &r) { toneRect(*this, r, false); }
+void Graphics2D::lightenPhysRect(const Rect &r) { toneRect(*this, r, true); }
+
 bool Graphics2D::fromTarget(const vec2f &p, vec2f &out) const {
   affine2f inv = affine2f::identity();
   if (!state_.transform.invert(inv)) return false;
