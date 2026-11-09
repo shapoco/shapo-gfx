@@ -16,6 +16,14 @@
 // value as the pure integer root, which a core without an FPU keeps). On by
 // default where the compiler reports hardware float; define it as 0 or 1 to
 // choose.
+//
+// SHAPOGFX_ARCH_WORD_LOADS (ESP8266, see arch_detect.hpp): loadBit() and
+// loadPixel16() read the aligned 32-bit word that holds the pixel and
+// extract it, instead of loading 8 or 16 bits. This needs a little-endian
+// CPU and 16-bit pixels on even addresses, and reads up to three bytes
+// before or after the pixel: bytes of the same aligned word, so they are
+// in the same page and memory region and the load cannot fault, whatever
+// the buffer.
 
 #include <cmath>
 #include <cstdint>
@@ -43,6 +51,47 @@ static inline uint32_t isqrt32(uint32_t m) {
   return s;
 #else
   return gfx::intmath::isqrt32(m);
+#endif
+}
+
+}  // namespace shapoco::gfx2d::arch
+
+#if SHAPOGFX_ARCH_WORD_LOADS && defined(__BYTE_ORDER__) && \
+    __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "SHAPOGFX_ARCH_WORD_LOADS needs a little-endian target"
+#endif
+
+namespace shapoco::gfx2d::arch {
+
+#if SHAPOGFX_ARCH_WORD_LOADS
+// The aligned 32-bit word holding the byte at `addr`
+// (not instrumented by the address sanitizer: the word may reach past the
+// object the byte belongs to)
+typedef uint32_t __attribute__((may_alias)) AliasedWord;
+__attribute__((no_sanitize_address)) static inline uint32_t loadWordAt(
+    uintptr_t addr) {
+  return *(const AliasedWord *)(addr & ~(uintptr_t)3);
+}
+#endif
+
+// Bit i of `bits`, MSB first (a GRAY1 pixel, a bit of a mask)
+static inline uint32_t loadBit(const uint8_t *bits, uint32_t i) {
+#if SHAPOGFX_ARCH_WORD_LOADS
+  const uintptr_t a = (uintptr_t)bits + (i >> 3);
+  return (loadWordAt(a) >> ((a & 3u) * 8u + (7u - (i & 7u)))) & 1u;
+#else
+  return (bits[i >> 3] >> (7u - (i & 7u))) & 1u;
+#endif
+}
+
+// Pixel x of a row of 16-bit pixels, as stored
+static inline uint32_t loadPixel16(const uint8_t *line, int x) {
+#if SHAPOGFX_ARCH_WORD_LOADS
+  // (the pixel is on an even address, so it lies within one word)
+  const uintptr_t a = (uintptr_t)line + (uintptr_t)x * 2u;
+  return (loadWordAt(a) >> ((a & 2u) * 8u)) & 0xFFFFu;
+#else
+  return ((const uint16_t *)line)[x];
 #endif
 }
 

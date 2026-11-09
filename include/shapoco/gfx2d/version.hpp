@@ -5,9 +5,9 @@
 // one number. Keep it in sync with "version" in library.json and
 // idf_component.yml.
 #define SHAPOGFX_VERSION_MAJOR 1
-#define SHAPOGFX_VERSION_MINOR 10
+#define SHAPOGFX_VERSION_MINOR 11
 #define SHAPOGFX_VERSION_PATCH 0
-#define SHAPOGFX_VERSION_STRING "1.10.0"
+#define SHAPOGFX_VERSION_STRING "1.11.0"
 
 // Single integer 0x00MMmmpp for #if comparisons, e.g.
 //   #if SHAPOGFX_VERSION >= SHAPOGFX_MAKE_VERSION(1, 2, 0)

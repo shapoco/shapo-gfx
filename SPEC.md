@@ -26,7 +26,7 @@ src/gfx2d/shapes.cpp     2D ellipses, arcs, rounded rectangles, polygons
 src/gfx2d/images.cpp     2D images and 1-bit masks (bitmaps, glyphs)
 src/gfx2d/vg.cpp         2D vector graphics (paths, brushes, strokes, pictures)
 src/gfx2d/rig.cpp        2D skeletal animation (rig::Instance, drawBind)
-src/gfx2d/arch.hpp       architecture hooks of the 2D renderer (internal; RP2)
+src/gfx2d/arch.hpp       architecture hooks of the 2D renderer (internal; RP2, ESP8266)
 src/gfx3d/arch/          architecture hooks of the 3D renderer (internal; generic + RP2)
 example/wasm/            sample programs (WASM and native)
 docs/example/            browser pages for the samples
@@ -77,6 +77,7 @@ in git.
 | `SHAPOGFX3D_HOT_ATTR` | (empty) | Attribute put on the rasterization side (`render()` and the per-span functions, ~14 KB on Cortex-M0+), e.g. `__attribute__((section(".time_critical.gfx3d")))` to run it from RAM on the Pico SDK |
 | `SHAPOGFX3D_HOT_INSTANTIATE` | 0 | 1 also instantiates the per-span function templates explicitly with `SHAPOGFX3D_HOT_ATTR` (GCC ignores a section attribute on a template otherwise); see "Placing the rasterization side" |
 | `SHAPOGFX_ARCH_SPLIT_MUL64` | 1 on Cortex-M0/M0+ and ESP8266, else 0 | 1 forms 32x32 -> 64-bit products from four 16x16-bit ones inline instead of calling a library routine, for a core whose multiplier yields only the low 32 bits (fixed-point vertex stage, setup, perspective division); same results either way |
+| `SHAPOGFX_ARCH_WORD_LOADS` | 1 on the ESP8266, else 0 | 1 reads the source pixels of a scaled or transformed `drawImage()` / `drawSilhouette()` (GRAY1 and the 16-bit formats) and the bits of `drawBitmap()` and of text as the aligned 32-bit word around them, for a core where an 8- or 16-bit load from constant data is slow (the ESP8266 emulates it in an exception handler when the data is in flash). Needs a little-endian CPU; same pixels either way (see the architecture layer below) |
 | `SHAPOGFX3D_FIXED_POINT` | 0 | Vertex stage and primitive setup in fixed point, for cores without an FPU (see "Fixed-point vertex stage") |
 | `SHAPOGFX3D_DEPTH_BITS` | 32 | Depth resolution of the records: 32 (8.24) or 16 (1.15, 4 bytes less per record with depth; see "Memory management") |
 | `SHAPOGFX3D_TEXTURE` | 1 | Texture and environment mapping |
@@ -100,8 +101,8 @@ Under ESP-IDF the repository is a component: its `CMakeLists.txt` hands over to
 `cmake/esp_idf.cmake` when `ESP_PLATFORM` is set, and `idf_component.yml` is its
 manifest. The component is named after its directory, `shapo-gfx`. The macros of
 the table above other than `SHAPOGFX3D_RP2_INTERP`, `SHAPOGFX2D_RP2_INTERP`,
-`SHAPOGFX3D_HOT_ATTR`, `SHAPOGFX3D_HOT_INSTANTIATE` and
-`SHAPOGFX_ARCH_SPLIT_MUL64` are Kconfig symbols of the same name
+`SHAPOGFX3D_HOT_ATTR`, `SHAPOGFX3D_HOT_INSTANTIATE`,
+`SHAPOGFX_ARCH_SPLIT_MUL64` and `SHAPOGFX_ARCH_WORD_LOADS` are Kconfig symbols of the same name
 (`CONFIG_SHAPOGFX_FORMAT_GRAY1`, ...) with the same defaults; the format macros
 and `SHAPOGFX_COORD_BITS` are passed on to the components that require
 `shapo-gfx`. `SHAPOGFX3D_DEPTH_BITS` is the choice
@@ -126,7 +127,7 @@ architecture-specific code lives in `src/gfx3d/arch/`, behind a few hooks with a
 portable implementation that is always present (`generic.hpp`); `arch.hpp` selects
 the implementation. The ESP8266 is `SHAPOGFX_ARCH_GENERIC`:
 the ESP8266_RTOS_SDK defines `ESP_PLATFORM` too, but its `CONFIG_IDF_TARGET_ESP8266`
-selects nothing. `SHAPOGFX_ARCH_SPLIT_MUL64` (on by default for `__ARM_ARCH_6M__` and
+selects none of these targets. `SHAPOGFX_ARCH_SPLIT_MUL64` (on by default for `__ARM_ARCH_6M__` and
 the ESP8266 -- `CONFIG_IDF_TARGET_ESP8266`, `ESP8266` or `ARDUINO_ARCH_ESP8266` --
 and settable by hand for any other core without a 32x32 -> 64 multiply) selects
 `split_mul.hpp`. The hooks: `mul64` (a 32x32 -> 64-bit product, used by the
@@ -153,6 +154,26 @@ to 5 on the Cortex-M33. The call saves and restores `interp0` of the calling cor
 the same caveat about interrupt handlers applies, and the target must link
 `hardware_interp`. Every other image goes through the portable walk, which gives
 the same pixels.
+
+With `SHAPOGFX_ARCH_WORD_LOADS` (on by default for the ESP8266, detected like
+`SHAPOGFX_ARCH_SPLIT_MUL64`, and settable by hand) the hooks `loadBit()` and
+`loadPixel16()` read the aligned 32-bit word that holds a source pixel and extract
+the pixel by a shift. The ESP8266 maps its flash into the instruction address space,
+which takes 32-bit loads only: an 8- or 16-bit load of constant data raises an
+exception that the SDK emulates (ESP8266_RTOS_SDK v3.4 at 160 MHz: 0.9 us a load,
+against 0.09 us for a word and 0.05 us for a 16-bit load from RAM). The hooks serve
+the walkers of the scaled and the transformed `drawImage()` / `drawSilhouette()` for
+GRAY1 and the 16-bit formats, and the 1-bit masks (`drawBitmap()`, glyphs);
+TexBreakout on an ESPboy (128x128) goes from 16 to 26-27 fps with them. Still loaded
+8 or 16 bits at a time: the untransformed `drawImage()` other than the copy of a
+16-bit format onto itself (a `memcpy`), RGB444 sources, the texels of an antialiased
+image, and the fields of `Texture`, font and rig data. The word load needs a
+little-endian CPU (anything else is a compile-time error) and 16-bit pixels on even
+addresses. It reads up to three bytes before or after the pixel, which are bytes of
+the same aligned word and therefore of the same page and memory region: it cannot
+fault whatever the buffer, and the address sanitizer is told not to instrument it.
+The pixels are the same either way; an image in RAM costs 5 instructions more per
+pixel on the lx106 (17 instead of 12 for a transformed copy).
 
 ### Optional features of the 3D renderer
 

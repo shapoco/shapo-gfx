@@ -159,13 +159,13 @@ namespace {
 template <PixelFormat S>
 inline uint32_t loadRaw(const uint8_t *line, int x) {
   if constexpr (S == PixelFormat::GRAY1) {
-    return (line[x >> 3] >> (7 - (x & 7))) & 1u;
+    return arch::loadBit(line, (uint32_t)x);
   } else if constexpr (S == PixelFormat::RGB444) {
     const uint8_t *p = line + (x >> 1) * 3;
     if (x & 1) return ((uint32_t)(p[1] & 0x0Fu) << 8) | p[2];
     return ((uint32_t)p[0] << 4) | (p[1] >> 4);
   } else {
-    return ((const uint16_t *)line)[x];
+    return arch::loadPixel16(line, x);
   }
 }
 
@@ -646,7 +646,10 @@ inline void blitRowOf(const ImageBlit &b, uint8_t *dl, int x, int n,
 }
 
 // Walkers. They keep their position between calls, so that the Color path
-// can take a row in chunks.
+// can take a row in chunks. Within a call the position lives in locals: as
+// members it would be stored for every pixel wherever the pixel load or the
+// op's store may alias it (a word load of SHAPOGFX_ARCH_WORD_LOADS, a byte
+// or a Color written by the op).
 
 // Untransformed: the source pixels in order (the 16-bit silhouettes; the
 // images have row loops of their own). Used with blitRowSilhouette() only,
@@ -656,7 +659,9 @@ struct PlainWalk {
   int pos;
   template <typename Op>
   void operator()(Op &op, int n) {
-    for (; n > 0; n--) op.put(loadRaw<Op::SRC>(line, pos++));
+    int x = pos;
+    for (; n > 0; n--) op.put(loadRaw<Op::SRC>(line, x++));
+    pos = x;
   }
 };
 
@@ -669,15 +674,19 @@ struct StepWalk {
   uint32_t rem, rStep, den;
   template <typename Op>
   void operator()(Op &op, int n) {
+    int x = pos;
+    uint32_t rm = rem;
     for (; n > 0; n--) {
-      op.put(loadRaw<Op::SRC>(line, pos));
+      op.put(loadRaw<Op::SRC>(line, x));
       // (without a branch: under magnification the carry comes every other
       // pixel or so, which no predictor guesses)
-      rem += rStep;
-      const bool carry = rem >= den;
-      rem -= carry ? den : 0u;
-      pos += step + (carry ? dir : 0);
+      rm += rStep;
+      const bool carry = rm >= den;
+      rm -= carry ? den : 0u;
+      x += step + (carry ? dir : 0);
     }
+    pos = x;
+    rem = rm;
   }
 };
 
@@ -690,22 +699,27 @@ struct RunWalk {
   uint32_t e, q, r, den;
   template <typename Op>
   void operator()(Op &op, int n) {
+    int x = pos, l = left;
+    uint32_t err = e;
     while (n > 0) {
-      if (left == 0) {
-        pos += dir;
-        left = (int)q;
-        if (r > e) {
-          left++;
-          e += den - r;
+      if (l == 0) {
+        x += dir;
+        l = (int)q;
+        if (r > err) {
+          l++;
+          err += den - r;
         } else {
-          e -= r;
+          err -= r;
         }
       }
-      const int k = left < n ? left : n;
-      op.run(loadRaw<Op::SRC>(line, pos), k);
-      left -= k;
+      const int k = l < n ? l : n;
+      op.run(loadRaw<Op::SRC>(line, x), k);
+      l -= k;
       n -= k;
     }
+    pos = x;
+    left = l;
+    e = err;
   }
 };
 
@@ -717,11 +731,15 @@ struct AffineWalk {
   int32_t u, v, du, dv;
   template <typename Op>
   void operator()(Op &op, int n) {
+    int32_t uu = u, vv = v;
     for (; n > 0; n--) {
-      op.put(loadRaw<Op::SRC>(pixels + (uint32_t)(v >> 16) * stride, u >> 16));
-      u += du;
-      v += dv;
+      op.put(
+          loadRaw<Op::SRC>(pixels + (uint32_t)(vv >> 16) * stride, uu >> 16));
+      uu += du;
+      vv += dv;
     }
+    u = uu;
+    v = vv;
   }
 };
 
@@ -732,12 +750,15 @@ struct AffineBitWalk {
   int32_t u, v, du, dv;
   template <typename Op>
   void operator()(Op &op, int n) {
+    int32_t uu = u, vv = v;
     for (; n > 0; n--) {
-      op.put(loadRaw<PixelFormat::GRAY1>(
-          bits, (int)(base + (uint32_t)(v >> 16) * stride + (uint32_t)(u >> 16))));
-      u += du;
-      v += dv;
+      op.put(arch::loadBit(
+          bits, base + (uint32_t)(vv >> 16) * stride + (uint32_t)(uu >> 16)));
+      uu += du;
+      vv += dv;
     }
+    u = uu;
+    v = vv;
   }
 };
 
@@ -2441,7 +2462,7 @@ struct OpMask {
 };
 
 inline bool maskBit(const MaskSource &m, uint32_t i) {
-  return (m.bits[i >> 3] >> (7u - (i & 7u))) & 1u;
+  return arch::loadBit(m.bits, i) != 0;
 }
 
 // Set bits only (text): written pixel by pixel

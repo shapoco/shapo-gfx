@@ -5,6 +5,9 @@
 #   cmake --build build && ctest --test-dir build --output-on-failure
 # and with -fsanitize=thread in place of address,undefined for the tests that
 # draw on two threads.
+# Adding -DSHAPOGFX_ARCH_WORD_LOADS=1 to CMAKE_CXX_FLAGS runs the same tests
+# over the word loads of the ESP8266 (src/gfx2d/arch.hpp), with or without the
+# sanitizers.
 add_executable(shapogfx_tests pixel_test.cpp graphics2d_test.cpp gfx3d_test.cpp tools_test.cpp
                               rig_test.cpp vg_test.cpp fixed_test.cpp test_main.cpp)
 target_include_directories(shapogfx_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

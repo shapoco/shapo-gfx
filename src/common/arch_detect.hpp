@@ -9,7 +9,8 @@
 //   SHAPOGFX_ARCH_ESP32P4  ESP32-P4 (ESP-IDF)
 // Anything else is SHAPOGFX_ARCH_GENERIC -- including the ESP8266, which the
 // ESP8266_RTOS_SDK builds with ESP_PLATFORM defined as well (its sdkconfig
-// names CONFIG_IDF_TARGET_ESP8266, which selects nothing here).
+// names CONFIG_IDF_TARGET_ESP8266, which selects none of the targets above;
+// see SHAPOGFX_ARCH_WORD_LOADS below).
 
 #if !defined(SHAPOGFX_ARCH_RP2) && !defined(SHAPOGFX_ARCH_ESP32S3) && \
     !defined(SHAPOGFX_ARCH_ESP32P4) && !defined(SHAPOGFX_ARCH_GENERIC)
@@ -43,6 +44,24 @@
 #define SHAPOGFX_ARCH_FPU 1
 #else
 #define SHAPOGFX_ARCH_FPU 0
+#endif
+#endif
+
+// SHAPOGFX_ARCH_WORD_LOADS: 1 where an 8- or 16-bit load from constant data
+// costs far more than a 32-bit one. The ESP8266 maps its flash into the
+// instruction address space, which only takes 32-bit loads: a narrower one
+// raises an exception that the SDK emulates (0.9 us a load at 160 MHz,
+// against 0.09 us for a word). The 2D renderer then reads the source pixels
+// of a scaled or transformed image (GRAY1 and the 16-bit formats) and the
+// bits of a mask as the aligned word around them (src/gfx2d/arch.hpp). Same
+// pixels either way. On by default for the ESP8266; define it by hand to
+// override.
+#ifndef SHAPOGFX_ARCH_WORD_LOADS
+#if defined(CONFIG_IDF_TARGET_ESP8266) || defined(ESP8266) || \
+    defined(ARDUINO_ARCH_ESP8266)
+#define SHAPOGFX_ARCH_WORD_LOADS 1
+#else
+#define SHAPOGFX_ARCH_WORD_LOADS 0
 #endif
 #endif
 
