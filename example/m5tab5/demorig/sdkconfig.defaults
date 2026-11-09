@@ -3,6 +3,9 @@
 CONFIG_IDF_TARGET="esp32p4"
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# Code and constants are read from flash through the cache. This chip
+# revision is limited to 40 MHz there, so at least not the default DIO.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 # Tab5 brings out USB-C only; the generic target would use UART0
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
