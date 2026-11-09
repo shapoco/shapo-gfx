@@ -153,7 +153,7 @@ Instance
    "``void draw(g, painter = nullptr)`` / ``draw(g, first, end, painter = nullptr)``", "描画 (後述)。後者は描画位置 ``[first, end)`` のスロットだけ。``painter`` はカスタムペイントのスロットを描く"
    "``int drawIndexOf(slot)`` / ``int slotAt(drawIndex)``", "スロットと現在の描画位置の対応。範囲外は -1"
    "``int boneIndex(name)`` / ``int slotIndex(name)``", "名前から添字 (線形探索)。無ければ -1"
-   "``const affine2f &boneTransform(bone)``", "ボーンのワールド変換 (アーマチュア座標系、配置は含まない)"
+   "``affine2f boneTransform(bone)``", "ボーンのワールド変換 (アーマチュア座標系、配置は含まない)"
    "``attachmentOf`` / ``setAttachment`` / ``alphaOf`` / ``setAlpha`` / ``colorOf`` / ``setColor`` / ``strokeWidthOf`` / ``setStrokeWidth``", "スロットの表示中アタッチメント (-1 で非表示)、不透明度、色 (RGB。α は無視)、ストローク幅。次の ``pose()`` まで有効な上書き"
    "``customPaintOf(slot)`` / ``setCustomPaint(slot, enable)``", "スロットをカスタムペイント (後述) にするか。``pose()`` では変わらず、``init()`` で全て off"
    "``bool attachmentTransform(slot, [attachment,] affine2f &out)``", "アタッチメントの空間からアーマチュア座標系への変換 (ボーンのワールド変換 × ``local``)。画像なら ``src`` の左上を原点とするピクセル座標。``attachment`` 省略時は表示中のもの。範囲外・非表示なら false"
@@ -298,6 +298,11 @@ Instance
 ``pose()`` はボーンごとに sin/cos 1〜2 組と 3x2 行列の積 1 回、タイムラインごとに数個のキーの探索です。
 sin/cos は libm を使わず、4 分の 1 周期 257 点の Q15 表を線形補間して求めます (誤差 5e-5 未満)。
 ソフトウェア浮動小数点のコア (Cortex-M0+ など) で ``sinf()`` / ``cosf()`` が 1 回数千サイクルかかるのを避けるためです。
+
+FPU のないコアでは ``SHAPOGFX2D_FIXED_POINT`` が既定で 1 になり、ボーンのワールド変換、スロットのバウンディングボックス、
+配置との行列積を固定小数点 (a〜d は 8.24、平行移動は 16.16) で計算して、画像の描画まで float を使いません
+(カスタムペイントとベクタのスロットには、その行列を float に直して渡します)。拡大率が 128 以上、位置が 32768 以上に
+なる場合は float の計算に戻ります。``boneTransform()`` などの取得用の関数は呼ばれたときに float へ変換します。
 
 描画はパーツ 1 枚につき回転した ``drawImage()`` 1 回で、コストはほぼ描いたピクセル数で決まります
 (ARGB4444 のアトラスから RGB565 へ。RP2 では ``SHAPOGFX2D_RP2_INTERP`` のパスに乗ります)。

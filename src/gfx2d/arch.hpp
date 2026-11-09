@@ -24,17 +24,8 @@
 #include "../common/intmath.hpp"
 #include "shapoco/gfx2d/surface.hpp"
 
-// (__ARM_FP is defined only with a hardware FPU in use, unlike __VFP_FP__,
-// which names the float format and is defined on a Cortex-M0+ as well)
 #ifndef SHAPOGFX2D_FPU_SQRT
-#if defined(__ARM_FP) || defined(__riscv_flen) ||                          \
-    defined(SHAPOGFX_ARCH_ESP32S3) || defined(SHAPOGFX_ARCH_ESP32P4) ||    \
-    defined(__x86_64__) || defined(__i386__) || defined(__aarch64__) ||    \
-    defined(__wasm__)
-#define SHAPOGFX2D_FPU_SQRT 1
-#else
-#define SHAPOGFX2D_FPU_SQRT 0
-#endif
+#define SHAPOGFX2D_FPU_SQRT SHAPOGFX_ARCH_FPU
 #endif
 
 namespace shapoco::gfx2d::arch {

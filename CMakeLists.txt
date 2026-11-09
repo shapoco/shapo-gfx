@@ -59,6 +59,9 @@ set_property(CACHE SHAPOGFX2D_ANTIALIAS PROPERTY STRINGS "" 0 1)
 set(SHAPOGFX2D_FPU_SQRT "" CACHE STRING
     "Seed the ellipse extents' integer square root with the FPU's sqrtf (0/1)")
 set_property(CACHE SHAPOGFX2D_FPU_SQRT PROPERTY STRINGS "" 0 1)
+set(SHAPOGFX2D_FIXED_POINT "" CACHE STRING
+    "Fixed-point setup of transformed images and rig matrices (0/1, empty = 1 without an FPU)")
+set_property(CACHE SHAPOGFX2D_FIXED_POINT PROPERTY STRINGS "" 0 1)
 
 # Shared by gfx2d and gfx3d and read by config.hpp, so it has to be the same
 # in every translation unit: it is passed on to the users of the library.
@@ -82,7 +85,7 @@ set(SHAPOGFX3D_OPTIONS
     SHAPOGFX3D_FIXED_POINT SHAPOGFX3D_DEPTH_BITS
     SHAPOGFX2D_STACK_DEPTH SHAPOGFX2D_TRANSFORM SHAPOGFX2D_BLEND
     SHAPOGFX2D_COLOR_KEY SHAPOGFX2D_FPU_SQRT SHAPOGFX2D_RIG
-    SHAPOGFX2D_ANTIALIAS)
+    SHAPOGFX2D_ANTIALIAS SHAPOGFX2D_FIXED_POINT)
 set(SHAPOGFX_FEATURE_DEFS "")
 foreach(opt IN LISTS SHAPOGFX3D_OPTIONS)
     if(NOT "${${opt}}" STREQUAL "")

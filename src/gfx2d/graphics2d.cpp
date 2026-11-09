@@ -271,6 +271,55 @@ void Graphics2D::rotate(float angle, float cx, float cy) {
 
 namespace detail {
 
+bool AffineQ::from(const affine2f &m, AffineQ &q) {
+  return floatToFixed(m.a, LIN, q.a) && floatToFixed(m.b, LIN, q.b) &&
+         floatToFixed(m.c, LIN, q.c) && floatToFixed(m.d, LIN, q.d) &&
+         floatToFixed(m.tx, POS, q.tx) && floatToFixed(m.ty, POS, q.ty);
+}
+
+bool AffineQ::mul(const AffineQ &m, const AffineQ &n, AffineQ &out) {
+  bool ok = true;
+  // (two products of 31-bit entries and the rounding fit 64 bits)
+  auto fit = [&ok](int64_t v) {
+    if (v > INT32_MAX || v < -INT32_MAX) {
+      ok = false;
+      return v < 0 ? -INT32_MAX : INT32_MAX;
+    }
+    return (int32_t)v;
+  };
+  constexpr int64_t HALF = (int64_t)1 << (LIN - 1);
+  const AffineQ r = {
+      fit(((int64_t)m.a * n.a + (int64_t)m.c * n.b + HALF) >> LIN),
+      fit(((int64_t)m.b * n.a + (int64_t)m.d * n.b + HALF) >> LIN),
+      fit(((int64_t)m.a * n.c + (int64_t)m.c * n.d + HALF) >> LIN),
+      fit(((int64_t)m.b * n.c + (int64_t)m.d * n.d + HALF) >> LIN),
+      fit((((int64_t)m.a * n.tx + (int64_t)m.c * n.ty + HALF) >> LIN) + m.tx),
+      fit((((int64_t)m.b * n.tx + (int64_t)m.d * n.ty + HALF) >> LIN) + m.ty)};
+  out = r;
+  return ok;
+}
+
+affine2f AffineQ::toFloat() const {
+  return {fixedToFloat(a, LIN),  fixedToFloat(b, LIN),  fixedToFloat(c, LIN),
+          fixedToFloat(d, LIN),  fixedToFloat(tx, POS), fixedToFloat(ty, POS)};
+}
+
+void G2Impl::setTransformFixed(Graphics2D &g, const AffineQ &q) {
+  if (!TRANSFORM) return;
+  g.state_.transform = q.toFloat();
+  // The kind as updateTransform() finds it, in integers (1e-6 is 17 in
+  // 8.24); the offsets of a translation are left to it
+  constexpr int32_t EPS = 17, ONE = 1 << AffineQ::LIN;
+  g.ox_ = g.oy_ = 0;
+  if (q.b <= -EPS || q.b >= EPS || q.c <= -EPS || q.c >= EPS) {
+    g.kind_ = TransformKind::AFFINE;
+  } else if (q.a == ONE && q.d == ONE) {
+    g.updateTransform();
+  } else {
+    g.kind_ = TransformKind::SCALE;
+  }
+}
+
 void G2Impl::mapPixel(const Graphics2D &g, float x, float y, int &px,
                       int &py) {
   const vec2f v = g.state_.transform.apply(x + 0.5f, y + 0.5f);

@@ -70,5 +70,6 @@ void testGfx3D();
 void testTools();
 void testRig();
 void testVg();
+void testFixed();
 
 #endif

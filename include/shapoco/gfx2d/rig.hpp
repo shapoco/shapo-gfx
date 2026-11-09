@@ -367,7 +367,7 @@ class Instance {
   int slotIndex(const char *name) const;
   // World transform of a bone in the armature's space (identity if out of
   // range)
-  const affine2f &boneTransform(int bone) const;
+  affine2f boneTransform(int bone) const;
   // Overrides until the next pose(): the attachment (-1 hides the slot),
   // the alpha (0..255) and the color (RGB; the alpha of the Color is
   // ignored) of a slot
@@ -416,7 +416,9 @@ class Instance {
   static constexpr uint8_t FLAG_CUSTOM_PAINT = 0x01;
 
   const Armature *arm_ = nullptr;
-  affine2f *world_ = nullptr;
+  // The bones' world transforms, in the form the build computes them in
+  // (an affine2f's size each)
+  void *world_ = nullptr;
   SlotState *slots_ = nullptr;
   uint8_t *order_ = nullptr;
   const uint8_t *orderSrc_ = nullptr;  // the key order_ holds (nullptr: base)

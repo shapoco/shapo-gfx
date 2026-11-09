@@ -4,6 +4,7 @@
 
 #include "arch.hpp"
 #include <climits>
+#include <cstring>
 
 #include "internal.hpp"
 
@@ -880,9 +881,301 @@ bool estimateSpan(float c, float g, float ig, float lo, float hi, float &x0,
 constexpr int AFFINE_SIZE_MAX = 16384;
 constexpr float AFFINE_STEP_MAX = 4096.0f;
 
+// The coefficients of a mapping from target pixels to the source, for
+// PolygonRows: the source point (absolute) of the center of target pixel
+// (x, y) is u = A x + C y + E, v = B x + D y + F. In float, or as 32.32
+// with SHAPOGFX2D_FIXED_POINT (each build fills and reads its own).
+struct PolygonMapping {
+  float A, B, C, D, E, F;
+  int64_t aQ, bQ, cQ, dQ, eQ, fQ;
+};
+
+#if SHAPOGFX2D_FIXED_POINT
+
+// A convex polygon of the source as bounds on the target column per target
+// row (the build for a core without an FPU, which spent more on the float
+// version below than on the pixels the polygon saved: the same bounds from
+// the 32.32 coefficients, as 44.20 fixed point). An edge is the half-plane
+// of the source points on its inner side: for the pixel k columns right of
+// column xRef and dy rows below row yRef that is
+//   g k >= h0 + hy dy
+// so an edge whose inward normal has a component along the row (g != 0) is a
+// lower (g > 0) or an upper bound on k that changes linearly with the row,
+// and one across the rows only narrows the row range once. The column is at
+// least the highest lower bound and at most the lowest upper bound; of a
+// convex polygon those are the edges of its left and of its right side, each
+// the tightest over the rows it spans, in the order of their steps. Rows
+// taken from top to bottom step through them: a row is four 64-bit
+// additions.
+struct PolygonRows {
+  static constexpr int FRAC = 20;
+  // An edge steeper than DX_MAX columns per row (or across the rows) limits
+  // the rows instead: it crosses any target within a row. A bound farther
+  // than X_MAX from xRef on row yRef never reaches the target.
+  static constexpr int DX_BITS = 24, X_BITS = 40;
+  static constexpr int ROW_LIM = 1 << 20;
+  struct Bound {
+    int64_t x0, dx;
+  };
+  Bound lo[Graphics2D::IMAGE_POLYGON_MAX], hi[Graphics2D::IMAGE_POLYGON_MAX];
+  int loCount = 0, hiCount = 0;
+  bool enabled = false;  // false: no polygon (every pixel passes)
+  int xRef = 0, yRef = 0, width = 0;
+  int top = 0, bottom = -1;  // the rows left by init()
+  // The walk: the tightest bounds on row lastY and the ones after them
+  int loAt = 0, hiAt = 0, lastY = 0;
+  bool walking = false;
+  int64_t xLo = 0, xLoNext = 0, xHi = 0, xHiNext = 0;
+
+  // The edges in the order of their steps: `n` bounds of `b`, for s = 1 the
+  // lower ones (ascending steps), for s = -1 the upper ones (descending).
+  // Of parallel ones the tightest is kept. Returns how many are left.
+  static int order(Bound *b, int n, int s) {
+    // (insertion sort: n is at most IMAGE_POLYGON_MAX)
+    for (int i = 1; i < n; i++) {
+      const Bound v = b[i];
+      int j = i;
+      for (; j > 0; j--) {
+        const Bound &u = b[j - 1];
+        if (s > 0 ? (u.dx < v.dx || (u.dx == v.dx && u.x0 >= v.x0))
+                  : (u.dx > v.dx || (u.dx == v.dx && u.x0 <= v.x0)))
+          break;
+        b[j] = u;
+      }
+      b[j] = v;
+    }
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+      if (m > 0 && b[i].dx == b[m - 1].dx) continue;
+      b[m++] = b[i];
+    }
+    return m;
+  }
+
+  // An edge that limits the rows: dy <= t (down) or dy >= t
+  void limitRows(bool down, int t, int &y0, int &y1) const {
+    t = clampInt(-ROW_LIM, ROW_LIM, t);
+    if (down) {
+      y1 = std::min(y1, yRef + t);
+    } else {
+      y0 = std::max(y0, yRef + t);
+    }
+  }
+
+  // An edge as a bound; false if it leaves no pixel
+  bool addBound(bool lower, int64_t x0, int64_t dx) {
+    const int64_t xMax = (int64_t)1 << (X_BITS + FRAC);
+    if (x0 > xMax || x0 < -xMax) {
+      // Never within the target: all its pixels pass, or none
+      return lower ? x0 < 0 : x0 > 0;
+    }
+    if (lower) {
+      lo[loCount++] = {x0, dx};
+    } else {
+      hi[hiCount++] = {x0, dx};
+    }
+    return true;
+  }
+
+  // The edge with the inward normal (nx, ny): (u, v) are the source point
+  // of the reference pixel less a vertex of the edge, shifted right by
+  // `su` from 32.32. False if it leaves no pixel.
+  bool edge(const PolygonMapping &m, int64_t u, int64_t v, int su, int nx,
+            int ny, int &y0, int &y1) {
+    const int64_t g = nx * m.aQ + ny * m.bQ;        // 32.32, below 2^61
+    const int64_t hy = -(nx * m.cQ + ny * m.dQ);
+    const int64_t h0 = -(nx * u + ny * v);          // 32.32 >> su
+    const uint64_t ag = g < 0 ? 0 - (uint64_t)g : (uint64_t)g;
+    const uint64_t ahy = hy < 0 ? 0 - (uint64_t)hy : (uint64_t)hy;
+    if (ag <= (ahy >> DX_BITS)) {
+      // (g is below 2^37 here, so g (width - 1) fits)
+      const int64_t gw = g * (width - 1);
+      const int64_t num = ((gw > 0 ? gw : 0) >> su) - h0;
+      // The magnitudes to 31 bits for the division
+      const uint64_t an = num < 0 ? 0 - (uint64_t)num : (uint64_t)num;
+      const uint64_t ad = ahy >> su;
+      const int sh = std::max(0, 33 - clz64(an | ad | 1));
+      const int n = (int)(an >> sh), d = (int)(ad >> sh);
+      // (hy nothing next to the rest: the edge does not move with the row)
+      if (d == 0) return num >= 0;
+      if (hy > 0) {
+        limitRows(true, floorDiv(num < 0 ? -n : n, d), y0, y1);
+      } else {
+        limitRows(false, ceilDiv(num < 0 ? -n : n, -d), y0, y1);
+      }
+      return true;
+    }
+    // x0 = h0 / g and dx = hy / g through the reciprocal of |g|
+    int sh;
+    const uint32_t r = reciprocal64(ag, sh);
+    const bool lower = g > 0;
+    const int64_t x0 = mulShiftSat(lower ? h0 : -h0, r, 62 + sh - FRAC - su);
+    const int64_t dx = mulShiftSat(lower ? hy : -hy, r, 62 + sh - FRAC);
+    return addBound(lower, x0, dx);
+  }
+
+  // `polygon`: `count` (3 or more) vertices relative to the top-left corner
+  // of `s`; columns [x0, x1] and rows [y0, y1] are the ones to narrow (the
+  // rows are narrowed here by the edges across them). False for a
+  // degenerate polygon or too many vertices, or if no row is left (nothing
+  // is drawn).
+  bool init(const int16_t *polygon, int count, const Rect &s,
+            const PolygonMapping &m, int x0, int x1, int &y0, int &y1) {
+    loCount = hiCount = 0;
+    enabled = false;
+    walking = false;
+    xRef = x0;
+    yRef = y0;
+    width = x1 - x0 + 1;
+    if (count > Graphics2D::IMAGE_POLYGON_MAX || width <= 0) return false;
+    // The winding, from the doubled signed area (in 64 bits)
+    int64_t area2 = 0;
+    for (int i = 0; i < count; i++) {
+      const int j = (i + 1) % count;
+      area2 += (int64_t)polygon[2 * i] * polygon[2 * j + 1] -
+               (int64_t)polygon[2 * j] * polygon[2 * i + 1];
+    }
+    if (area2 == 0) return false;
+    const int sign = area2 > 0 ? 1 : -1;
+
+    // Steps beyond the affine walk's, or a source too far away, would not
+    // fit: the polygon is left out
+    const int64_t stepMax = (int64_t)AFFINE_STEP_MAX << 32;
+    const int64_t farMax = (int64_t)1 << 60;
+    for (const int64_t c : {m.aQ, m.bQ, m.cQ, m.dQ}) {
+      if (c > stepMax || c < -stepMax) return true;
+    }
+    if (m.eQ > farMax || m.eQ < -farMax || m.fQ > farMax || m.fQ < -farMax ||
+        s.x > (1 << 20) || s.x < -(1 << 20) || s.y > (1 << 20) ||
+        s.y < -(1 << 20))
+      return true;
+    // The source point of the reference pixel; less a vertex it is shifted
+    // to 44 bits for the products with the normals
+    const int64_t uQ = m.eQ + m.aQ * xRef + m.cQ * yRef;
+    const int64_t vQ = m.fQ + m.bQ * xRef + m.dQ * yRef;
+    const uint64_t au = uQ < 0 ? 0 - (uint64_t)uQ : (uint64_t)uQ;
+    const uint64_t av = vQ < 0 ? 0 - (uint64_t)vQ : (uint64_t)vQ;
+    const uint64_t vertexMax =
+        (uint64_t)(std::abs(s.x) + std::abs(s.y) + 32768) << 32;
+    const int su = std::max(0, 21 - clz64(au | av | vertexMax));
+    const int64_t one = (int64_t)1 << 32;
+    for (int i = 0; i < count; i++) {
+      const int j = (i + 1) % count;
+      const int px = polygon[2 * i], py = polygon[2 * i + 1];
+      const int ex = polygon[2 * j] - px, ey = polygon[2 * j + 1] - py;
+      if (ex == 0 && ey == 0) continue;  // a repeated vertex
+      // An inward normal of the edge (for a positive area, its left side)
+      if (!edge(m, (uQ - (px + s.x) * one) >> su,
+                (vQ - (py + s.y) * one) >> su, su, -ey * sign, ex * sign, y0,
+                y1))
+        return false;
+    }
+    top = y0, bottom = y1;
+    loCount = order(lo, loCount, 1);
+    hiCount = order(hi, hiCount, -1);
+    enabled = true;
+    return y0 <= y1;
+  }
+
+  static int64_t at(const Bound &b, int dy) { return b.x0 + b.dx * dy; }
+
+  // The bounds of row y by their definition (the first row, or one out of
+  // order)
+  __attribute__((noinline)) void seek(int y) {
+    const int dy = y - yRef;
+    if (!walking || y < lastY) loAt = hiAt = 0;
+    walking = true;
+    if (loCount > 0) {
+      xLo = at(lo[loAt], dy);
+      while (loAt + 1 < loCount) {
+        const int64_t v = at(lo[loAt + 1], dy);
+        if (v < xLo) {
+          xLoNext = v;
+          break;
+        }
+        xLo = v;
+        loAt++;
+      }
+    }
+    if (hiCount > 0) {
+      xHi = at(hi[hiAt], dy);
+      while (hiAt + 1 < hiCount) {
+        const int64_t v = at(hi[hiAt + 1], dy);
+        if (v > xHi) {
+          xHiNext = v;
+          break;
+        }
+        xHi = v;
+        hiAt++;
+      }
+    }
+  }
+
+  // Narrow [k0, k1] (columns relative to xr) to those inside the polygon on
+  // row y. Rows from top to bottom step the bounds; any other order works
+  // through seek().
+  bool narrow(int y, int xr, int &k0, int &k1) {
+    if (!enabled) return true;
+    if (!walking || y != lastY + 1) {
+      seek(y);
+    } else {
+      // The next row: step the bounds, and the ones that follow them in
+      // the order, which take over where they overtake
+      const int dy = y - yRef;
+      if (loCount > 0) {
+        xLo += lo[loAt].dx;
+        if (loAt + 1 < loCount) {
+          xLoNext += lo[loAt + 1].dx;
+          while (xLoNext >= xLo) {
+            xLo = xLoNext;
+            if (++loAt + 1 >= loCount) break;
+            xLoNext = at(lo[loAt + 1], dy);
+          }
+        }
+      }
+      if (hiCount > 0) {
+        xHi += hi[hiAt].dx;
+        if (hiAt + 1 < hiCount) {
+          xHiNext += hi[hiAt + 1].dx;
+          while (xHiNext <= xHi) {
+            xHi = xHiNext;
+            if (++hiAt + 1 >= hiCount) break;
+            xHiNext = at(hi[hiAt + 1], dy);
+          }
+        }
+      }
+    }
+    lastY = y;
+    const int off = xRef - xr;
+    if (loCount > 0) {
+      // ceil
+      const int64_t k = ((xLo + ((1 << FRAC) - 1)) >> FRAC) + off;
+      if (k > k0) k0 = k > k1 ? k1 + 1 : (int)k;
+    }
+    if (hiCount > 0) {
+      const int64_t k = (xHi >> FRAC) + off;
+      if (k < k1) k1 = k < k0 ? k0 - 1 : (int)k;
+    }
+    return k0 <= k1;
+  }
+
+  // The n columns of row y from x narrowed to the polygon (and false for a
+  // row outside it)
+  bool span(int y, int &x, int &n) {
+    if (!enabled) return true;
+    if (y < top || y > bottom) return false;
+    int k0 = x, k1 = x + n - 1;
+    if (!narrow(y, 0, k0, k1)) return false;
+    x = k0;
+    n = k1 - k0 + 1;
+    return true;
+  }
+};
+
+#else  // SHAPOGFX2D_FIXED_POINT
+
 // A convex polygon of the source as bounds on the target column x per target
-// row, for a mapping whose source point (absolute) of the center of target
-// pixel (x, y) is u = A x + C y + E, v = B x + D y + F: an edge whose inward
+// row, in float (the build for a core with an FPU): an edge whose inward
 // normal has a component along the row is x >= (or <=) a bound that changes
 // linearly with the row (x0 at row yRef, dx per row); one across the rows
 // only narrows the row range once. The column is at least the highest lower
@@ -939,8 +1232,9 @@ struct PolygonRows {
   // `polygon`: `count` (3 or more) vertices relative to the top-left corner
   // of `s`; [y0, y1] the rows to narrow. False for a degenerate polygon or
   // too many vertices, or if no row is left (nothing is drawn).
-  bool init(const int16_t *polygon, int count, const Rect &s, float A,
-            float B, float C, float D, float E, float F, int &y0, int &y1) {
+  bool init(const int16_t *polygon, int count, const Rect &s,
+            const PolygonMapping &m, int, int, int &y0, int &y1) {
+    const float A = m.A, B = m.B, C = m.C, D = m.D, E = m.E, F = m.F;
     loCount = hiCount = 0;
     yRef = y0;
     if (count > Graphics2D::IMAGE_POLYGON_MAX) return false;
@@ -1051,15 +1345,36 @@ struct PolygonRows {
   }
 };
 
+#endif  // SHAPOGFX2D_FIXED_POINT
+
 // The rows of a transformed image: `m` maps source coordinates relative to
 // the top-left corner of `s` to the target, `in` is the part of the source
-// that may be read. The inverse transform is computed once in float; per
-// row a float estimate picks a reference column inside the image's
-// footprint, and from there the row is clipped exactly in 16.16 fixed point,
-// so that the per-pixel walk (u += du, v += dv) never leaves `in`.
+// that may be read. The transform is inverted once; when the source
+// coordinates of the whole bounding box fit 16.16 (anything but extreme
+// scales), the middle column of the box is the reference of every row, and
+// its coordinates step down the rows in 32.32 accumulators: a row is two
+// 64-bit additions and an exact clip in 16.16 fixed point, so that the
+// per-pixel walk (u += du, v += dv) never leaves `in`. Otherwise a float
+// estimate picks the reference column of each row inside the image's
+// footprint, and the row is clipped from there in the same way.
+//
+// With SHAPOGFX2D_FIXED_POINT a transform that fits AffineQ is set up in
+// integers as well (bounding box, inverse): a core without an FPU spent
+// more on the float setup and the float rows than on the pixels they led to.
 struct AffineRows {
   int32_t du = 0, dv = 0;
-  float A, B, C, D, E, F, iA, iB;
+  // Source coordinates of the center of target pixel (x, y), absolute:
+  // u = A x + C y + E, v = B x + D y + F, as 32.32 (haveQ) ...
+  bool haveQ = false;
+  int64_t aQ = 0, bQ = 0, cQ = 0, dQ = 0, eQ = 0, fQ = 0;
+  // ... and in float (haveF: the float rows and the polygon)
+  bool haveF = false;
+  float A = 0, B = 0, C = 0, D = 0, E = 0, F = 0;
+  float iA = 0, iB = 0;  // the float rows only
+  // Fixed-point rows: (u, v) of column xRef on row by0, 32.32
+  bool fixedRows = false;
+  int64_t uRowQ = 0, vRowQ = 0;
+  int xRef = 0;
   int bx0, bx1, by0, by1;
   int32_t uLo, uHi, vLo, vHi;
   Rect in;
@@ -1067,25 +1382,139 @@ struct AffineRows {
   PolygonRows poly;
   bool hasPolygon = false;
 
-  bool init(const affine2f &m, const Rect &s, const Rect &readable,
-            const Rect &clip, const int16_t *polygon = nullptr,
-            int count = 0) {
+  static constexpr int64_t STEP_Q = (int64_t)AFFINE_STEP_MAX << 32;
+  // How far from the image `s` may start for the integer setup
+  static constexpr int SRC_NEAR = 1 << 16;
+
+  // The transform is `mq` if given (SHAPOGFX2D_FIXED_POINT only), else `mf`
+  bool init(const affine2f *mf, const AffineQ *mq, const Rect &s,
+            const Rect &readable, const Rect &clip,
+            const int16_t *polygon = nullptr, int count = 0) {
     in = readable;
     if (in.isEmpty() || in.right() > AFFINE_SIZE_MAX ||
         in.bottom() > AFFINE_SIZE_MAX || in.x < 0 || in.y < 0)
       return false;
+    AffineQ q;
+    bool fits = FIXED_POINT && s.x >= -SRC_NEAR && s.x <= SRC_NEAR &&
+                s.y >= -SRC_NEAR && s.y <= SRC_NEAR;
+    if (fits) {
+      if (mq) {
+        q = *mq;
+      } else {
+        fits = AffineQ::from(*mf, q);
+      }
+    }
+    if (fits) {
+      if (!setupFixed(q, s, clip)) return false;
+    } else {
+      affine2f f;
+      if (mq) {
+        f = mq->toFloat();
+        mf = &f;
+      }
+      if (!setupFloat(*mf, s, clip)) return false;
+    }
+    if (haveQ) {
+      du = (int32_t)((aQ + 0x8000) >> 16);
+      dv = (int32_t)((bQ + 0x8000) >> 16);
+    } else {
+      du = roundToInt(A * 65536.0f);
+      dv = roundToInt(B * 65536.0f);
+    }
+    uLo = in.x << 16, uHi = (in.right() << 16) - 1;
+    vLo = in.y << 16, vHi = (in.bottom() << 16) - 1;
+    if (polygon && count >= 3) {
+      // (in float with an FPU; without the 32.32 coefficients, which only a
+      // source far beyond the target leaves out, the polygon is not applied)
+      if (!FIXED_POINT || haveQ) {
+        hasPolygon = true;
+        const PolygonMapping pm = {A, B, C, D, E, F, aQ, bQ, cQ, dQ, eQ, fQ};
+        if (!poly.init(polygon, count, s, pm, bx0, bx1, by0, by1))
+          return false;
+      }
+    }
+    // (after the polygon, which may have dropped rows from the box)
+    initFixedRows();
+    if (!fixedRows) {
+      needFloat();
+      iA = A != 0.0f ? 1.0f / A : 0.0f;
+      iB = B != 0.0f ? 1.0f / B : 0.0f;
+    }
+    return true;
+  }
+
+  // The bounding box of the drawn part (a pixel wider) and the inverse, in
+  // integers
+  bool setupFixed(const AffineQ &q, const Rect &s, const Rect &clip) {
+    // The corner of `in` and its two edges on the target, 40.24
+    const int x0 = in.x - s.x, y0 = in.y - s.y;
+    const int64_t ox =
+        (int64_t)q.a * x0 + (int64_t)q.c * y0 + (int64_t)q.tx * 256;
+    const int64_t oy =
+        (int64_t)q.b * x0 + (int64_t)q.d * y0 + (int64_t)q.ty * 256;
+    const int64_t ax = (int64_t)q.a * in.width, cx = (int64_t)q.c * in.height;
+    const int64_t bx = (int64_t)q.b * in.width, dx = (int64_t)q.d * in.height;
+    const int64_t zero = 0, up = (1 << 24) - 1;
+    const int64_t xl = ox + std::min(ax, zero) + std::min(cx, zero);
+    const int64_t xh = ox + std::max(ax, zero) + std::max(cx, zero);
+    const int64_t yl = oy + std::min(bx, zero) + std::min(dx, zero);
+    const int64_t yh = oy + std::max(bx, zero) + std::max(dx, zero);
+    bx0 = std::max(clip.x, (int)(xl >> 24) - 1);
+    bx1 = std::min(clip.right() - 1, (int)((xh + up) >> 24) + 1);
+    by0 = std::max(clip.y, (int)(yl >> 24) - 1);
+    by1 = std::min(clip.bottom() - 1, (int)((yh + up) >> 24) + 1);
+    if (bx0 > bx1 || by0 > by1) return false;
+
+    // The inverse of the linear part: each entry times the reciprocal of
+    // the determinant (16.48; 1 / det = r 2^-(62 + sh)), shifted to 32.32
+    const int64_t det = (int64_t)q.a * q.d - (int64_t)q.b * q.c;
+    if (det == 0) return false;
+    const uint64_t ad = det < 0 ? 0 - (uint64_t)det : (uint64_t)det;
+    int sh;
+    const int64_t r = (int64_t)reciprocal64(ad, sh);
+    const int rs = 6 + sh;  // -24 .. 38
+    auto entry = [&](int32_t x, int64_t &out) {
+      int64_t p = (int64_t)x * r;
+      if (det < 0) p = -p;
+      if (rs > 0) {
+        p = (p + ((int64_t)1 << (rs - 1))) >> rs;
+      } else if (rs < 0) {
+        const int64_t lim = STEP_Q >> -rs;
+        if (p > lim || p < -lim) return false;
+        p *= (int64_t)1 << -rs;
+      }
+      // (steps beyond AFFINE_STEP_MAX are not drawn)
+      if (p > STEP_Q || p < -STEP_Q) return false;
+      out = p;
+      return true;
+    };
+    if (!entry(q.d, aQ) || !entry(-q.b, bQ) || !entry(-q.c, cQ) ||
+        !entry(q.a, dQ))
+      return false;
+    // The translation, the origin of `s` and the half pixel to the center
+    eQ = -(mulShift16(aQ, q.tx) + mulShift16(cQ, q.ty)) +
+         (int64_t)s.x * ((int64_t)1 << 32) + (aQ + cQ) / 2;
+    fQ = -(mulShift16(bQ, q.tx) + mulShift16(dQ, q.ty)) +
+         (int64_t)s.y * ((int64_t)1 << 32) + (bQ + dQ) / 2;
+    haveQ = true;
+    return true;
+  }
+
+  // The same in float (with SHAPOGFX2D_FIXED_POINT: for a transform beyond
+  // AffineQ, the rare case, kept out of line)
+#if SHAPOGFX2D_FIXED_POINT
+  __attribute__((noinline))
+#endif
+  bool setupFloat(const affine2f &m, const Rect &s, const Rect &clip) {
     affine2f inv;
     if (!m.invert(inv)) return false;
-    // Source coordinates of the center of target pixel (x, y), absolute:
-    // u = A x + C y + E, v = B x + D y + F
     A = inv.a, B = inv.b, C = inv.c, D = inv.d;
     if (!(std::fabs(A) <= AFFINE_STEP_MAX && std::fabs(B) <= AFFINE_STEP_MAX &&
           std::fabs(C) <= AFFINE_STEP_MAX && std::fabs(D) <= AFFINE_STEP_MAX))
       return false;  // also NaN
     E = inv.tx + (float)s.x + 0.5f * (A + C);
     F = inv.ty + (float)s.y + 0.5f * (B + D);
-
-    // Bounding box of the drawn part, a pixel wider
+    haveF = true;
     float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
     for (int i = 0; i < 4; i++) {
       const vec2f p = m.apply((float)(in.x - s.x + ((i & 1) ? in.width : 0)),
@@ -1102,47 +1531,118 @@ struct AffineRows {
     by0 = std::max(clip.y, (int)std::floor(std::max(y0, -lim)) - 1);
     by1 = std::min(clip.bottom() - 1, (int)std::ceil(std::min(y1, lim)) + 1);
     if (bx0 > bx1 || by0 > by1) return false;
-    du = roundToInt(A * 65536.0f);
-    dv = roundToInt(B * 65536.0f);
-    iA = A != 0.0f ? 1.0f / A : 0.0f;
-    iB = B != 0.0f ? 1.0f / B : 0.0f;
-    uLo = in.x << 16, uHi = (in.right() << 16) - 1;
-    vLo = in.y << 16, vHi = (in.bottom() << 16) - 1;
-    if (!polygon || count < 3) return true;
-    hasPolygon = true;
-    return poly.init(polygon, count, s, A, B, C, D, E, F, by0, by1);
+    const float limE = (float)(1 << 27);
+    if (std::fabs(E) < limE && std::fabs(F) < limE) {  // (false for NaN)
+      aQ = toQ32(A), bQ = toQ32(B), cQ = toQ32(C), dQ = toQ32(D);
+      eQ = toQ32(E), fQ = toQ32(F);
+      haveQ = true;
+    }
+    return true;
+  }
+
+  // A float as 32.32, exactly (|f| < 2^28)
+  static int64_t toQ32(float f) { return floatToFixed64(f, 32); }
+
+  // The float coefficients after the integer setup, for the float rows
+  // (the float setup has them)
+  __attribute__((noinline)) static float fromQ32(int64_t v) {
+    return fixed64ToFloat(v, 32);
+  }
+  __attribute__((noinline)) void needFloat() {
+    if (!FIXED_POINT || haveF) return;
+    A = fromQ32(aQ), B = fromQ32(bQ), C = fromQ32(cQ);
+    D = fromQ32(dQ), E = fromQ32(eQ), F = fromQ32(fQ);
+    haveF = true;
+  }
+
+  // Set up the fixed-point rows if u and v stay within 16.16 over the whole
+  // bounding box (they are affine, so its corners are the extremes): then
+  // the offsets narrowSpan() divides fit 32 bits from any column of the box
+  void initFixedRows() {
+    fixedRows = false;
+    if (!haveQ) return;
+    // (|A| .. |D| are at most AFFINE_STEP_MAX, |E| and |F| below 2^29 and
+    // the box lies within the coordinate range, so the sums below stay
+    // within 62 bits)
+    const int64_t lim = (int64_t)(AFFINE_SIZE_MAX - 256) << 32;
+    for (int i = 0; i < 4; i++) {
+      const int x = (i & 1) ? bx1 : bx0, y = (i & 2) ? by1 : by0;
+      const int64_t u = eQ + aQ * x + cQ * y, v = fQ + bQ * x + dQ * y;
+      if (u <= -lim || u >= lim || v <= -lim || v >= lim) return;
+    }
+    // The steps along a row are rounded to 16.16: from the middle column
+    // their error is halved
+    xRef = bx0 + (bx1 - bx0) / 2;
+    uRowQ = eQ + aQ * xRef + cQ * by0;
+    vRowQ = fQ + bQ * xRef + dQ * by0;
+    fixedRows = true;
+  }
+
+  // Row y by the float estimate: its reference column xr and (u, v) there,
+  // 16.16; false for a row off the image. One copy for all the callers (it
+  // is the rare path)
+  __attribute__((noinline)) bool floatRow(int y, int &xr, int32_t &u,
+                                          int32_t &v) const {
+    const float margin = AFFINE_STEP_MAX * 2.0f;
+    const float uc = C * (float)y + E, vc = D * (float)y + F;
+    float ex0 = (float)bx0, ex1 = (float)bx1;
+    if (!estimateSpan(uc, A, iA, (float)in.x, (float)in.right(), ex0, ex1) ||
+        !estimateSpan(vc, B, iB, (float)in.y, (float)in.bottom(), ex0, ex1))
+      return false;
+    xr = clampInt(bx0, bx1, (int)std::floor((ex0 + ex1) * 0.5f));
+    const float ur = A * (float)xr + uc, vr = B * (float)xr + vc;
+    if (!(ur > (float)in.x - margin && ur < (float)in.right() + margin &&
+          vr > (float)in.y - margin && vr < (float)in.bottom() + margin))
+      return false;
+    u = roundToInt(ur * 65536.0f);
+    v = roundToInt(vr * 65536.0f);
+    return true;
   }
 
   // fn(y, x, n, u, v): n pixels of row y from x, (u, v) at the first one
   template <typename Fn>
   void forEach(Fn &&fn) {
-    const float margin = AFFINE_STEP_MAX * 2.0f;
-    for (int y = by0; y <= by1; y++) {
-      const float uc = C * (float)y + E, vc = D * (float)y + F;
-      float ex0 = (float)bx0, ex1 = (float)bx1;
-      if (!estimateSpan(uc, A, iA, (float)in.x, (float)in.right(), ex0, ex1) ||
-          !estimateSpan(vc, B, iB, (float)in.y, (float)in.bottom(), ex0, ex1))
-        continue;
-      const int xr = clampInt(bx0, bx1, (int)std::floor((ex0 + ex1) * 0.5f));
-      const float ur = A * (float)xr + uc, vr = B * (float)xr + vc;
-      if (!(ur > (float)in.x - margin && ur < (float)in.right() + margin &&
-            vr > (float)in.y - margin && vr < (float)in.bottom() + margin))
-        continue;
-      const int32_t u = roundToInt(ur * 65536.0f);
-      const int32_t v = roundToInt(vr * 65536.0f);
+    // Row y from its reference column xr, where the source point is (u, v)
+    auto row = [&](int y, int xr, int32_t u, int32_t v)
+                   __attribute__((always_inline)) {
       int k0 = bx0 - xr, k1 = bx1 - xr;
       if (!narrowSpan(u, du, uLo, uHi, k0, k1) ||
           !narrowSpan(v, dv, vLo, vHi, k0, k1))
-        continue;
-      if (hasPolygon && !poly.narrow(y, xr, k0, k1)) continue;
+        return;
+      if (hasPolygon && !poly.narrow(y, xr, k0, k1)) return;
       // The 16.16 offsets are formed in uint32 so that an intermediate wraps
       // instead of overflowing (the sums lie within the image)
       fn(y, xr + k0, k1 - k0 + 1,
          (int32_t)((uint32_t)u + (uint32_t)k0 * (uint32_t)du),
          (int32_t)((uint32_t)v + (uint32_t)k0 * (uint32_t)dv));
+    };
+    if (fixedRows) {
+      int64_t uQ = uRowQ, vQ = vRowQ;
+      for (int y = by0; y <= by1; y++, uQ += cQ, vQ += dQ) {
+        // 32.32 to 16.16, rounded
+        row(y, xRef, (int32_t)((uQ + 0x8000) >> 16),
+            (int32_t)((vQ + 0x8000) >> 16));
+      }
+      return;
+    }
+    for (int y = by0; y <= by1; y++) {
+      int xr;
+      int32_t u, v;
+      if (floatRow(y, xr, u, v)) row(y, xr, u, v);
     }
   }
 };
+
+// The transform of `g` with (dx, dy) as the origin (the product with a
+// translation, less the multiplications by its ones and zeros)
+affine2f matrixAt(const Graphics2D &g, int dx, int dy) {
+  affine2f m = G2Impl::matrix(g);
+  if (dx != 0 || dy != 0) {
+    m.tx += m.a * (float)dx + m.c * (float)dy;
+    m.ty += m.b * (float)dx + m.d * (float)dy;
+  }
+  return m;
+}
 
 // ---------------------------------------------------------------------------
 // Image paths, in target pixels
@@ -1260,17 +1760,36 @@ void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
   PolygonRows *poly = nullptr;
   const Rect d = dst.normalized();
   if (polygon && count >= 3) {
-    if (d.isEmpty()) return;
-    // The source point of the center of target pixel (x, y)
-    const float A = (float)s.width / (float)dst.width;
-    const float D = (float)s.height / (float)dst.height;
-    const float E =
-        (float)(s.x + (dst.width < 0 ? s.width : 0)) + (0.5f - (float)d.x) * A;
-    const float F = (float)(s.y + (dst.height < 0 ? s.height : 0)) +
-                    (0.5f - (float)d.y) * D;
     const Rect clip = g.clipRect();
+    if (d.intersect(clip).isEmpty() || s.isEmpty() || d.width > SCALE_MAX ||
+        d.height > SCALE_MAX || s.width > SCALE_MAX || s.height > SCALE_MAX)
+      return;
+    // The source point of the center of target pixel (x, y): u = A x + E,
+    // v = D y + F
+    PolygonMapping pm = {};
+    const int sx = s.x + (dst.width < 0 ? s.width : 0);
+    const int sy = s.y + (dst.height < 0 ? s.height : 0);
+    if (FIXED_POINT) {
+      // 32.32: the integer part of the quotient and its fraction
+      auto ratio = [](int num, int den) {
+        const uint32_t n = (uint32_t)num, dn = (uint32_t)(den < 0 ? -den : den);
+        const int64_t q = ((int64_t)(n / dn) << 32) + div64by32(n % dn, 0, dn);
+        return den < 0 ? -q : q;
+      };
+      const int64_t one = (int64_t)1 << 32;
+      pm.aQ = ratio(s.width, dst.width);
+      pm.dQ = ratio(s.height, dst.height);
+      pm.eQ = sx * one + pm.aQ / 2 - pm.aQ * d.x;
+      pm.fQ = sy * one + pm.dQ / 2 - pm.dQ * d.y;
+    } else {
+      pm.A = (float)s.width / (float)dst.width;
+      pm.D = (float)s.height / (float)dst.height;
+      pm.E = (float)sx + (0.5f - (float)d.x) * pm.A;
+      pm.F = (float)sy + (0.5f - (float)d.y) * pm.D;
+    }
     int y0 = clip.y, y1 = clip.bottom() - 1;
-    if (!pr.init(polygon, count, s, A, 0.0f, 0.0f, D, E, F, y0, y1)) return;
+    if (!pr.init(polygon, count, s, pm, clip.x, clip.right() - 1, y0, y1))
+      return;
     poly = &pr;
   }
   ImageBlit b;
@@ -1346,15 +1865,15 @@ void blitScaled(const Graphics2D &g, const Texture &img, const Rect &dst,
   }
 }
 
-// Transformed: `m` maps coordinates relative to the top-left corner of `s`
-// (normalized) to the target; `polygon`, if any, clips the source further
-// (see Graphics2D::drawImage)
+// Transformed: `m` (or `mq`, see AffineRows::init) maps coordinates relative
+// to the top-left corner of `s` (normalized) to the target; `polygon`, if
+// any, clips the source further (see Graphics2D::drawImage)
 template <bool SIL>
-void blitAffine(const Graphics2D &g, const Texture &img, const affine2f &m,
-                const Rect &s, const int16_t *polygon, int count,
-                const Color *sil) {
+void blitAffine(const Graphics2D &g, const Texture &img, const affine2f *m,
+                const AffineQ *mq, const Rect &s, const int16_t *polygon,
+                int count, const Color *sil) {
   AffineRows ar;
-  if (!ar.init(m, s, s.intersect(Rect{0, 0, img.width, img.height}),
+  if (!ar.init(m, mq, s, s.intersect(Rect{0, 0, img.width, img.height}),
                g.clipRect(), polygon, count))
     return;
   ImageBlit b;
@@ -1400,10 +1919,7 @@ void imageAt(Graphics2D &g, const Texture &img, int dx, int dy,
     else
       blitPlain<SIL>(g, img, dx + ox, dy + oy, s, sil);
   } else if (G2Impl::wantsAntialias(g)) {
-    G2Impl::drawImageAA(
-        g, img, s,
-        G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy),
-        nullptr, 0, sil);
+    G2Impl::drawImageAA(g, img, s, matrixAt(g, dx, dy), nullptr, 0, sil);
   } else if (kind == TransformKind::SCALE) {
     blitScaled<SIL>(g, img,
                     G2Impl::mapRectSigned(g, RectF{(float)dx, (float)dy,
@@ -1411,9 +1927,8 @@ void imageAt(Graphics2D &g, const Texture &img, int dx, int dy,
                                                    (float)s.height}),
                     s, sil);
   } else {
-    blitAffine<SIL>(
-        g, img, G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy),
-        s, nullptr, 0, sil);
+    const affine2f m = matrixAt(g, dx, dy);
+    blitAffine<SIL>(g, img, &m, nullptr, s, nullptr, 0, sil);
   }
 }
 
@@ -1433,10 +1948,7 @@ void imageInPolygon(Graphics2D &g, const Texture &img, int dx, int dy,
   // edges whatever the transform
   const TransformKind kind = G2Impl::kind(g);
   if (G2Impl::wantsAntialias(g)) {
-    G2Impl::drawImageAA(
-        g, img, s,
-        G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy),
-        polygon, count, sil);
+    G2Impl::drawImageAA(g, img, s, matrixAt(g, dx, dy), polygon, count, sil);
   } else if (!TRANSFORM || kind <= TransformKind::TRANSLATE) {
     blitScaled<SIL>(g, img,
                     Rect{dx + G2Impl::offsetX(g), dy + G2Impl::offsetY(g),
@@ -1449,9 +1961,8 @@ void imageInPolygon(Graphics2D &g, const Texture &img, int dx, int dy,
                                                    (float)s.height}),
                     s, sil, polygon, count);
   } else {
-    blitAffine<SIL>(
-        g, img, G2Impl::matrix(g) * affine2f::translation((float)dx, (float)dy),
-        s, polygon, count, sil);
+    const affine2f m = matrixAt(g, dx, dy);
+    blitAffine<SIL>(g, img, &m, nullptr, s, polygon, count, sil);
   }
 }
 
@@ -1481,11 +1992,44 @@ void imageScaled(Graphics2D &g, const Texture &img, const Rect &dst,
     m.translate((float)dst.x, (float)dst.y)
         .scale((float)dst.width / (float)s.width,
                (float)dst.height / (float)s.height);
-    blitAffine<SIL>(g, img, m, s, nullptr, 0, sil);
+    blitAffine<SIL>(g, img, &m, nullptr, s, nullptr, 0, sil);
   }
 }
 
 }  // namespace
+
+void detail::G2Impl::drawImageFixed(Graphics2D &g, const Texture &img,
+                                    const Rect &srcRect,
+                                    const int16_t *polygon, int count,
+                                    const AffineQ &q) {
+  if (!g.hasTarget() || !img.pixels || !isFormatEnabled(img.format)) return;
+  const Rect s = srcRect.normalized();
+  if (s.isEmpty()) return;
+  if (!polygon || count < 3) {
+    polygon = nullptr;
+    count = 0;
+  }
+  // The paths of imageAt() and imageInPolygon(), by the kind of the
+  // transform as updateTransform() tells them apart
+  constexpr int32_t EPS = 17, ONE = 1 << AffineQ::LIN;  // (1e-6 as 8.24)
+  if (q.b <= -EPS || q.b >= EPS || q.c <= -EPS || q.c >= EPS) {
+    blitAffine<false>(g, img, nullptr, &q, s, polygon, count, nullptr);
+    return;
+  }
+  const bool scaled = q.a != ONE || q.d != ONE;
+  const int x0 = snapQ16(q.tx), y0 = snapQ16(q.ty);
+  Rect dst = {x0, y0, s.width, s.height};
+  if (scaled) {
+    // (mapRectSigned(): the far corner, snapped)
+    dst.width = snapQ16((((int64_t)q.a * s.width) >> 8) + q.tx) - x0;
+    dst.height = snapQ16((((int64_t)q.d * s.height) >> 8) + q.ty) - y0;
+  }
+  if (polygon || scaled || (COLOR_KEY && g.hasColorKey())) {
+    blitScaled<false>(g, img, dst, s, nullptr, polygon, count);
+  } else {
+    blitPlain<false>(g, img, x0, y0, s, nullptr);
+  }
+}
 
 void Graphics2D::drawImage(const Texture &img, int dx, int dy,
                            const Rect &srcRect) {
@@ -1988,7 +2532,7 @@ void maskScaled(const Raster &ras, const MaskSource &m, const Rect &src,
 void maskAffine(const Raster &ras, const MaskSource &m, const Rect &src,
                 const affine2f &mat, const Paint *fg, const Paint *bg) {
   AffineRows ar;
-  if (!ar.init(mat, src, src, ras.clip)) return;
+  if (!ar.init(&mat, nullptr, src, src, ras.clip)) return;
   ar.forEach([&](int y, int x, int n, int32_t u, int32_t v) {
     const MaskSink sink = {&ras, fg, bg, y};
     OpMask op(&sink, x);
@@ -2019,7 +2563,7 @@ void detail::G2Impl::drawMask(Graphics2D &g, const MaskSource &m,
                fg, bg);
   } else {
     maskAffine(ras, m, src,
-               g.state_.transform * affine2f::translation((float)dx, (float)dy),
+               matrixAt(g, dx, dy),
                fg, bg);
   }
 }
@@ -2035,7 +2579,7 @@ void detail::G2Impl::drawMaskAA(Graphics2D &g, const MaskSource &m,
   const Raster ras = raster(g);
   if (ras.clip.isEmpty()) return;
   const affine2f mat =
-      g.state_.transform * affine2f::translation((float)dx, (float)dy);
+      matrixAt(g, dx, dy);
   affine2f inv;
   if (!mat.invert(inv)) return;
   // The target pixels the source rectangle may touch

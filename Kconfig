@@ -99,6 +99,24 @@ menu "ShapoGFX"
                 bool "Integer only"
         endchoice
 
+        choice SHAPOGFX2D_FIXED_POINT_CHOICE
+            prompt "Setup of transformed images and rig matrices"
+            default SHAPOGFX2D_FIXED_POINT_AUTO
+            help
+                The per-image and per-bone arithmetic of transformed images
+                and rigs (inverse, bounding box, polygon bounds, matrix
+                products) in fixed point instead of float: several times
+                faster where float is a library call, a little slower with
+                an FPU.
+
+            config SHAPOGFX2D_FIXED_POINT_AUTO
+                bool "Detected from the target (fixed point without an FPU)"
+            config SHAPOGFX2D_FIXED_POINT_ON
+                bool "Fixed point"
+            config SHAPOGFX2D_FIXED_POINT_OFF
+                bool "Float"
+        endchoice
+
     endmenu
 
     menu "3D renderer"

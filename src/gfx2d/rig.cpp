@@ -138,6 +138,84 @@ affine2f localMatrix(const BonePose &p) {
           p.x, p.y};
 }
 
+// The same as an AffineQ, from the integers of the pose alone: a sine (Q15,
+// 32767 for one) times a scale (Q12) is t 2^24 / (32767 * 4096) in 8.24,
+// rounded (so that a bone that is not turned has exactly one)
+[[maybe_unused]] AffineQ localMatrixQ(const BonePose &p) {
+  auto lin = [](int32_t trig, int32_t scale) {
+    const int32_t t = trig * scale;
+    return (t + (t >> 15) + 4) >> 3;
+  };
+  // (a position out of range stays at its end)
+  auto pos = [](float v) {
+    int32_t q = 0;
+    if (!floatToFixed(v, AffineQ::POS, q)) {
+      q = v < 0.0f ? -INT32_MAX : INT32_MAX;
+    }
+    return q;
+  };
+  const uint32_t ry = (uint16_t)p.rotY;
+  const int32_t cy = sinQ15(ry + 16384u), sny = sinQ15(ry);
+  int32_t cx = cy, snx = sny;
+  if (p.rotX != p.rotY) {
+    const uint32_t rx = (uint16_t)p.rotX;
+    cx = sinQ15(rx + 16384u);
+    snx = sinQ15(rx);
+  }
+  return {lin(cy, p.scaleX),  lin(sny, p.scaleX), -lin(snx, p.scaleY),
+          lin(cx, p.scaleY), pos(p.x),            pos(p.y)};
+}
+
+// The bones' world transforms are kept as AffineQ with
+// SHAPOGFX2D_FIXED_POINT (where float is a library call: a pose and a draw
+// were mostly matrix products), else as affine2f. The overloads below do the
+// same for either; the build uses those of its World.
+#if SHAPOGFX2D_FIXED_POINT
+using World = AffineQ;
+#else
+using World = affine2f;
+#endif
+static_assert(sizeof(AffineQ) == sizeof(affine2f) &&
+                  alignof(AffineQ) <= alignof(affine2f),
+              "Instance::bytes() counts an affine2f per bone");
+
+[[maybe_unused]] inline const affine2f &toAffine(const affine2f &m) {
+  return m;
+}
+[[maybe_unused]] inline affine2f toAffine(const AffineQ &m) {
+  return m.toFloat();
+}
+
+// m = (the local transform of the pose) * m, from the identity up a chain
+// of bones
+[[maybe_unused]] void setIdentity(affine2f &m) { m = affine2f::identity(); }
+[[maybe_unused]] void setIdentity(AffineQ &m) {
+  m = {1 << AffineQ::LIN, 0, 0, 1 << AffineQ::LIN, 0, 0};
+}
+[[maybe_unused]] void applyParent(const BonePose &p, affine2f &m) {
+  m = localMatrix(p) * m;
+}
+[[maybe_unused]] void applyParent(const BonePose &p, AffineQ &m) {
+  AffineQ::mul(localMatrixQ(p), m, m);
+}
+
+// The world transform of a bone from its pose and its parent's (nullptr:
+// none)
+[[maybe_unused]] void boneWorld(const BonePose &p, const affine2f *parent,
+                                affine2f &out) {
+  const affine2f l = localMatrix(p);
+  out = parent ? *parent * l : l;
+}
+[[maybe_unused]] void boneWorld(const BonePose &p, const AffineQ *parent,
+                                AffineQ &out) {
+  const AffineQ l = localMatrixQ(p);
+  if (parent) {
+    AffineQ::mul(*parent, l, out);  // (an entry out of range stays at its end)
+  } else {
+    out = l;
+  }
+}
+
 int16_t clampCoord(float v) {
   return (int16_t)(v < -32768.0f ? -32768.0f : (v > 32767.0f ? 32767.0f : v));
 }
@@ -170,6 +248,47 @@ void rectBounds(const RectF &r, const affine2f &m, float &x0, float &y0,
   y1 = o.y + std::max(bx, 0.0f) + std::max(dy, 0.0f);
 }
 
+// The bounding box of an attachment under the world transform `w` of its
+// bone, in whole armature units; false if there is nothing to draw
+[[maybe_unused]] bool slotBounds(const affine2f &w, const Attachment &at,
+                                 int16_t &bx0, int16_t &by0, int16_t &bx1,
+                                 int16_t &by1) {
+  RectF r;
+  if (!attachmentRect(at, r)) return false;  // the other kinds are reserved
+  float x0, y0, x1, y1;
+  rectBounds(r, w * at.local, x0, y0, x1, y1);
+  if (!(x0 <= x1 && y0 <= y1)) return false;  // NaN
+  bx0 = clampCoord(std::floor(x0));
+  by0 = clampCoord(std::floor(y0));
+  bx1 = clampCoord(std::ceil(x1));
+  by1 = clampCoord(std::ceil(y1));
+  return true;
+}
+[[maybe_unused]] bool slotBounds(const AffineQ &w, const Attachment &at,
+                                 int16_t &bx0, int16_t &by0, int16_t &bx1,
+                                 int16_t &by1) {
+  // An image in integers: its corner and its two edges, 40.24
+  AffineQ l, m;
+  if (at.kind != AttachmentKind::IMAGE || !at.texture ||
+      !AffineQ::from(at.local, l))
+    return slotBounds(w.toFloat(), at, bx0, by0, bx1, by1);
+  AffineQ::mul(w, l, m);
+  const int sw = at.src.width, sh = at.src.height;
+  const int64_t ax = (int64_t)m.a * sw, cx = (int64_t)m.c * sh;
+  const int64_t bx = (int64_t)m.b * sw, dx = (int64_t)m.d * sh;
+  const int64_t ox = (int64_t)m.tx * 256, oy = (int64_t)m.ty * 256;
+  const int64_t zero = 0, up = (1 << 24) - 1;
+  auto coord = [](int64_t v) {
+    v >>= 24;
+    return (int16_t)(v < -32768 ? -32768 : (v > 32767 ? 32767 : v));
+  };
+  bx0 = coord(ox + std::min(ax, zero) + std::min(cx, zero));
+  by0 = coord(oy + std::min(bx, zero) + std::min(dx, zero));
+  bx1 = coord(ox + std::max(ax, zero) + std::max(cx, zero) + up);
+  by1 = coord(oy + std::max(bx, zero) + std::max(dx, zero) + up);
+  return true;
+}
+
 // Draws the slots of an armature one by one, keeping the blend, color key
 // and clip of the Graphics2D in step and restoring them at the end
 struct Drawer {
@@ -188,6 +307,9 @@ struct Drawer {
   int curOpacity;
   BlendMode curBlend;
   bool clipped = false;
+  // SHAPOGFX2D_FIXED_POINT: the placement as an AffineQ, if it fits
+  AffineQ baseQ = {};
+  bool baseQOk = false;
 
   Drawer(Graphics2D &g, const Armature &arm)
       : g(g), arm(arm), base(g.transform()), opacity(g.opacity()),
@@ -204,6 +326,7 @@ struct Drawer {
     curKey = oldKey;
     curOpacity = opacity;
     curBlend = blend;
+    baseQOk = FIXED_POINT && AffineQ::from(base, baseQ);
   }
   ~Drawer() {
     g.setTransform(base);
@@ -228,6 +351,26 @@ struct Drawer {
              o.x + std::min(ax, 0.0f) + std::min(cy, 0.0f) > cx1 ||
              o.y + std::max(bx, 0.0f) + std::max(dy, 0.0f) < cy0 ||
              o.y + std::min(bx, 0.0f) + std::min(dy, 0.0f) > cy1);
+  }
+
+  // The same through baseQ (baseQOk), for the box of a slot
+  bool visibleFixed(int x0, int y0, int x1, int y1) const {
+    // The corner of the box and its two edges on the target, 40.24
+    const AffineQ &q = baseQ;
+    const int64_t ox =
+        (int64_t)q.a * x0 + (int64_t)q.c * y0 + (int64_t)q.tx * 256;
+    const int64_t oy =
+        (int64_t)q.b * x0 + (int64_t)q.d * y0 + (int64_t)q.ty * 256;
+    const int w = x1 - x0, h = y1 - y0;
+    const int64_t ax = (int64_t)q.a * w, cy = (int64_t)q.c * h;
+    const int64_t bx = (int64_t)q.b * w, dy = (int64_t)q.d * h;
+    const int64_t zero = 0, one = (int64_t)1 << 24;
+    const int64_t left = (clip.x - 1) * one, right = (clip.right() + 1) * one;
+    const int64_t top = (clip.y - 1) * one, bottom = (clip.bottom() + 1) * one;
+    return !(ox + std::max(ax, zero) + std::max(cy, zero) < left ||
+             ox + std::min(ax, zero) + std::min(cy, zero) > right ||
+             oy + std::max(bx, zero) + std::max(dy, zero) < top ||
+             oy + std::min(bx, zero) + std::min(dy, zero) > bottom);
   }
 
   void setKey(const Attachment &at) {
@@ -257,15 +400,10 @@ struct Drawer {
     }
   }
 
-  // `world`: of the slot's bone; `clipWorld`: of the clip's bone; `paint`:
-  // the slot is left to `painter` (nullptr: not drawn)
-  void slot(const Slot &sl, const Attachment &at, int alpha, Color color,
-            float strokeWidth, const affine2f &world,
-            const affine2f &clipWorld, SlotPainter *painter = nullptr,
-            const SlotPaint *paint = nullptr) {
-    if (paint && !painter) return;
+  // The blend of a slot; false if it is not visible
+  bool setBlendOf(const Slot &sl, int alpha) {
     const int op = alpha == 255 ? opacity : (opacity * alpha + 127) / 255;
-    if (op == 0) return;
+    if (op == 0) return false;
     const BlendMode bm =
         (sl.blend == BlendMode::ADD && blend != BlendMode::NONE) ? BlendMode::ADD
                                                                  : blend;
@@ -274,9 +412,61 @@ struct Drawer {
       curOpacity = op;
       curBlend = bm;
     }
+    return true;
+  }
+
+  // The transform of an attachment on the target: placement x the bone's
+  // world transform x the attachment's. As an AffineQ, false if it does not
+  // fit.
+  bool attachmentQ(const AffineQ &world, const Attachment &at,
+                   AffineQ &m) const {
+    AffineQ l, wl;
+    return baseQOk && AffineQ::from(at.local, l) &&
+           AffineQ::mul(world, l, wl) && AffineQ::mul(baseQ, wl, m);
+  }
+  void setTransformOf(const affine2f &world, const Attachment &at) {
+    g.setTransform(base * world * at.local);
+  }
+  void setTransformOf(const AffineQ &world, const Attachment &at) {
+    AffineQ m;
+    if (attachmentQ(world, at, m)) {
+      G2Impl::setTransformFixed(g, m);
+    } else {
+      g.setTransform(base * world.toFloat() * at.local);
+    }
+  }
+
+  // An image slot without a clip through the fixed-point path: the
+  // transform goes to the image as it is. False if the slot has to take
+  // slot() instead (antialiasing is drawn in float).
+  bool imageFixed(const Slot &sl, const Attachment &at, int alpha,
+                  const AffineQ &world) {
+    AffineQ m;
+    if (sl.clip || at.kind != AttachmentKind::IMAGE ||
+        G2Impl::wantsAntialias(g) || !attachmentQ(world, at, m))
+      return false;
+    if (!setBlendOf(sl, alpha)) return true;
+    if (clipped) g.setClipRect(clip);
+    setKey(at);
+    G2Impl::drawImageFixed(g, *at.texture, at.src, at.hull, at.hullCount, m);
+    return true;
+  }
+  bool imageFixed(const Slot &, const Attachment &, int, const affine2f &) {
+    return false;
+  }
+
+  // `world`: of the slot's bone; `clipWorld`: of the clip's bone (W: the
+  // build's World); `paint`: the slot is left to `painter` (nullptr: not
+  // drawn)
+  template <typename W>
+  void slot(const Slot &sl, const Attachment &at, int alpha, Color color,
+            float strokeWidth, const W &world, const W &clipWorld,
+            SlotPainter *painter = nullptr, const SlotPaint *paint = nullptr) {
+    if (paint && !painter) return;
+    if (!setBlendOf(sl, alpha)) return;
     if (sl.clip) {
       // In target pixels: exact without a rotation, else the bounding box
-      const affine2f m = base * clipWorld;
+      const affine2f m = base * toAffine(clipWorld);
       float x0, y0, x1, y1;
       rectBounds(*sl.clip, m, x0, y0, x1, y1);
       Rect r = {0, 0, 0, 0};
@@ -295,16 +485,16 @@ struct Drawer {
     }
     if (paint) {
       setKey(at);
-      g.setTransform(base * world * at.local);
+      setTransformOf(world, at);
       painter->paintSlot(g, *paint);
       resync();
       if (!sl.clip) g.setClipRect(clip);
     } else if (at.kind == AttachmentKind::VECTOR) {
-      g.setTransform(base * world * at.local);
+      setTransformOf(world, at);
       g.drawPicture(*(const vg::Picture *)at.ext, color, strokeWidth);
     } else {
       setKey(at);
-      g.setTransform(base * world * at.local);
+      setTransformOf(world, at);
       g.drawImage(*at.texture, 0, 0, at.src, at.hull, at.hullCount);
     }
     if (sl.clip) g.setClipRect(clip);
@@ -321,11 +511,12 @@ void drawBind(Graphics2D &g, const Armature &arm) {
   // The world transform of a bone, up its chain (parents come first, so
   // the chain is at most the bone's index long)
   auto world = [&](int bone) {
-    affine2f m = affine2f::identity();
+    World m;
+    setIdentity(m);
     for (int b = bone; b < arm.boneCount && b != NO_PARENT;) {
       const Bone &bn = arm.bones[b];
       const BonePose p = {bn.x, bn.y, bn.rotX, bn.rotY, bn.scaleX, bn.scaleY};
-      m = localMatrix(p) * m;
+      applyParent(p, m);
       if (bn.parent >= b) break;  // parents before children
       b = bn.parent;
     }
@@ -338,12 +529,12 @@ void drawBind(Graphics2D &g, const Armature &arm) {
         sl.bone >= arm.boneCount || sl.alpha == 0)
       continue;
     const Attachment &at = sl.attachments[sl.defaultAttachment];
-    RectF r;
-    if (!attachmentRect(at, r)) continue;
-    const affine2f w = world(sl.bone);
-    float x0, y0, x1, y1;
-    rectBounds(r, w * at.local, x0, y0, x1, y1);
-    if (!(x0 <= x1 && y0 <= y1) || !d.visible(x0, y0, x1, y1)) continue;
+    const World w = world(sl.bone);
+    int16_t x0, y0, x1, y1;
+    if (!slotBounds(w, at, x0, y0, x1, y1) ||
+        !d.visible((float)x0, (float)y0, (float)x1, (float)y1))
+      continue;
+    if (d.imageFixed(sl, at, sl.alpha, w)) continue;
     const Color c = hasColor ? makeColor(sl.colorR, sl.colorG, sl.colorB)
                              : Colors::WHITE;
     d.slot(sl, at, sl.alpha, c, hasWidth ? sl.strokeWidth : 1.0f, w,
@@ -367,7 +558,7 @@ bool Instance::init(const Armature &a, void *memory, size_t size) {
                       sizeof(SlotState) * a.slotCount + a.slotCount;
   if (size < (size_t)(p - p0) + need) return false;
   arm_ = &a;
-  world_ = (affine2f *)p;
+  world_ = (void *)p;
   slots_ = (SlotState *)(p + sizeof(affine2f) * a.boneCount);
   order_ = (uint8_t *)(slots_ + a.slotCount);
   orderSrc_ = order_;  // forces setOrder() to write the base order
@@ -399,6 +590,7 @@ void Instance::poseBind(BoneVisitor *visitor) {
 
 void Instance::apply(const Animation *anim, float frame, BoneVisitor *visitor) {
   const Armature &arm = *arm_;
+  World *const world = (World *)world_;
   static const Animation NONE = {};
   const Animation &a = anim ? *anim : NONE;
   if (!(frame > 0.0f)) frame = 0.0f;  // NaN too
@@ -416,8 +608,7 @@ void Instance::apply(const Animation *anim, float frame, BoneVisitor *visitor) {
       }
     }
     if (visitor) visitor->onBone(i, p);
-    const affine2f l = localMatrix(p);
-    world_[i] = b.parent < i ? world_[b.parent] * l : l;
+    boneWorld(p, b.parent < i ? &world[b.parent] : nullptr, world[i]);
   }
 
   // Slots
@@ -501,16 +692,10 @@ void Instance::updateSlot(int s) {
       sl.bone >= arm_->boneCount)
     return;
   const Attachment &at = sl.attachments[st.attachment];
-  RectF r;
-  if (!attachmentRect(at, r)) return;  // the other kinds are reserved
-  const affine2f m = world_[sl.bone] * at.local;
-  float x0, y0, x1, y1;
-  rectBounds(r, m, x0, y0, x1, y1);
-  if (!(x0 <= x1 && y0 <= y1)) return;  // NaN
-  st.x0 = clampCoord(std::floor(x0));
-  st.y0 = clampCoord(std::floor(y0));
-  st.x1 = clampCoord(std::ceil(x1));
-  st.y1 = clampCoord(std::ceil(y1));
+  const World &w = ((const World *)world_)[sl.bone];
+  int16_t x0, y0, x1, y1;
+  if (!slotBounds(w, at, x0, y0, x1, y1)) return;
+  st.x0 = x0, st.y0 = y0, st.x1 = x1, st.y1 = y1;
 }
 
 void Instance::updateBounds() {
@@ -537,27 +722,32 @@ void Instance::draw(Graphics2D &g, int first, int end,
   first = std::max(first, 0);
   end = std::min(end, (int)arm.slotCount);
   if (first >= end) return;
+  const World *const world = (const World *)world_;
   Drawer d(g, arm);
   for (int i = first; i < end; i++) {
     const int s = order_[i];
     const SlotState &st = slots_[s];
     if (st.x1 < st.x0 || st.alpha == 0) continue;
     // Skip what lies outside the clip (drawing in bands)
-    if (!d.visible((float)st.x0, (float)st.y0, (float)st.x1, (float)st.y1))
+    if (d.baseQOk
+            ? !d.visibleFixed(st.x0, st.y0, st.x1, st.y1)
+            : !d.visible((float)st.x0, (float)st.y0, (float)st.x1,
+                         (float)st.y1))
       continue;
     const Slot &sl = arm.slots[s];
     const Attachment &at = sl.attachments[st.attachment];
+    const bool custom = (st.flags & FLAG_CUSTOM_PAINT) != 0;
+    if (!custom && d.imageFixed(sl, at, st.alpha, world[sl.bone])) continue;
     const Color c = makeColor(st.r, st.g, st.b);
-    const affine2f &cw = sl.clip && sl.clipBone < arm.boneCount
-                             ? world_[sl.clipBone]
-                             : world_[sl.bone];
-    if (st.flags & FLAG_CUSTOM_PAINT) {
+    const World &w = world[sl.bone];
+    const World &cw =
+        sl.clip && sl.clipBone < arm.boneCount ? world[sl.clipBone] : w;
+    if (custom) {
       const SlotPaint p = {s, st.attachment, sl, at, st.alpha, c,
                            st.strokeWidth};
-      d.slot(sl, at, st.alpha, c, st.strokeWidth, world_[sl.bone], cw,
-             painter, &p);
+      d.slot(sl, at, st.alpha, c, st.strokeWidth, w, cw, painter, &p);
     } else {
-      d.slot(sl, at, st.alpha, c, st.strokeWidth, world_[sl.bone], cw);
+      d.slot(sl, at, st.alpha, c, st.strokeWidth, w, cw);
     }
   }
 }
@@ -593,10 +783,11 @@ int Instance::slotIndex(const char *name) const {
   return -1;
 }
 
-const affine2f &Instance::boneTransform(int bone) const {
-  static const affine2f IDENTITY = {1, 0, 0, 1, 0, 0};
-  if (!arm_ || bone < 0 || bone >= arm_->boneCount) return IDENTITY;
-  return world_[bone];
+affine2f Instance::boneTransform(int bone) const {
+  if (!arm_ || bone < 0 || bone >= arm_->boneCount) {
+    return affine2f::identity();
+  }
+  return toAffine(((const World *)world_)[bone]);
 }
 
 int Instance::attachmentOf(int slot) const {
@@ -669,7 +860,8 @@ bool Instance::attachmentTransform(int slot, int attachment,
   if (attachment < 0 || attachment >= sl.attachmentCount ||
       sl.bone >= arm_->boneCount)
     return false;
-  out = world_[sl.bone] * sl.attachments[attachment].local;
+  out = toAffine(((const World *)world_)[sl.bone]) *
+        sl.attachments[attachment].local;
   return true;
 }
 

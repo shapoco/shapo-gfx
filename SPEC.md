@@ -67,6 +67,7 @@ in git.
 | `SHAPOGFX3D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): fetch 16-bit texels through the SIO interpolator `interp0` and step Gouraud colors through `interp1`. On by default when the target is detected as RP2 (`PICO_RP2040` / `PICO_RP2350`) and `hardware/interp.h` is on the include path; 0 turns it off |
 | `SHAPOGFX2D_RP2_INTERP` | 1 on RP2, else 0 | RP2040/RP2350 (Pico SDK): a rotated or sheared `drawImage()` of a 16-bit image whose stride is a power of two fetches the pixels through the SIO interpolator `interp0`. Detected like `SHAPOGFX3D_RP2_INTERP`; 0 turns it off |
 | `SHAPOGFX2D_FPU_SQRT` | 1 with an FPU, else 0 | The integer square root of the axis-aligned ellipse extents is seeded by the FPU's `sqrtf()` and corrected to the exact floor (the same value as the pure integer root, which a core without an FPU keeps). Detected from the compiler (`__ARM_FP`, `__riscv_flen`, the ESP32-S3/P4, x86, AArch64, WebAssembly); 0 or 1 overrides |
+| `SHAPOGFX2D_FIXED_POINT` | 0 with an FPU, else 1 | 1 does the per-image and per-bone arithmetic of transformed images and rigs in fixed point instead of float: the inverse and the bounding box of a transformed `drawImage()` / `drawSilhouette()`, the bounds of its polygon, and the matrix products of `rig::Instance` (`pose()`, `draw()`), whose images then reach the pixels without a float operation. For cores where float is a library call (on a Cortex-M3 a rig frame of TexBreakout takes 0.73 times the instructions); with an FPU the float code is the shorter one (see "Transformed drawImage" and the rig). Detected like `SHAPOGFX2D_FPU_SQRT`; 0 or 1 overrides. The pictures differ by a pixel here and there on texel boundaries |
 | `SHAPOGFX2D_TRANSFORM` | 1 | 2D transforms; 0 removes them (the transform stays the identity, `setTransform()` and friends do nothing) |
 | `SHAPOGFX2D_BLEND` | 1 | 2D blend modes other than `ALPHA` and the opacity; 0 removes them (`setBlend()` does nothing) |
 | `SHAPOGFX2D_COLOR_KEY` | 1 | Color key of `drawImage()`; 0 removes it (`setColorKey()` does nothing) |
@@ -104,9 +105,10 @@ the table above other than `SHAPOGFX3D_RP2_INTERP`, `SHAPOGFX2D_RP2_INTERP`,
 (`CONFIG_SHAPOGFX_FORMAT_GRAY1`, ...) with the same defaults; the format macros
 and `SHAPOGFX_COORD_BITS` are passed on to the components that require
 `shapo-gfx`. `SHAPOGFX3D_DEPTH_BITS` is the choice
-`CONFIG_SHAPOGFX3D_DEPTH_BITS_32` / `_16` and `SHAPOGFX2D_FPU_SQRT` the choice
-`CONFIG_SHAPOGFX2D_FPU_SQRT_AUTO` / `_ON` / `_OFF`, where `AUTO` leaves the
-detection to the library.
+`CONFIG_SHAPOGFX3D_DEPTH_BITS_32` / `_16`, and `SHAPOGFX2D_FPU_SQRT` and
+`SHAPOGFX2D_FIXED_POINT` the choices `CONFIG_SHAPOGFX2D_FPU_SQRT_AUTO` / `_ON` /
+`_OFF` and `CONFIG_SHAPOGFX2D_FIXED_POINT_AUTO` / `_ON` / `_OFF`, where `AUTO`
+leaves the detection to the library.
 
 `SHAPOGFX_COORD_BITS` bounds what the renderers have to handle: a surface or a 3D
 screen wider or taller than `SHAPOGFX_COORD_MAX` (`2^bits - 1`) pixels is rejected
@@ -675,12 +677,21 @@ Semantics:
   a keyed copy skips and a blend draws with alpha 0).
 - **Transformed drawImage** maps the source rectangle's coordinates (its top-left
   corner is the origin) through the transform and samples the pixel under each
-  destination pixel center. The inverse transform is computed once in float;
-  per row a float estimate picks a reference column inside the image's
-  footprint, and from there the row is clipped exactly in 16.16 fixed point
-  (the columns whose `u` and `v` lie in the part of the source rectangle inside
-  the image), so the per-pixel walk (`u += du`, `v += dv`) needs no bounds
-  check and never reads outside that part. A polygon narrows the row further:
+  destination pixel center. The transform is inverted once; the source
+  coordinates of the middle column of the bounding box then step down the rows
+  in 32.32 accumulators, and from that column each row is clipped exactly in
+  16.16 fixed point (the columns whose `u` and `v` lie in the part of the
+  source rectangle inside the image), so the per-pixel walk (`u += du`,
+  `v += dv`) needs no bounds check and never reads outside that part. A row is
+  two 64-bit additions and that clip, with no float. (Only where the source
+  coordinates of the bounding box leave 16.16 -- steps of thousands of texels
+  per pixel -- a float estimate picks a reference column per row instead.)
+  With `SHAPOGFX2D_FIXED_POINT` the setup is in integers as well, for a
+  transform within 8.24 (scales below 128) and 16.16 (positions below 32768):
+  the bounding box from the corner and the two edges of the rectangle, the
+  inverse from the reciprocal of the determinant (one division of 64 by 32
+  bits made of two 32-bit ones); other transforms take the float setup. A
+  polygon narrows the row further:
   each edge is a half-plane in source coordinates, which along a row is a bound
   on the column that moves linearly with the row, so the setup turns the edges
   into (column at the first row, change per row) pairs -- lower bounds and upper
@@ -689,10 +700,15 @@ Semantics:
   that are the tightest on some row are kept (their envelope, ordered by slope),
   so the rows, taken from top to bottom, step through them: a row costs two
   multiply-adds per kind and two roundings, in float (the exact rectangle keeps
-  the walk safe whatever this rounds to). Images up to 16384 pixels and
-  transforms that shrink by at most 4096 are drawn (the limits keep the fixed
-  point within 32 bits). On a core without an FPU the per-row setup is a few
-  software float operations; the pixels are integer only.
+  the walk safe whatever this rounds to). With `SHAPOGFX2D_FIXED_POINT` the
+  bounds are 44.20 fixed point instead, computed from the 32.32 coefficients
+  with a reciprocal per edge, and a row adds the steps of the two bounds in
+  force and of the two that follow them in the order (which take over where
+  they overtake): four 64-bit additions. There the edges are only ordered by
+  their steps, which for a convex polygon is the envelope already, and an edge
+  that crosses more than 2^24 columns per row limits the rows like one across
+  them. Images up to 16384 pixels and transforms that shrink by at most 4096
+  are drawn (the limits keep the fixed point within 32 bits).
 - **drawSilhouette** fills the shape of an image with a color, for a sprite that
   flashes when hit or its shadow: each target pixel gets the color with its alpha
   scaled by the opacity of the image pixel under it (the alpha nibble of ARGB4444, so
@@ -1044,7 +1060,8 @@ void drawBind(Graphics2D &, const Armature &);   // the bind pose, without an In
 
 `rig::Instance` (a small handle; copies share the memory):
 
-- `static size_t bytes(const Armature &)`: 24 bytes per bone (world transforms), 20
+- `static size_t bytes(const Armature &)`: 24 bytes per bone (world transforms,
+  as `affine2f` or with `SHAPOGFX2D_FIXED_POINT` in fixed point: 8.24 and 16.16), 20
   per slot (bounding box, attachment, alpha, color, flags, stroke width) and 1 per slot (draw order),
   rounded up to 4, plus 3 bytes of alignment slack. `init(armature, memory, size)` fails if the
   memory is too small or `features` has a bit outside `SUPPORTED_FEATURES`, and starts
@@ -1091,6 +1108,17 @@ void drawBind(Graphics2D &, const Armature &);   // the bind pose, without an In
   armature's key even when the caller had set another one. Without `SHAPOGFX2D_TRANSFORM`
   nothing is drawn. Drawing something between two slots is `draw(g, 0, k)`, the
   drawing, `draw(g, k, n)` with `k = drawIndexOf(slot)`.
+  With `SHAPOGFX2D_FIXED_POINT` (a core without an FPU, where a pose and a draw
+  were mostly float matrix products) the matrices are fixed point (`AffineQ`:
+  a..d 8.24, tx and ty 16.16): the local matrix of a bone comes straight from the
+  integers of its pose (sine Q15 x scale Q12), the world transforms and the slots'
+  boxes are 64-bit products, and `draw()` hands `placement * world[bone] * local`
+  to the image paths as it is (the same paths, picked by the kind of that
+  matrix), without going through `setTransform()`. Slots left to a painter and
+  vector pictures get that matrix converted to float as `g`'s transform; a slot
+  with a clip, antialiased drawing, and a placement or a product beyond the range
+  of the fixed point (scales of 128 and more, positions beyond 32768) are
+  computed in float as without the option.
 - Custom paint: `setCustomPaint(slot, enable)` / `customPaintOf(slot)` (a flag in
   the slot's state, off after `init()`, kept by `pose()`) leave a slot to the
   `SlotPainter` given to `draw()` (nullptr: the slot is not drawn), for a texture
@@ -1120,7 +1148,8 @@ void drawBind(Graphics2D &, const Armature &);   // the bind pose, without an In
   rig).
 - Accessors: `drawIndexOf(slot)`, `slotAt(drawIndex)`, `boneIndex(name)`,
   `slotIndex(name)` (linear `strcmp`, -1 if none), `boneTransform(bone)` (armature
-  space), `attachmentOf` / `setAttachment`, `alphaOf` / `setAlpha`, `colorOf` /
+  space, by value: with `SHAPOGFX2D_FIXED_POINT` it is converted from the fixed
+  point the instance keeps), `attachmentOf` / `setAttachment`, `alphaOf` / `setAlpha`, `colorOf` /
   `setColor` (the color's alpha is ignored) and `strokeWidthOf` / `setStrokeWidth`
   (overrides until the next pose),
   `bounds()` (union of the visible slots' boxes) and `bounds(placement)` (the box of
@@ -2270,6 +2299,16 @@ with one for opaque colors; a star antialiased identically from the stack buffer
 the state stack and opacity / clipping, and the vector attachments of rig (a
 hand-made armature with a VECTOR attachment in the slot's color, a clipped slot,
 `drawBind()` against `Instance::draw()`, a COLOR timeline, the feature bit off).
+For `SHAPOGFX2D_FIXED_POINT` (`test/fixed_test.cpp`, which includes the internal
+header for the helpers): the division of 64 by 32 bits, the reciprocal, the
+shifted products (against 128-bit arithmetic), the conversions between float and
+fixed point and the `AffineQ` product (against float, and what does not fit); and,
+in either build, images under transforms beyond the range of the fixed point
+(texels a hundred pixels wide, a placement far off the target, steps of thousands
+of texels per pixel) against the source points computed in double. The rig tests
+draw an instance magnified beyond that range against the calls made by hand. The
+option changes which code draws the other tests' pictures, so the suite is run
+with it both ways (`-DSHAPOGFX2D_FIXED_POINT=0` / `=1`).
 For svg2cpp (`test/tools/make_test_vg.py` writes `test_vg.svg`, a static SVG
 exercising every element and most properties, and `test_vg_anim.svg` with every
 animation element, and converts them to `test_vg.hpp` (picture), `test_vg_text.hpp`

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <type_traits>
 
+#include "../common/arch_detect.hpp"
 #include "shapoco/gfx2d/graphics2d.hpp"
 
 // Compile-time options (read by src/gfx2d/*.cpp only; no public type depends
@@ -37,6 +38,14 @@
 #ifndef SHAPOGFX2D_ANTIALIAS
 #define SHAPOGFX2D_ANTIALIAS 1
 #endif
+// The per-image and per-bone arithmetic of transformed images and rigs
+// (inverse, bounding box, matrix products) in fixed point instead of float.
+// On by default where float is a library call, which then costs more than
+// the pixels; with an FPU the float code is the shorter one. (The rows of a
+// transformed image are stepped in fixed point either way.)
+#ifndef SHAPOGFX2D_FIXED_POINT
+#define SHAPOGFX2D_FIXED_POINT (!SHAPOGFX_ARCH_FPU)
+#endif
 
 namespace shapoco::gfx2d::detail {
 
@@ -48,6 +57,7 @@ constexpr bool BLEND = SHAPOGFX2D_BLEND != 0;
 constexpr bool COLOR_KEY = SHAPOGFX2D_COLOR_KEY != 0;
 constexpr bool RIG = SHAPOGFX2D_RIG != 0;
 constexpr bool ANTIALIAS = SHAPOGFX2D_ANTIALIAS != 0;
+constexpr bool FIXED_POINT = SHAPOGFX2D_FIXED_POINT != 0;
 
 // ---------------------------------------------------------------------------
 // Integer helpers
@@ -89,6 +99,157 @@ static inline int snap(float v) {
   if (!(v < LIM)) return LINE_INPUT_MAX;
   const int i = (int)v;
   return (float)i < v ? i + 1 : i;
+}
+
+// ---------------------------------------------------------------------------
+// Fixed point
+
+static inline int clz64(uint64_t v) {
+  const uint32_t hi = (uint32_t)(v >> 32);
+  return hi ? __builtin_clz(hi) : 32 + __builtin_clz((uint32_t)v);
+}
+
+// f * 2^frac to the nearest integer, taken from the bits of the float (no
+// float operation: a core without an FPU converts in a dozen instructions).
+// False if the result does not fit 31 bits or f is not finite.
+static inline bool floatToFixed(float f, int frac, int32_t &out) {
+  uint32_t bits;
+  std::memcpy(&bits, &f, sizeof bits);
+  const int e = (int)((bits >> 23) & 0xFF);
+  const int sh = e - 150 + frac;  // the value is m * 2^(e - 150)
+  if (sh > 7) return false;       // 2^31 or more, infinite or NaN
+  uint32_t v = 0;
+  if (e != 0 && sh > -25) {  // (zero, the denormals and what rounds to zero)
+    const uint32_t m = (bits & 0x7FFFFFu) | 0x800000u;
+    v = sh >= 0 ? m << sh : (m + (1u << (-sh - 1))) >> -sh;
+  }
+  out = (bits >> 31) ? -(int32_t)v : (int32_t)v;
+  return true;
+}
+
+// f * 2^frac truncated, as 64 bits (|f| * 2^frac below 2^62, f finite): the
+// bits are shifted into place (the library's float to 64-bit conversions
+// are calls even on a core with an FPU)
+static inline int64_t floatToFixed64(float f, int frac) {
+  uint32_t bits;
+  std::memcpy(&bits, &f, sizeof bits);
+  const int e = (int)((bits >> 23) & 0xFF);
+  if (e == 0) return 0;  // zero and the denormals
+  const int64_t m = (int64_t)((bits & 0x7FFFFFu) | 0x800000u);
+  const int sh = e - 150 + frac;  // the value is m * 2^(e - 150)
+  const int64_t v = sh >= 0 ? m << sh : (sh > -63 ? m >> -sh : 0);
+  return (bits >> 31) ? -v : v;
+}
+
+// v * 2^-frac as a float, rounded to nearest, built from the bits likewise
+// (frac up to 32)
+static inline float fixedToFloat(int32_t v, int frac) {
+  if (v == 0) return 0.0f;
+  uint32_t mag = v < 0 ? 0u - (uint32_t)v : (uint32_t)v;
+  const int lz = __builtin_clz(mag);
+  mag <<= lz;
+  // 24 bits of mantissa; a carry out of them goes into the exponent
+  const uint32_t man = (mag >> 8) + ((mag >> 7) & 1u);
+  uint32_t bits =
+      ((uint32_t)(127 + 31 - lz - frac) << 23) + (man - (1u << 23));
+  if (v < 0) bits |= 0x80000000u;
+  float f;
+  std::memcpy(&f, &bits, sizeof f);
+  return f;
+}
+
+// The same for 64 bits (frac up to 32), from the top 31 bits: enough for a
+// float, and without the library's 64-bit conversion, which goes through
+// double
+static inline float fixed64ToFloat(int64_t v, int frac) {
+  const uint64_t mag = v < 0 ? 0 - (uint64_t)v : (uint64_t)v;
+  const int sh = std::max(0, 33 - clz64(mag | 1));
+  const int32_t top = (int32_t)(mag >> sh);
+  return fixedToFloat(v < 0 ? -top : top, frac - sh);
+}
+
+// (a * b) >> 16 for a product beyond 64 bits (|a| < 2^47)
+static inline int64_t mulShift16(int64_t a, int32_t b) {
+  const int64_t hi = (int64_t)(int32_t)(a >> 32) * b;
+  const int64_t lo = (int64_t)(uint32_t)a * b;
+  return hi * 65536 + (lo >> 16);
+}
+
+// floor((hi * 2^32 + lo) / d) for hi < d (so that it fits 32 bits), by two
+// 32-bit divisions (Knuth's algorithm D in base 2^16): no 64-bit division
+// routine of the library
+static inline uint32_t div64by32(uint32_t hi, uint32_t lo, uint32_t d) {
+  const int s = __builtin_clz(d);
+  d <<= s;
+  const uint32_t vn1 = d >> 16, vn0 = d & 0xFFFFu;
+  const uint32_t un32 = s ? (hi << s) | (lo >> (32 - s)) : hi;
+  const uint32_t un10 = lo << s;
+  const uint32_t un1 = un10 >> 16, un0 = un10 & 0xFFFFu;
+  uint32_t q1 = un32 / vn1, rhat = un32 - q1 * vn1;
+  while (q1 >= 65536u || q1 * vn0 > (rhat << 16) + un1) {
+    q1--;
+    rhat += vn1;
+    if (rhat >= 65536u) break;
+  }
+  const uint32_t un21 = (un32 << 16) + un1 - q1 * d;  // (modulo 2^32)
+  uint32_t q0 = un21 / vn1;
+  rhat = un21 - q0 * vn1;
+  while (q0 >= 65536u || q0 * vn0 > (rhat << 16) + un0) {
+    q0--;
+    rhat += vn1;
+    if (rhat >= 65536u) break;
+  }
+  return (q1 << 16) + q0;
+}
+
+// The reciprocal of a 64-bit magnitude v > 0 for multiplying instead of
+// dividing: r in [2^31, 2^32) and sh with 1 / v = r * 2^-(62 + sh), to 30
+// bits
+static inline uint32_t reciprocal64(uint64_t v, int &sh) {
+  sh = 33 - clz64(v);
+  // n in [2^30, 2^31)
+  const uint32_t n = sh >= 0 ? (uint32_t)(v >> sh) : (uint32_t)(v << -sh);
+  return n == (1u << 30) ? 0xFFFFFFFFu : div64by32(1u << 30, 0, n);
+}
+
+// (a * r) >> s, floor, for |a| < 2^62 and s < 96; a result beyond 2^62 is
+// returned as +-2^62
+constexpr int64_t MUL_SHIFT_SAT = (int64_t)1 << 62;
+static inline int64_t mulShiftSat(int64_t a, uint32_t r, int s) {
+  const int64_t hi = (int64_t)(int32_t)(a >> 32) * (int64_t)r;
+  const uint64_t lo = (uint64_t)(uint32_t)a * r;
+  const int64_t t = hi + (int64_t)(lo >> 32);  // (a * r) >> 32
+  if (s >= 32) return t >> (s - 32 > 63 ? 63 : s - 32);
+  const int l = 32 - s;  // the bits of t to move up
+  if (l > 61) return t > 0 ? MUL_SHIFT_SAT : (t < 0 ? -MUL_SHIFT_SAT : 0);
+  const int64_t lim = (int64_t)1 << (62 - l);
+  if (t >= lim) return MUL_SHIFT_SAT;
+  if (t < -lim) return -MUL_SHIFT_SAT;
+  // (the low half of the product: its top bits for s >= 0, all of it moved
+  // up otherwise)
+  const uint32_t low = (uint32_t)lo;
+  return t * ((int64_t)1 << l) +
+         (s >= 0 ? (int64_t)(low >> s) : (int64_t)low * ((int64_t)1 << -s));
+}
+
+// An affine transform in fixed point, for the paths where float would cost a
+// core without an FPU more than the pixels do: a .. d are 8.24 (below 128),
+// tx and ty 16.16 (below 32768 pixels)
+struct AffineQ {
+  static constexpr int LIN = 24, POS = 16;
+  int32_t a, b, c, d, tx, ty;
+  // False if m does not fit (the callers then take their float path)
+  static bool from(const affine2f &m, AffineQ &q);
+  // out = m * n (n applies first). False if an entry does not fit; it is
+  // then left at the end of the range.
+  static bool mul(const AffineQ &m, const AffineQ &n, AffineQ &out);
+  affine2f toFloat() const;
+};
+
+// snap() of a 16.16 coordinate
+static inline int snapQ16(int64_t v) {
+  constexpr int64_t LIM = (int64_t)LINE_INPUT_MAX << 16;
+  return (int)((std::max(-LIM, std::min(LIM, v)) + 0x7FFF) >> 16);
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +472,14 @@ struct G2Impl {
   // corner of src to target pixels), its outline (the rectangle, or the
   // polygon in image pixels relative to src) antialiased (images.cpp);
   // `silhouette`, if given, is the color of drawSilhouette()
+  // drawImage(img, 0, 0, src, polygon, count) under the transform `m`
+  // instead of the state's, without antialiasing (the rig's images with
+  // SHAPOGFX2D_FIXED_POINT: no float on the way)
+  // setTransform() of an AffineQ
+  static void setTransformFixed(Graphics2D &g, const AffineQ &m);
+  static void drawImageFixed(Graphics2D &g, const Texture &img,
+                             const Rect &src, const int16_t *polygon,
+                             int count, const AffineQ &m);
   static void drawImageAA(Graphics2D &g, const Texture &img, const Rect &src,
                           const affine2f &m, const int16_t *polygon,
                           int count, const Color *silhouette = nullptr);

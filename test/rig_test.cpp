@@ -110,9 +110,8 @@ static void testRigPose() {
 
 static bool sameWorlds(const rig::Instance &a, const rig::Instance &b) {
   for (int i = 0; i < a.armature()->boneCount; i++) {
-    if (std::memcmp(&a.boneTransform(i), &b.boneTransform(i),
-                    sizeof(g2::affine2f)) != 0)
-      return false;
+    const g2::affine2f wa = a.boneTransform(i), wb = b.boneTransform(i);
+    if (std::memcmp(&wa, &wb, sizeof(g2::affine2f)) != 0) return false;
   }
   return true;
 }
@@ -278,8 +277,8 @@ static void testRigVisitor() {
   const float va[6] = {ra.a, ra.b, ra.c, ra.d, ra.tx, ra.ty};
   const float vb[6] = {rb.a, rb.b, rb.c, rb.d, rb.tx, rb.ty};
   for (int k = 0; k < 6; k++) CHECK(nearlyEqual(va[k], vb[k]));
-  CHECK(std::memcmp(&a.boneTransform(boneC), &b.boneTransform(boneC),
-                    sizeof(g2::affine2f)) == 0);
+  const g2::affine2f ca = a.boneTransform(boneC), cb = b.boneTransform(boneC);
+  CHECK(std::memcmp(&ca, &cb, sizeof(g2::affine2f)) == 0);
   // poseBind() takes the visitor too
   SpinVisitor v2;
   a.poseBind(&v2);
@@ -436,6 +435,36 @@ static void testRigDraw() {
       inst.draw(ga);
       drawByHand(gb, inst);
       CHECK(samePixels(a, b));
+    }
+    // Magnified beyond the range of the fixed-point matrices
+    // (SHAPOGFX2D_FIXED_POINT): the same picture through float
+    // (around the middle of the first part drawn)
+    const int s0 = inst.slotAt(0);
+    const rig::Attachment &a0 =
+        test_rig::armature.slots[s0].attachments[inst.attachmentOf(s0)];
+    g2::vec2f mid = {0, 0};
+    CHECK(inst.attachmentToArmature(
+        s0, {a0.src.width * 0.5f, a0.src.height * 0.5f}, mid));
+    for (float zoom : {90.0f, 130.0f}) {
+      clearTarget(ga);
+      clearTarget(gb);
+      const g2::affine2f p = g2::affine2f::placement(
+          DW * 0.5f, DH * 0.5f, 0.3f, zoom, zoom, mid.x, mid.y);
+      ga.setTransform(p);
+      gb.setTransform(p);
+      inst.draw(ga);
+      drawByHand(gb, inst);
+      CHECK(samePixels(a, b));
+      g2::OwnedSurface blank = g2::createSurface(fmt, DW, DH);
+      g2::Graphics2D gk(blank);
+      clearTarget(gk);
+      CHECK(countDiffering(a, blank) > 200);
+      ga.setTransform(placement());
+      gb.setTransform(placement());
+      clearTarget(ga);
+      clearTarget(gb);
+      inst.draw(ga);
+      drawByHand(gb, inst);
     }
     // Something was drawn
     g2::OwnedSurface empty = g2::createSurface(fmt, DW, DH);

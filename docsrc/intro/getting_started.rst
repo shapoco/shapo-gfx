@@ -104,7 +104,8 @@ ESP-IDF で使う
    CONFIG_SHAPOGFX_FORMAT_RGB444=n
 
 ``SHAPOGFX3D_DEPTH_BITS`` は ``CONFIG_SHAPOGFX3D_DEPTH_BITS_32`` / ``_16``、``SHAPOGFX2D_FPU_SQRT`` は
-``CONFIG_SHAPOGFX2D_FPU_SQRT_AUTO`` / ``_ON`` / ``_OFF`` から選びます。
+``CONFIG_SHAPOGFX2D_FPU_SQRT_AUTO`` / ``_ON`` / ``_OFF``、``SHAPOGFX2D_FIXED_POINT`` は
+``CONFIG_SHAPOGFX2D_FIXED_POINT_AUTO`` / ``_ON`` / ``_OFF`` から選びます。
 
 clone したリポジトリを ``idf_component.yml`` から参照することもできます。
 
@@ -176,6 +177,7 @@ CMake も PlatformIO も使わない
    "``SHAPOGFX3D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で 16 ビットテクセルの参照とグーロー補間の色の歩進に SIO interpolator (``interp0`` / ``interp1``) を使う。RP2 と判定され (``PICO_RP2040`` / ``PICO_RP2350``)、``hardware/interp.h`` が見えるとき既定で有効。``hardware_interp`` のリンクが必要。0 で無効 (``gfx3d.cpp`` のみ)"
    "``SHAPOGFX2D_RP2_INTERP``", "RP2 で 1、他は 0", "RP2040 / RP2350 (Pico SDK) で、回転・せん断した ``drawImage()`` のうちストライドが 2 の冪の 16 ビット画像のピクセル参照に SIO interpolator (``interp0``) を使う。判定は ``SHAPOGFX3D_RP2_INTERP`` と同じ。``hardware_interp`` のリンクが必要。0 で無効 (``src/gfx2d`` のみ)"
    "``SHAPOGFX2D_FPU_SQRT``", "FPU があれば 1、他は 0", "軸に平行な楕円の各行の幅を求める整数平方根を FPU の ``sqrtf()`` から始めて正確な床に補正する (結果は純整数の平方根と同じで、FPU のないコアはそちらを使う)。コンパイラの FPU 判定 (``__ARM_FP``、``__riscv_flen``、ESP32-S3 / P4、x86、AArch64、WebAssembly) で決まり、0 か 1 で上書きできる (``src/gfx2d`` のみ)"
+   "``SHAPOGFX2D_FIXED_POINT``", "FPU があれば 0、他は 1", "1 で、変換付きの ``drawImage()`` / ``drawSilhouette()`` の画像ごとの準備 (逆行列、バウンディングボックス、多角形の境界) と ``rig::Instance`` の行列計算を float ではなく固定小数点で行う。float がライブラリ呼び出しになる FPU のないコア向け (Cortex-M3 でリグ主体の 1 フレームの命令数が約 0.7 倍)。FPU のあるコアでは float のほうが短い。判定は ``SHAPOGFX2D_FPU_SQRT`` と同じで、0 / 1 で上書きできる。テクセルの境界上のピクセルが隣の色になることがある (``src/gfx2d`` のみ)"
    "``SHAPOGFX2D_TRANSFORM``", "1", "0 で 2D の変換行列を除去する。``setTransform()`` などは何もせず、常に単位行列になる (``src/gfx2d`` のみ)"
    "``SHAPOGFX2D_BLEND``", "1", "0 で 2D のブレンドモード (``ALPHA`` 以外) と不透明度を除去する。``setBlend()`` は何もしない (``src/gfx2d`` のみ)"
    "``SHAPOGFX2D_COLOR_KEY``", "1", "0 で ``drawImage()`` のカラーキーを除去する。``setColorKey()`` は何もしない (``src/gfx2d`` のみ)"

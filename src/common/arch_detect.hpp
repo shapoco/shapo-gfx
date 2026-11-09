@@ -31,4 +31,19 @@
 #define SHAPOGFX_ARCH_GENERIC 1
 #endif
 
+// SHAPOGFX_ARCH_FPU: 1 where float arithmetic is done by hardware, 0 where
+// every operation is a library call (define it by hand to override).
+// (__ARM_FP is defined only with a hardware FPU in use, unlike __VFP_FP__,
+// which names the float format and is defined on a Cortex-M0+ as well)
+#ifndef SHAPOGFX_ARCH_FPU
+#if defined(__ARM_FP) || defined(__riscv_flen) ||                          \
+    defined(SHAPOGFX_ARCH_ESP32S3) || defined(SHAPOGFX_ARCH_ESP32P4) ||    \
+    defined(__x86_64__) || defined(__i386__) || defined(__aarch64__) ||    \
+    defined(__wasm__)
+#define SHAPOGFX_ARCH_FPU 1
+#else
+#define SHAPOGFX_ARCH_FPU 0
+#endif
+#endif
+
 #endif

@@ -15,6 +15,7 @@ int main() {
       {"tools", testTools},
       {"rig", testRig},
       {"vg", testVg},
+      {"fixed", testFixed},
   };
   for (auto &t : tests) {
     int before = g_checkFailures;
