@@ -1592,7 +1592,14 @@ to view space and normalized per vertex.
 
 ### Environment mapping
 
-With `ENV_MAP`, `u = 0.5 + 0.5 n.x`, `v = 0.5 - 0.5 n.y` from the view-space normal.
+With `ENV_MAP` the texture coordinates come from the reflection of the view vector
+at the vertex: `I` is the unit vector from the eye to the view-space vertex position,
+`n` the unit view-space normal, `R = I - 2 (n . I) n`, and `u = 0.5 + 0.5 R.x`,
+`v = 0.5 - 0.5 R.y`. The reflection depends on the vertex position, so a flat face
+whose vertices share a normal still gets a gradient across it under perspective; a
+vertex seen head-on (`n = (0, 0, 1)` at the screen center) maps to the center of the
+texture. The texture is a sphere map in the plain sense: the environment seen in the
+mirror ball, sky at the top and ground at the bottom, with no radial correction.
 
 ### Textures
 

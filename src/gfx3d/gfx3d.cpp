@@ -1367,11 +1367,23 @@ void Graphics3D::shadeVertexQ(const VertexQ &in, const PrimSetup &ps,
 #if SHAPOGFX3D_TEXTURE
   if (ps.tex) {
     if (ps.envMap) {
-      // Environment map UV from the view-space normal: (n + 1) / 2 in Q16
-      // times the texture size is 16.16 texels
-      sv.u = clampFix(arch::mul64(n[0] + (1 << NORMAL_SHIFT), ps.texWq),
+      // Environment map UV from the reflection of the view vector:
+      // R = I - 2 (n . I) n with I the unit vector from the eye to the
+      // vertex, so a flat face still varies across itself under perspective.
+      // (R + 1) / 2 in Q16 times the texture size is 16.16 texels.
+      int32_t i[3];
+      normalizeQ15(vx, vy, vz, i);
+      const int32_t ni2 = (int32_t)((arch::mul64(n[0], i[0]) +
+                                     arch::mul64(n[1], i[1]) +
+                                     arch::mul64(n[2], i[2])) >>
+                                    (NORMAL_SHIFT - 1));
+      const int32_t rx =
+          i[0] - (int32_t)(arch::mul64(ni2, n[0]) >> NORMAL_SHIFT);
+      const int32_t ry =
+          i[1] - (int32_t)(arch::mul64(ni2, n[1]) >> NORMAL_SHIFT);
+      sv.u = clampFix(arch::mul64(rx + (1 << NORMAL_SHIFT), ps.texWq),
                       TEX_MAX_FP);
-      sv.v = clampFix(arch::mul64((1 << NORMAL_SHIFT) - n[1], ps.texHq),
+      sv.v = clampFix(arch::mul64((1 << NORMAL_SHIFT) - ry, ps.texHq),
                       TEX_MAX_FP);
     } else {
       sv.u = clampFix(arch::mul64(in.u, ps.texWq), TEX_MAX_FP);
@@ -1448,8 +1460,14 @@ void Graphics3D::shadeVertex(const Vertex &in, const PrimSetup &ps,
   if (ps.tex) {
     vec2f uv;
     if (ps.envMap) {
-      // Environment map UV from the view-space normal
-      uv = {n.x * 0.5f + 0.5f, 0.5f - n.y * 0.5f};
+      // Environment map UV from the reflection of the view vector:
+      // R = I - 2 (n . I) n with I the unit vector from the eye to the
+      // vertex, so a flat face still varies across itself under perspective
+      const vec3f i = normalize(viewPos);
+      const float ni2 = 2.0f * dot(n, i);
+      const float rx = i.x - ni2 * n.x;
+      const float ry = i.y - ni2 * n.y;
+      uv = {rx * 0.5f + 0.5f, 0.5f - ry * 0.5f};
     } else {
       uv = in.uv;
     }
